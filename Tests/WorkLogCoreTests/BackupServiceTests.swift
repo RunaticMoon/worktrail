@@ -516,7 +516,7 @@ final class BackupServiceTests: XCTestCase {
 
         let backupService = makeService(paths, stores, clock: clock)
         let info = try backupService.createBackup(reason: .manual)
-        XCTAssertEqual(info.manifest.vaultKeyVersion, try stores.vault.keyVersion)
+        XCTAssertEqual(info.manifest.vaultKeyVersion, stores.vault.keyVersion)
 
         // manifest의 vaultKeyVersion만 다른 값으로 바꿔 다시 기록한다(파일 해시 대상이 아니다).
         let manifestURL = info.directory.appendingPathComponent("manifest.json")
