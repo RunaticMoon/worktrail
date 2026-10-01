@@ -303,4 +303,31 @@ final class JSONRPCConnectionTests: XCTestCase {
         try await waitUntil { transport.stderrLineCount >= 1 }
         connection.close()
     }
+
+    // 13. stdout 청크가 멀티바이트 문자 중간에서 잘려도 줄을 버리지 않고 정확히 1줄 전달
+    func testStdoutSplitMultibyteCharacterStillEmitsLine() async throws {
+        // '한' = ED 95 9C, '글' = EA B8 80. '한'의 첫 바이트까지 출력하고 0.3초 후 나머지를 출력한다.
+        let script = "printf '{\"text\":\"\\355'; sleep 0.3; printf '\\225\\234\\352\\270\\200\"}\\n'"
+        let transport = ProcessLineTransport(executableURL: URL(fileURLWithPath: "/bin/sh"),
+                                             arguments: ["-c", script])
+        let lines = Locked<[String]>([])
+        try transport.start(onLine: { line in lines.mutate { $0.append(line) } }, onClose: { _ in })
+
+        try await waitUntil { !lines.value.isEmpty }
+        XCTAssertEqual(lines.value, ["{\"text\":\"한글\"}"])
+        transport.close()
+    }
+
+    // 14. 줄바꿈 없이 EOF로 끝나는 분할 출력도 flush에서 1줄로 전달
+    func testStdoutSplitWithoutNewlineFlushesOnEOF() async throws {
+        let script = "printf '{\"text\":\"\\355'; sleep 0.3; printf '\\225\\234\\352\\270\\200\"}'"
+        let transport = ProcessLineTransport(executableURL: URL(fileURLWithPath: "/bin/sh"),
+                                             arguments: ["-c", script])
+        let lines = Locked<[String]>([])
+        try transport.start(onLine: { line in lines.mutate { $0.append(line) } }, onClose: { _ in })
+
+        try await waitUntil { !lines.value.isEmpty }
+        XCTAssertEqual(lines.value, ["{\"text\":\"한글\"}"])
+        transport.close()
+    }
 }

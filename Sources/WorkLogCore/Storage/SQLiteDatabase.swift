@@ -94,6 +94,12 @@ public final class SQLiteDatabase: @unchecked Sendable {
                 try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
                                                         attributes: [.posixPermissions: 0o700])
             }
+            // umask 0022에서 SQLite가 0644로 만드는 것을 막기 위해, 새 DB 파일은 열기 전에 0600으로 미리 만든다.
+            // (빈 파일은 SQLite가 새 DB로 취급한다. 기존 파일은 open 후 아래에서 0600으로 조인다.)
+            if !readOnly && !FileManager.default.fileExists(atPath: path) {
+                _ = FileManager.default.createFile(atPath: path, contents: nil,
+                                                   attributes: [.posixPermissions: 0o600])
+            }
         }
         let flags = readOnly
             ? SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
@@ -110,6 +116,17 @@ public final class SQLiteDatabase: @unchecked Sendable {
         if !readOnly {
             try execute("PRAGMA foreign_keys = ON")
             if path != ":memory:" { try execute("PRAGMA journal_mode = WAL") }
+        }
+        if path != ":memory:" && !readOnly {
+            // 기존 DB가 0644여도 열 때 0600으로 조인다. -wal/-shm은 같은 권한을 따르도록 함께 맞춘다.
+            // 권한 조정 실패로 DB 사용 자체가 막히면 안 되므로 try?로 두되, 위 createFile이 1차 방어선이다.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = path + suffix
+                if FileManager.default.fileExists(atPath: sidecar) {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sidecar)
+                }
+            }
         }
     }
 
