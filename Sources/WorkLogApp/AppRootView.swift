@@ -51,10 +51,7 @@ struct AppRootView: View {
                         }
                         Section("도구") {
                             ForEach([SidebarRoute.reports, .plans, .secrets, .settings, .backups]) { route in
-                                VStack(alignment: .leading) {
-                                    Label(route.title, systemImage: route.symbol)
-                                    Text("준비 중").font(.caption).foregroundStyle(.secondary)
-                                }.tag(route)
+                                Label(route.title, systemImage: route.symbol).tag(route)
                             }
                         }
                     }.navigationTitle("WorkLog")
@@ -110,9 +107,16 @@ struct AppRootView: View {
             }
         case .plans:
             if let plan = controller.plan { PlanScreen(model: plan, calendar: environment.calendar) }
-        default:
-            EmptyMessage(title: (controller.route ?? .day).title, detail: "준비 중입니다.")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .secrets:
+            if let secrets = controller.secrets { SecretsScreen(model: secrets) }
+        case .settings:
+            if let settings = controller.settingsModel { SettingsScreen(model: settings, onSave: { controller.saveSettings() }) }
+        case .backups:
+            if let backups = controller.backups {
+                BackupScreen(model: backups, onRestore: { backup, include in
+                    Task { await controller.restoreBackup(backup, includeVault: include) }
+                })
+            }
         }
     }
 }
