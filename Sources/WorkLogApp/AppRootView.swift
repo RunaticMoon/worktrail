@@ -104,6 +104,12 @@ struct AppRootView: View {
             }.navigationTitle("현재 업무")
         case .search:
             if let search = controller.search { SearchScreen(model: search, environment: environment) }
+        case .reports:
+            if let reports = controller.reports, let plan = controller.plan, let quiz = controller.quiz {
+                ReportsScreen(model: reports, plan: plan, quiz: quiz, calendar: environment.calendar)
+            }
+        case .plans:
+            if let plan = controller.plan { PlanScreen(model: plan, calendar: environment.calendar) }
         default:
             EmptyMessage(title: (controller.route ?? .day).title, detail: "준비 중입니다.")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
