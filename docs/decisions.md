@@ -11,3 +11,12 @@
 | T07 | 상태 이력은 append-only `domain_event` + 재생, 정정은 `voided` 사건 | 늦은 입력·과거 상태 조회·확정본 재현(DAY-03) |
 | T08 | 확정 리포트 버전은 DB 트리거로 UPDATE/DELETE 차단 | 자동 작업이 확정본을 덮어쓰지 못하게 저장소 수준에서 보장(PERF-04) |
 | T09 | macOS 최소 버전 14 (제안값) | SwiftUI 최신 API 사용. macOS에서 실제 빌드 검증 전까지 미확정 |
+| T10 | AI는 공식 `codex app-server`(stdio JSON-RPC)만 사용, 설치된 codex-cli 0.159.2의 `generate-json-schema` 결과로 메서드·필드 확인 | 01 지시(토큰 추출·API 키 대체 금지). 실제 Enterprise 계정 연결은 미검증 |
+| T11 | AI 작업은 `ai_job` 영속 + idempotency key(작업·기간·입력 digest·템플릿 버전·스킬 해시·재생성 nonce), 동시성 1 FIFO | 자동 작업 중복 실행·중복 저장 방지(PERF-05), 회사 한도 보호 |
+| T12 | AI 입력 차단(`AIPayloadGuard`: vault·백업 경로)과 출력 검사(`AIOutputGuard`: 인증 정보 흔적·차단 경로) | read-only sandbox도 로컬 읽기는 허용하므로 프롬프트 인젝션으로 인증 정보가 work.sqlite·백업에 저장되는 경로를 차단. 정상 기록의 같은 단어는 오탐 가능 → 결정적 초안 대체 |
+| T13 | 검색은 SQLite FTS5 `trigram` + 3자 미만 질의는 LIKE | 한국어 부분 일치를 형태소 분석기 없이 처리 |
+| T14 | Secret 키는 Keychain `WhenUnlockedThisDeviceOnly`, 백업에는 암호문만 | 키 유출 범위 최소화. 대가로 Secret 복원은 같은 Mac에서만 가능(다른 Mac 이전 미지원) |
+| T15 | 개발용 CLI 로직을 `WorkLogCore/CLI`에 두고 `worklog`는 얇은 진입점 | Linux에서 사용자 여정을 테스트·시연하기 위함. CLI는 데이터 경로 지정 필수, AI·Secret 명령 없음 |
+| T16 | 기본 프롬프트 템플릿 버전은 DB 트리거로 불변(migration v3), 변경은 새 버전 | 과거 리포트가 어떤 지침으로 만들어졌는지 재현 |
+| T17 | `codex` 탐색: 설정 경로 → PATH → `/opt/homebrew/bin`, `/usr/local/bin` | Finder로 실행한 앱은 로그인 셸 PATH를 물려받지 않음(실제 Mac 미검증) |
+| T18 | `.app`은 `scripts/build-macos-app.sh`로 만들고 ad-hoc 서명 | T03 유지. 배포 서명·공증은 범위 밖 |
