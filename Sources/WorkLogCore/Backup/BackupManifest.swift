@@ -104,6 +104,8 @@ public enum BackupFailure: Error, Equatable, Sendable {
     case integrityFailed(file: String)
     case unsupportedSchema(String)
     case vaultKeyMissing(keyVersion: String?)
+    /// 키 존재·키 식별자는 맞지만 실제 복호화가 실패한 경우(키 바이트 불일치 등).
+    case vaultKeyMismatch(keyVersion: String)
     case ioFailed(String)
 
     /// 임의 오류를 BackupFailure로 정규화한다(이미 BackupFailure면 그대로).
