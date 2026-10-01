@@ -342,6 +342,7 @@ public final class BackupService: @unchecked Sendable {
     // MARK: - 내부: 검증
 
     /// 이름으로 기존 백업 디렉터리를 찾는다. 안전하지 않은 이름·`backupRoot` 밖·디렉터리 아님은 nil.
+    /// 심볼릭 링크로 `backupRoot` 밖을 가리키는 경우도 거부한다(양쪽을 실제 경로로 정규화해 비교).
     static func existingBackupDirectory(named name: String, root: URL) -> URL? {
         guard !name.isEmpty, !name.contains("/"), !name.contains(".."),
               !name.hasPrefix(".") else { return nil }
@@ -349,6 +350,9 @@ public final class BackupService: @unchecked Sendable {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDir),
               isDir.boolValue else { return nil }
+        let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        guard resolvedDirectory.deletingLastPathComponent() == resolvedRoot else { return nil }
         return directory
     }
 
