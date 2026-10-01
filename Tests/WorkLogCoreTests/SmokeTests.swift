@@ -5,7 +5,7 @@ final class SmokeTests: XCTestCase {
     func testMigrationsApply() throws {
         let db = try SQLiteDatabase(path: ":memory:")
         try Migrator.migrate(db, migrations: WorkSchema.migrations)
-        XCTAssertEqual(db.userVersion, 2)
+        XCTAssertEqual(db.userVersion, 3)
         let vault = try SQLiteDatabase(path: ":memory:")
         try Migrator.migrate(vault, migrations: VaultSchema.migrations)
         XCTAssertEqual(vault.userVersion, 1)

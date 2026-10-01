@@ -6,7 +6,19 @@ public enum WorkSchema {
     public static let migrations: [Migration] = [
         Migration(version: 1, sql: v1),
         Migration(version: 2, sql: SearchSchema.v2),
+        Migration(version: 3, sql: v3),
     ]
+
+    /// v3: template_version 불변 보호. 버전 행은 UPDATE·DELETE할 수 없다.
+    /// 수정은 새 버전, 팀 변경은 복제이며 기존 행을 고치지 않는다.
+    static let v3 = """
+    CREATE TRIGGER template_version_no_update
+    BEFORE UPDATE ON template_version
+    BEGIN SELECT RAISE(ABORT, 'template_version is immutable'); END;
+    CREATE TRIGGER template_version_no_delete
+    BEFORE DELETE ON template_version
+    BEGIN SELECT RAISE(ABORT, 'template_version is immutable'); END;
+    """
 
     static let v1 = """
     CREATE TABLE project (
