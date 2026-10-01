@@ -628,4 +628,28 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var launchAtLogin: Bool = false
 
     public init() {}
+
+    /// 구버전 설정 파일·누락 키에 관대하게 디코딩한다.
+    /// 모든 키를 decodeIfPresent로 읽고, 없으면 기본값을 유지한다. 알 수 없는 키는 무시한다.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func decode<T: Decodable>(_ key: CodingKeys, default fallback: T) throws -> T {
+            try c.decodeIfPresent(T.self, forKey: key) ?? fallback
+        }
+        self.defaultCaptureKind = try decode(.defaultCaptureKind, default: .memo)
+        self.captureHotkey = try decode(.captureHotkey, default: "ctrl+opt+space")
+        self.searchHotkey = try decode(.searchHotkey, default: "ctrl+opt+f")
+        self.timeZoneIdentifier = try decode(.timeZoneIdentifier, default: "Asia/Seoul")
+        self.secretIdleLockMinutes = try decode(.secretIdleLockMinutes, default: 30)
+        self.clipboardClearSeconds = try decode(.clipboardClearSeconds, default: 120)
+        self.backupRetentionDays = try decode(.backupRetentionDays, default: 30)
+        self.mondayReminderTime = try decode(.mondayReminderTime, default: "09:00")
+        self.maxQuizQuestions = try decode(.maxQuizQuestions, default: 3)
+        self.aiEnabled = try decode(.aiEnabled, default: true)
+        self.aiConcurrency = try decode(.aiConcurrency, default: 1)
+        self.codexExecutablePath = try c.decodeIfPresent(String.self, forKey: .codexExecutablePath)
+        self.skillBindings = try decode(.skillBindings, default: [:])
+        self.menuBarResident = try decode(.menuBarResident, default: true)
+        self.launchAtLogin = try decode(.launchAtLogin, default: false)
+    }
 }
