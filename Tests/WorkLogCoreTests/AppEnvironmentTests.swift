@@ -101,6 +101,7 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertNil(env.aiRunner)
         XCTAssertNil(env.memoLinks)
         XCTAssertNil(env.quiz)
+        XCTAssertNil(env.groundedAnswers)
 
         let memo = try env.tasks.captureMemo(body: "아키텍처 정리 회의 공유")
         let hits = try env.search.search(SearchQuery(text: "아키텍처"))
@@ -114,6 +115,7 @@ final class AppEnvironmentTests: XCTestCase {
         let provider = MockAIProvider()
         let env = try AppEnvironment.open(makeOptions(paths: paths, aiProvider: provider))
         XCTAssertNotNil(env.aiRunner)
+        XCTAssertNotNil(env.groundedAnswers)
 
         var disabled = env.settings
         disabled.aiEnabled = false
@@ -123,6 +125,7 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertNil(reopened.aiRunner)
         XCTAssertNil(reopened.memoLinks)
         XCTAssertNil(reopened.quiz)
+        XCTAssertNil(reopened.groundedAnswers)
         XCTAssertFalse(reopened.settings.aiEnabled)
     }
 

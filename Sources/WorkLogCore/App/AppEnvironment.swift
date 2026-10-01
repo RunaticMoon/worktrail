@@ -72,6 +72,8 @@ public final class AppEnvironment {
     public let aiRunner: AIJobRunner?
     public let memoLinks: MemoLinkSuggestionService?
     public let quiz: EvidenceQuizService?
+    /// 사용자가 명시적으로 실행하는 기록 기반 AI 답변(타이핑 중 자동 실행 없음)
+    public let groundedAnswers: GroundedAnswerService?
 
     private init(options: AppEnvironmentOptions, settings: AppSettings, settingsStore: SettingsStore,
                  calendar: WorkCalendar, periods: Periods, repo: WorkRepository, search: SearchIndex,
@@ -80,7 +82,7 @@ public final class AppEnvironment {
                  factsBuilder: ReportFactsBuilder, reportStore: ReportStore,
                  vaultSession: VaultSession, clipboard: ClipboardGuard, backup: BackupService,
                  aiRunner: AIJobRunner?, memoLinks: MemoLinkSuggestionService?,
-                 quiz: EvidenceQuizService?) {
+                 quiz: EvidenceQuizService?, groundedAnswers: GroundedAnswerService?) {
         self.options = options
         self.settings = settings
         self.settingsStore = settingsStore
@@ -101,6 +103,7 @@ public final class AppEnvironment {
         self.aiRunner = aiRunner
         self.memoLinks = memoLinks
         self.quiz = quiz
+        self.groundedAnswers = groundedAnswers
     }
 
     // MARK: - 열기
@@ -108,7 +111,7 @@ public final class AppEnvironment {
     /// 1) paths.createDirectories() 2) settings = settingsStore.load() (파일 없으면 기본값)
     /// 3) work.sqlite / vault.sqlite를 각각 별도 SQLiteDatabase로 연다(두 파일 분리) 4) 서비스 조립
     /// 5) AIPayloadGuard.blockedSubstrings = [vault DB 경로, vault 디렉터리, backupRoot]
-    /// 6) aiProvider가 nil이거나 settings.aiEnabled == false면 aiRunner/memoLinks/quiz = nil
+    /// 6) aiProvider가 nil이거나 settings.aiEnabled == false면 aiRunner/memoLinks/quiz/groundedAnswers = nil
     public static func open(_ options: AppEnvironmentOptions) throws -> AppEnvironment {
         let paths = options.paths
         try paths.createDirectories()
@@ -148,6 +151,7 @@ public final class AppEnvironment {
         var aiRunner: AIJobRunner?
         var memoLinks: MemoLinkSuggestionService?
         var quiz: EvidenceQuizService?
+        var groundedAnswers: GroundedAnswerService?
         if let provider = options.aiProvider, settings.aiEnabled {
             let payloadGuard = AIPayloadGuard(blockedSubstrings: [
                 paths.vaultDatabase.path,
@@ -160,6 +164,7 @@ public final class AppEnvironment {
             memoLinks = MemoLinkSuggestionService(repo: repo, runner: runner, templates: templates)
             quiz = EvidenceQuizService(repo: repo, runner: runner, templates: templates,
                                        maxQuestions: settings.maxQuizQuestions)
+            groundedAnswers = GroundedAnswerService(index: search, runner: runner, templates: templates)
         }
 
         return AppEnvironment(options: options, settings: settings, settingsStore: settingsStore,
@@ -167,7 +172,8 @@ public final class AppEnvironment {
                               tasks: tasks, plans: plans, dayBox: dayBox, templates: templates,
                               evaluationPeriods: evaluationPeriods, factsBuilder: factsBuilder,
                               reportStore: reportStore, vaultSession: vaultSession, clipboard: clipboard,
-                              backup: backup, aiRunner: aiRunner, memoLinks: memoLinks, quiz: quiz)
+                              backup: backup, aiRunner: aiRunner, memoLinks: memoLinks, quiz: quiz,
+                              groundedAnswers: groundedAnswers)
     }
 
     // MARK: - 시작 회복
