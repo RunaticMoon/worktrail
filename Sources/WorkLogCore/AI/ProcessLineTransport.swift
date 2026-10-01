@@ -23,7 +23,8 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
 
     private let lock = NSLock()
     private var _stderrLineCount = 0
-    private var stdoutBuffer = ""
+    // stdout은 바이트 버퍼로 모은다. 멀티바이트 문자가 chunk 경계에서 잘려도 줄 단위로만 디코딩한다.
+    private var stdoutBuffer = Data()
     private var stderrBuffer = ""
     private var onLine: (@Sendable (String) -> Void)?
     private var onClose: (@Sendable (TransportCloseReason) -> Void)?
@@ -112,14 +113,14 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
             stdoutDidReachEOF()
             return
         }
-        guard let text = String(data: data, encoding: .utf8) else { return }
-
         lock.lock()
-        stdoutBuffer += text
+        stdoutBuffer.append(data)
         var lines: [String] = []
-        while let index = stdoutBuffer.firstIndex(of: "\n") {
-            var line = String(stdoutBuffer[stdoutBuffer.startIndex..<index])
-            stdoutBuffer = String(stdoutBuffer[stdoutBuffer.index(after: index)...])
+        while let index = stdoutBuffer.firstIndex(of: 0x0A) {
+            let lineData = stdoutBuffer[stdoutBuffer.startIndex..<index]
+            stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...index)
+            // 줄 단위로만 UTF-8 디코딩한다. 잘린 바이트는 대체 문자로 두고 줄을 버리지 않는다.
+            var line = String(decoding: lineData, as: UTF8.self)
             if line.hasSuffix("\r") { line.removeLast() }
             lines.append(line)
         }
@@ -160,11 +161,12 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
     private func flushStdoutBuffer() {
         lock.lock()
         let remaining = stdoutBuffer
-        stdoutBuffer = ""
+        stdoutBuffer = Data()
         let handler = self.onLine
         lock.unlock()
         guard !remaining.isEmpty else { return }
-        var line = remaining
+        // EOF 시점의 남은 바이트도 대체 문자 허용으로 디코딩해 전달한다.
+        var line = String(decoding: remaining, as: UTF8.self)
         if line.hasSuffix("\r") { line.removeLast() }
         handler?(line)
     }
