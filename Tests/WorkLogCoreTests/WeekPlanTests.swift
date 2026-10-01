@@ -311,6 +311,39 @@ final class WeekPlanTests: XCTestCase {
         XCTAssertThrowsError(try service.confirmedFacts(weekStart: tuesday)) { assertValidation($0) }
     }
 
+    // MARK: knownAt — 확정 시각이 knownAt 이후인 계획은 제외
+
+    func testConfirmedFactsKnownAtFiltersFutureConfirmations() throws {
+        let clock = FixedClock(Date(timeIntervalSince1970: 1_790_000_000))
+        let repo = try WorkRepository.inMemory(clock: clock, ids: SequentialIDGenerator())
+        let service = WeekPlanService(repo: repo, periods: Periods())
+
+        try repo.insertTask(WorkTask(id: "task-A", title: "작업 A", createdAt: clock.now()))
+        try repo.insertTask(WorkTask(id: "task-B", title: "작업 B", createdAt: clock.now().addingTimeInterval(1)))
+
+        let first = try service.addItem(weekStart: monday, taskId: "task-A", scopeType: .wholeTask,
+                                        scopeId: nil, label: "A 계획")
+        let second = try service.addItem(weekStart: monday, taskId: "task-B", scopeType: .wholeTask,
+                                         scopeId: nil, label: "B 계획")
+
+        _ = try service.confirm(weekStart: monday, itemIds: [first.id])
+        let knownAt = clock.now()
+        clock.advance(by: 3600)
+        _ = try service.confirm(weekStart: monday, itemIds: [second.id])
+
+        // knownAt 시점엔 아직 확정하지 않은 B 계획은 제외된다.
+        let before = try service.confirmedFacts(weekStart: monday, knownAt: knownAt)
+        XCTAssertEqual(before.map(\.taskId), ["task-A"])
+
+        // 이후 시점에는 둘 다 포함된다.
+        let after = try service.confirmedFacts(weekStart: monday, knownAt: clock.now())
+        XCTAssertEqual(Set(after.map(\.taskId)), Set(["task-A", "task-B"]))
+
+        // 기존 시그니처(knownAt nil)는 필터 없이 모두 포함한다.
+        XCTAssertEqual(Set(try service.confirmedFacts(weekStart: monday).map(\.taskId)),
+                       Set(["task-A", "task-B"]))
+    }
+
     // MARK: 저장소 왕복
 
     func testWeekPlanRepositoryRoundTrip() throws {

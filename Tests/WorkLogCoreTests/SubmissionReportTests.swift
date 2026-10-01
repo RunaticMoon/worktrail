@@ -436,7 +436,64 @@ final class SubmissionReportTests: XCTestCase {
         XCTAssertFalse(SubmissionValidator.hasErrors(findings))
     }
 
-    // MARK: - 12. compose 결정성
+    // MARK: - 13. unverified_number / unfetched_link_claim 경고
+
+    func testValidateUnverifiedNumberWarns() {
+        let task = makeTask("t1", title: "진행 업무", statusAtCutoff: .inProgress)
+        let source = makeSource("activity:1") // text "원문"
+        let facts = makeFacts(tasks: [task], sources: [source])
+        let draft = makeDraft([
+            SubmissionItem(itemId: "line-1", category: .inProgress, text: "응답 시간 30% 개선",
+                           taskIds: ["t1"], projectIds: [], evidenceIds: ["activity:1"])
+        ])
+        let findings = SubmissionValidator.validate(draft, facts: facts)
+        XCTAssertTrue(codes(findings).contains("unverified_number"))
+        XCTAssertFalse(SubmissionValidator.hasErrors(findings))
+    }
+
+    func testValidateVerifiedNumberDoesNotWarn() {
+        let task = makeTask("t1", title: "진행 업무", statusAtCutoff: .inProgress)
+        let source = FactSource(id: "activity:1", kind: .activity, revision: 1,
+                                recordedAt: Date(timeIntervalSince1970: 0), workDate: wd("2026-09-30"),
+                                taskId: "t1", projectIds: [], text: "응답 시간 30% 개선")
+        let facts = makeFacts(tasks: [task], sources: [source])
+        let draft = makeDraft([
+            SubmissionItem(itemId: "line-1", category: .inProgress, text: "응답 시간 30% 개선",
+                           taskIds: ["t1"], projectIds: [], evidenceIds: ["activity:1"])
+        ])
+        let findings = SubmissionValidator.validate(draft, facts: facts)
+        XCTAssertFalse(codes(findings).contains("unverified_number"))
+    }
+
+    func testValidateUnfetchedLinkClaimWarns() {
+        let task = makeTask("t1", title: "진행 업무", statusAtCutoff: .inProgress)
+        let source = makeSource("activity:1", sourceUrls: ["https://example.com/pr/1"])
+        let facts = makeFacts(tasks: [task], sources: [source])
+        let draft = makeDraft([
+            SubmissionItem(itemId: "line-1", category: .inProgress, text: "링크 내용을 확인했습니다",
+                           taskIds: ["t1"], projectIds: [], evidenceIds: ["activity:1"])
+        ])
+        let findings = SubmissionValidator.validate(draft, facts: facts)
+        XCTAssertTrue(codes(findings).contains("unfetched_link_claim"))
+        XCTAssertFalse(SubmissionValidator.hasErrors(findings))
+    }
+
+    func testValidateFetchedLinkClaimDoesNotWarn() {
+        let task = makeTask("t1", title: "진행 업무", statusAtCutoff: .inProgress)
+        let source = FactSource(id: "activity:1", kind: .activity, revision: 1,
+                                recordedAt: Date(timeIntervalSince1970: 0), workDate: wd("2026-09-30"),
+                                taskId: "t1", projectIds: [], text: "원문",
+                                sourceUrls: ["https://example.com/pr/1"], urlBodyFetched: true)
+        let facts = makeFacts(tasks: [task], sources: [source])
+        let draft = makeDraft([
+            SubmissionItem(itemId: "line-1", category: .inProgress, text: "링크 내용을 확인했습니다",
+                           taskIds: ["t1"], projectIds: [], evidenceIds: ["activity:1"])
+        ])
+        let findings = SubmissionValidator.validate(draft, facts: facts)
+        XCTAssertFalse(codes(findings).contains("unfetched_link_claim"))
+    }
+
+    // MARK: - 14. compose 결정성
 
     func testComposeIsDeterministic() {
         let project = FactProject(id: "p1", name: "프로젝트1")

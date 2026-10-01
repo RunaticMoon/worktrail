@@ -37,7 +37,7 @@ public final class ReportFactsBuilder: @unchecked Sendable {
 
         let confirmedPlans: [FactPlanItem]
         if let planRange {
-            confirmedPlans = try planService.confirmedFacts(weekStart: planRange.start)
+            confirmedPlans = try planService.confirmedFacts(weekStart: planRange.start, knownAt: knownAt)
         } else {
             confirmedPlans = []
         }
