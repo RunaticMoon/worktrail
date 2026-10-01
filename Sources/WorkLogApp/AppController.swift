@@ -12,6 +12,9 @@ import WorkLogCore
     private(set) var search: SearchModel?
     private(set) var taskDetail: TaskDetailModel?
     private(set) var memoDetail: MemoDetailModel?
+    private(set) var reports: ReportsModel?
+    private(set) var plan: PlanModel?
+    private(set) var quiz: QuizModel?
     var route: SidebarRoute? = .day
     var selectedTaskId: String?
     var selectedMemoId: String?
@@ -44,6 +47,9 @@ import WorkLogCore
             capture = CaptureModel(environment: env); day = DayViewModel(environment: env)
             search = SearchModel(environment: env); taskDetail = TaskDetailModel(environment: env)
             memoDetail = MemoDetailModel(environment: env)
+            reports = ReportsModel(environment: env)
+            plan = PlanModel(environment: env)
+            quiz = QuizModel(environment: env)
             if settings.defaultCaptureKind == .secret {
                 notice = "Secret 입력은 준비 중입니다. 현재 빠른 입력은 일반 메모로 열립니다."
             }
