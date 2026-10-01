@@ -1,9 +1,11 @@
 import Foundation
 
-// 계약이 `Result<TaskStatus?, String>`(사유=문자열)을 요구한다.
-// Swift의 Result는 Failure: Error를 요구하므로 사유 문자열을 그대로 쓰기 위해 전역 적응을 둔다.
-// (새 오류 타입을 만들면 계약 시그니처가 달라진다.)
-extension String: @retroactive Error {}
+/// 전이 규칙 위반 사유 (한국어).
+public struct StatusRuleFailure: Error, Hashable, Sendable, ExpressibleByStringLiteral, ExpressibleByStringInterpolation {
+    public let reason: String
+    public init(_ reason: String) { self.reason = reason }
+    public init(stringLiteral value: String) { self.reason = value }
+}
 
 /// 상태 전이 위반. 위반 사건은 적용하지 않고 보고만 하며, 재생은 계속된다.
 public struct TransitionViolation: Error, Hashable, Sendable {
@@ -36,7 +38,7 @@ public enum StatusRules {
     /// - 비상태 사건(`isStatusEvent == false`): 상태 불변. 단 scope task이고 from == nil이면 실패.
     /// - toStatus가 주어졌는데 규칙이 계산한 결과 상태와 다르면 실패.
     public static func apply(scopeType: EventScopeType, from: TaskStatus?, kind: DomainEventKind,
-                             toStatus: TaskStatus?) -> Result<TaskStatus?, String> {
+                             toStatus: TaskStatus?) -> Result<TaskStatus?, StatusRuleFailure> {
         // 상태를 정하지 않는 사건: 상태 불변.
         if !kind.isStatusEvent {
             if scopeType == .task && from == nil {
@@ -120,7 +122,7 @@ public enum StatusRules {
     }
 
     private static func transition(from: TaskStatus, kind: DomainEventKind, toStatus: TaskStatus?,
-                                   label: String) -> Result<TaskStatus?, String> {
+                                   label: String) -> Result<TaskStatus?, StatusRuleFailure> {
         guard let result = expectedStatus(from: from, kind: kind) else {
             return .failure("\(label): \(from.koreanLabel) 상태에서 \(kind.rawValue) 사건은 허용되지 않습니다.")
         }
@@ -128,7 +130,7 @@ public enum StatusRules {
     }
 
     private static func completeTransition(to result: TaskStatus, given: TaskStatus?,
-                                           label: String) -> Result<TaskStatus?, String> {
+                                           label: String) -> Result<TaskStatus?, StatusRuleFailure> {
         if let given, given != result {
             return .failure("\(label): 기대 상태는 \(result.koreanLabel)이지만 \(given.koreanLabel)이 지정되었습니다.")
         }

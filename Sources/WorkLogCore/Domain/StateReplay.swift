@@ -113,7 +113,7 @@ public enum StateReplay {
             case .failure(let reason):
                 violations.append(TransitionViolation(eventId: event.id, scopeType: event.scopeType,
                                                       scopeId: event.scopeId, from: from,
-                                                      kind: event.kind, reason: reason))
+                                                      kind: event.kind, reason: reason.reason))
             }
         }
 
