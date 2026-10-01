@@ -2,7 +2,7 @@
 
 원본: `docs/mac_worklog_ai_handoff/04_IMPLEMENTATION_PLAN_AND_TESTS.md` (§3 흐름 A~E, §4~§8 인수 테스트 표)
 대조 대상 저장소: 이 worktree (브랜치 `wlog-45a3/ae-acceptance-map`)
-작성 기준 커밋: `d60125d` (`wlog-45a3/mvp`)
+작성 기준 커밋: `d60125d` (`wlog-45a3/mvp`). 이후 갱신: AG(`c48954c`) 직접 검증 7건·AF(`2fa2b2c`) 스킬 테스트 반영 — 갱신 시점 전체 `swift test` 409개 통과(실패 0).
 
 ## 실행 환경과 명령
 
@@ -39,8 +39,8 @@ $ swift test 2>&1 | tail -5
 
 | 상태 | 개수 |
 |---|---|
-| 자동 테스트 통과 | 109 |
-| 부분 | 12 |
+| 자동 테스트 통과 | 116 |
+| 부분 | 5 |
 | 미검증(macOS) | 4 |
 | 미검증(실계정) | 0 (해당 ID 없음 — 실계정 잔여 항목은 §잔여 참고) |
 | 미구현 | 1 |
@@ -110,7 +110,7 @@ $ swift test 2>&1 | tail -5
 | REP-T06 | PERF-03 | 다음 평가 생성 | 자동 테스트 통과 | EvaluationPeriodServiceTests.swift:testNextPeriodDerivesStartFromConfirmedEnd / PeriodsTests.swift:testEvaluationNextStartRules | 확정 종료일 다음 날 시작. |
 | REP-T07 | PERF-03 | 같은 평가 리포트의 새 버전 | 자동 테스트 통과 | EvaluationPeriodServiceTests.swift:testNewVersionKeepsRangeAndNextStart / ReportServiceTests.swift:testEvaluationReportRangeAndConfirm | 기간 전진 없음. |
 | REP-T08 | PERF-03 | 집계 종료일과 생성일이 다름 | 자동 테스트 통과 | EvaluationPeriodServiceTests.swift:testClockDoesNotExtendRange / ReportServiceTests.swift:testEvaluationReportRangeAndConfirm | 생성일까지 근거 확장 없음. |
-| REP-T09 | PERF-02 | 숫자 없는 성과 기록 | 부분 | PerformanceReportTests.swift:testMissingEvidence / PerformanceReportTests.swift:testValidateUnverifiedNumber | 컴포저가 수치·기여율을 임의 생성하지 않는다는 직접 assert는 없음. 근거 없는 수치는 `unverified_number` 경고로만 검증. |
+| REP-T09 | PERF-02 | 숫자 없는 성과 기록 | 자동 테스트 통과 | AcceptanceGapTests.swift:testREP_T09_NoInventedNumbersInDeterministicDrafts / PerformanceReportTests.swift:testValidateUnverifiedNumber | 숫자 없는 기록으로 만든 성과·제출용 결정적 초안에 날짜 외 숫자·`%`가 없음을 직접 assert. AI 출력의 근거 없는 수치는 `unverified_number` 경고. |
 | REP-T10 | PERF-02 | G 근거만 있는데 J 효과 요약 요청 | 자동 테스트 통과 | PerformanceReportTests.swift:testValidateProjectEvidenceMismatch / PerformanceReportTests.swift:testMultiProjectEvidenceWithoutProjectIsNotSpreadToAllProjects | project_evidence_mismatch 경고, G 효과 복제 금지. |
 | REP-T11 | PERF-04 | 확정본 뒤 자동 재생성 | 자동 테스트 통과 | ReportStoreTests.swift:testConfirmedPreservedAcrossAutomaticRegeneration / ReportServiceTests.swift:testConfirmedPreservedWhenSourceChanges | 확정본 덮어쓰기 없음. |
 | REP-T12 | PERF-04 | 수동 편집 중인 초안에 원본 변경 | 자동 테스트 통과 | ReportStoreTests.swift:testEditPreservedAcrossAutomaticRegeneration | 편집 손실 없이 새 버전 생성. |
@@ -126,7 +126,7 @@ $ swift test 2>&1 | tail -5
 | QUIZ-T04 | QUIZ-02 | 같은 근거로 다시 질문 생성 | 자동 테스트 통과 | EvidenceQuizTests.swift:testAnsweredTopicExcludedOnRegenerate / EvidenceQuizTests.swift:testLaterIsNotExcludedButExcludedSurvivesDigestChange | answered/excluded 동일 질문 반복 방지. |
 | MEM-T01 | MEM-02 | Memo→Task 연결 제안 생성 | 자동 테스트 통과 | MemoLinkSuggestionTests.swift:testSuggestStoresSingleProposedLink | 승인 전 `.proposed` 1건 저장. |
 | MEM-T02 | MEM-02 | 연결 승인 | 자동 테스트 통과 | MemoLinkSuggestionTests.swift:testDecideDoesNotChangeTaskOrMemo / MemoLinkSuggestionTests.swift:testAcceptedLinkIsNotSuggestedAgain | 원문·Task 상태 불변, 자동 생성·완료 없음. |
-| MEM-T03 | MEM-02 | URL 있는 Memo 연결 승인 | 부분 | MemoLinkSuggestionTests.swift:testDecideDoesNotChangeTaskOrMemo / TaskServiceTests.swift:testCaptureMemoStoresMultilineBodyAndLinksWithoutFetch | Task 자동 생성 없음은 간접 확인. URL 보유 Memo 승인 시 URL 수집 작업 미생성 시나리오는 직접 테스트 없음. |
+| MEM-T03 | MEM-02 | URL 있는 Memo 연결 승인 | 자동 테스트 통과 | AcceptanceGapTests.swift:testMEM_T03_URLMemoApprovalDoesNotScheduleCollection / MemoLinkSuggestionTests.swift:testDecideDoesNotChangeTaskOrMemo | 승인 전후 ai_job·scheduled_job 행 수 동일, Task 수·상태 불변. |
 
 ## 7. Secret (SEC)
 
@@ -155,9 +155,9 @@ $ swift test 2>&1 | tail -5
 | SEC-T21 | SEC-05 | 제한 시간 전 외부 복사 | 자동 테스트 통과 | VaultSessionTests.swift:testClipboardNotClearedWhenExternalCopyChangedMarker / testClearNowIfUnchanged | change marker 비교로 미삭제. NSPasteboard 어댑터는 macOS 미검증. |
 | SEC-T22 | SEC-06 | 전체 Secret 삭제→검색→복원 | 자동 테스트 통과 | SecretVaultTests.swift:testTrashAndRestore | 일반 검색 제외 후 동일 항목·revision 복원. |
 | SEC-T23 | SEC-06 | 행 하나 삭제→이전 버전 복원 | 자동 테스트 통과 | SecretVaultTests.swift:testRowDeleteThenRestoreRevisionKeepsHistory | 전체 휴지통 이동 없이 행 이력 복구. |
-| SEC-T24 | SEC-06 | 휴지통 영구 삭제 | 부분 | SecretVaultTests.swift:testPurgeRemovesMetadataAndRevisions / testPurgeNonTrashedFails | metadata·revision 제거와 비휴지통 거부는 검증. 제목 인덱스 제거·"과거 백업 별개" 안내 문구는 직접 검증 없음. |
+| SEC-T24 | SEC-06 | 휴지통 영구 삭제 | 부분 | AcceptanceGapTests.swift:testSEC_T24_PurgeRemovesRowsAndTitleIndex / SecretVaultTests.swift:testPurgeRemovesMetadataAndRevisions | 행·제목 검색 제거는 직접 검증. "과거 백업에는 남을 수 있음" 안내는 macOS UI 문구라 미검증. |
 | SEC-T25 | SEC-07 | 고유 가짜 value 저장 후 파일·로그 검사 | 자동 테스트 통과 | SecretVaultTests.swift:testCanaryValuesAreNotPlaintextInDatabaseFiles / ReportFactsBuilderTests.swift:testSecretCanaryNeverAppearsInFacts | vault DB 파일·AI facts 평문 부재. 로그 파일 스캔은 미검증. |
-| SEC-T26 | SEC-07 | Secret value로 일반/AI 검색 | 부분 | ReportFactsBuilderTests.swift:testSecretCanaryNeverAppearsInFacts / GroundedAnswerTests.swift:testInstructionsAndPayloadExcludePlaceholderAndSecretWords / MemoLinkSuggestionTests.swift:testBuildPayloadIsDeterministicAndFreeOfSecretTerms | AI 입력 미포함은 검증. 일반 검색 색인에서 Secret 값 배제를 직접 assert하는 테스트 없음(구조상 vault 미색인). |
+| SEC-T26 | SEC-07 | Secret value로 일반/AI 검색 | 자동 테스트 통과 | AcceptanceGapTests.swift:testSEC_T26_SecretValueNotInGeneralSearchOrAI / ReportFactsBuilderTests.swift:testSecretCanaryNeverAppearsInFacts | canary 값이 일반 검색 결과·search_doc/search_fts·work.sqlite 바이트·AI 입력에 없고 vault.sqlite에도 평문으로 없음. |
 | SEC-T27 | SEC-07 | 암호문 한 바이트 변조 | 자동 테스트 통과 | SecretVaultTests.swift:testTamperedCiphertextFailsIntegrity / testSwappedPayloadFailsIntegrityByAAD | integrity 오류, 평문 미표시. |
 | SEC-T28 | SEC-07 | Keychain 키 없음 | 자동 테스트 통과 | SecretVaultTests.swift:testMissingKeyKeepsVaultUnchanged / testMissingKeyCurrentRowsThrows / AppEnvironmentTests.swift:testOpenSucceedsWithoutKeyAndUnlockReportsMissing | 기존 데이터 보존, 새 키 overwrite 금지. 실제 Keychain 어댑터는 macOS 미검증. |
 | SEC-T29 | SEC-07 | Secret 초안 작성→닫기/재시작 | 자동 테스트 통과 | SecretVaultTests.swift:testDraftRoundTripAndNoPlaintext / testClearDraft | 암호화 초안 왕복, 평문 파일 없음. |
@@ -171,19 +171,19 @@ $ swift test 2>&1 | tail -5
 | SEARCH-T02 | SEARCH-01 | 한글/영문/기호/공백 검색 | 자동 테스트 통과 | SearchIndexTests.swift:testSEARCH_T02_KoreanEnglishSymbolsAndAndQuery | 대소문자 무시, 기호, 두 단어 AND. |
 | SEARCH-T03 | SEARCH-01 | 1~2글자 한글 부분 검색 | 자동 테스트 통과 | SearchIndexTests.swift:testSEARCH_T03_ShortKoreanTermsUseLikePath | LIKE 경로. |
 | SEARCH-T04 | SEARCH-01 | 날짜·프로젝트·태그 필터 | 자동 테스트 통과 | SearchIndexTests.swift:testSEARCH_T04_Filters / testLateEntryFilteredByWorkDate | 합성 필터·실제 업무일 일치. |
-| SEARCH-T05 | SEARCH-02 | 검색어만 타이핑 | 부분 | GroundedAnswerTests.swift:testNoEvidenceSkipsAI / testCollectsEvidenceAndCallsAIOnce | 검색 경로는 AI를 호출하지 않도록 구현되어 있으나, "검색만으로 AI 호출 0"을 검색 경로에서 직접 assert하는 테스트 없음. |
+| SEARCH-T05 | SEARCH-02 | 검색어만 타이핑 | 자동 테스트 통과 | AcceptanceGapTests.swift:testSEARCH_T05_TypingSearchDoesNotCallAI | 반복 검색 후 provider runCount 0, ai_job 0건. |
 | SEARCH-T06 | SEARCH-02 | AI 답변 명시적 실행 | 자동 테스트 통과 | GroundedAnswerTests.swift:testCollectsEvidenceAndCallsAIOnce | 일반 근거만 payload 전달, source ID/type 반환. 클릭 이동 UI는 미검증. |
 | SEARCH-T07 | SEARCH-02 | 답을 뒷받침할 근거 없음 | 자동 테스트 통과 | GroundedAnswerTests.swift:testNoEvidenceSkipsAI / testUnknownEvidenceIdsRemovedWithWarning | AI 호출 0 + 모른다고 표시, 날조 없음. |
-| SEARCH-T08 | SEARCH-02 | Secret 전용 검색 모드 | 부분 | VaultSessionTests.swift:testInitiallyLockedAndTitleSearchWorksWhileLocked / GroundedAnswerTests.swift:testInstructionsAndPayloadExcludePlaceholderAndSecretWords | Secret 제목 검색은 별도 vault 경로로 AI 미사용. "AI 실행 불가·query 미전송"을 명시한 전용 모드·테스트는 없음. |
+| SEARCH-T08 | SEARCH-02 | Secret 전용 검색 모드 | 자동 테스트 통과 | AcceptanceGapTests.swift:testSEARCH_T08_SecretOnlySearchDoesNotCallAI | Secret 제목 검색은 vault 전용 경로(`VaultSession.searchTitles`)이며 AI 호출 0·ai_job 0, Secret 소스가 AI 타입을 참조하지 않음을 확인. 별도 "모드" 전환 UI는 macOS 미검증. |
 | AI-T01 | AI-01 | Codex 설치/계정 없음 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testCheckCapabilitiesWhenExecutableMissing / AppEnvironmentTests.swift:testNilProviderDisablesAIButMemoWorks | 설치 미탐지 + 로컬 기능 사용. 준비 안내 문구·실제 codex 설치는 미검증. |
 | AI-T02 | AI-01 | 회사 정책으로 모델/도구 제한 | 자동 테스트 통과 | AIJobRunnerTests.swift:testErrorClassificationMapsProviderErrors / CodexAppServerProviderTests.swift:testFailedTurnClassifiesErrors / testErrorClassifierKeywords | policyRestricted → blockedPolicy. 실계정 정책 환경은 미검증(모의 오류). |
 | AI-T03 | AI-01 | 사용 한도/인증 만료 | 자동 테스트 통과 | AIJobRunnerTests.swift:testErrorClassificationMapsProviderErrors / ReportServiceTests.swift:testAIFailureStillStoresDeterministicDraft | 실패/인증만료 매핑, 다른 API·개인 계정 자동 전환 없음(결정적 초안 대체). 실사용 한도 환경은 미검증. |
 | AI-T04 | AI-01 | 기존 스킬 조회/선택 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testListAvailableSkillsParsesAndDoesNotWrite | 발견 스킬만 사용, 쓰기 메서드 미호출. |
-| AI-T05 | AI-01 | 스킬 파일 변경/삭제 | 부분 | AIJobRunnerTests.swift:testDigestAndKeyChangeWithInputs | SkillRef.contentHash가 idempotency key에 반영되는 것은 검증. 실제 파일 변경 감지·출처 버전 보존의 직접 테스트 없음. |
+| AI-T05 | AI-01 | 스킬 파일 변경/삭제 | 자동 테스트 통과 | SkillBindingTests.swift:testRunnerUsesResolvedSkillAndReusesUntilHashChanges / testMissingPathResolvesWithoutCrash / testReportVersionRecordsResolvedSkillOnAISuccess | 스킬 파일 해시가 바뀌면 새 실행, 같으면 재사용. 파일이 없어도 크래시 없이 해시 없는 참조. 리포트 버전에 `이름@해시` 기록(이전 버전 불변). 실제 Codex 스킬 실행은 미검증(실계정). |
 | AI-T06 | AI-01 | 프로토콜 불일치·끊긴 JSON·취소 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testTransportCloseFailsRunAndIgnoresMalformedLine / testCancelSendsInterruptAndRunIsCancelled / testErrorClassifierKeywords / JSONRPCConnectionTests.swift:testMalformedLineIsCountedAndConnectionContinues | 안전 오류·취소, DB 훼손 없음. |
 | AI-T07 | AI-01 | 샌드박스에서 가짜 vault 경로 읽기 시도 | 자동 테스트 통과 | AppEnvironmentTests.swift:testAIPayloadGuardBlocksVaultPath / AIJobRunnerTests.swift:testPayloadGuardBlocksBeforeCreatingRowOrCallingProvider / testOutputContainingBlockedPathIsNotStored | vault 경로 차단. 실제 codex read-only 샌드박스는 실계정 미검증. |
 | AI-T08 | AI-01 | 광범위한 권한을 요구하는 스킬 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testRunDeclinesCommandExecutionApproval / testRunAccumulatesDeltasAndStripsCodeFence | 승인 요청 decline, sandbox read-only·approvalPolicy never. |
-| AI-T09 | AI-01 | 근거 문서 인젝션 문구 | 부분 | AIJobRunnerTests.swift:testPayloadGuardBlocksBeforeCreatingRowOrCallingProvider / testOutputContainingBlockedPathIsNotStored | vault 경로·민감 출력 차단 가드는 검증. "설정 무시" 프롬프트 인젝션을 자료로만 취급하는 직접 테스트 없음. |
+| AI-T09 | AI-01 | 근거 문서 인젝션 문구 | 자동 테스트 통과 | AcceptanceGapTests.swift:testAI_T09_InjectionIsTreatedAsDataAndSensitiveOutputBlocked / AIJobRunnerTests.swift:testOutputWithCredentialMarkerIsNotStored | 주입 문장은 payload 자료에만 있고 지침은 템플릿 그대로. 인증 정보 흔적 출력은 저장 안 됨(failed/output_invalid), 리포트는 결정적 초안 대체. 실제 모델의 인젝션 저항은 미검증(실계정). |
 | SCH-T01 | PERF-05 | 자정에 앱 실행 중 | 자동 테스트 통과 | SchedulerTests.swift:testDueDailyCloseAtNextMidnight | 전날 Daily job 1개. |
 | SCH-T02 | PERF-05 | 자정에 절전, 다음 날 실행 | 자동 테스트 통과 | SchedulerTests.swift:testMissedDailyJobsInDateOrderAndLate | 누락 복구·late 판정. |
 | SCH-T03 | PERF-05 | 동일 작업 알림 중복·재시작 | 자동 테스트 통과 | SchedulerTests.swift:testRunDueIsIdempotentPerJob / testRunDueFailureRetriesThenStops / testResetStaleRunningAndRerun | idempotency·재시도·중복 행 방지. |
