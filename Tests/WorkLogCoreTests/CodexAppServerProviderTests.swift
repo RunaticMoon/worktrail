@@ -479,4 +479,30 @@ final class CodexAppServerProviderTests: XCTestCase {
         await provider.cancel(jobId: "job-1")
         XCTAssertEqual(provider.cancelledJobIds, ["job-1"])
     }
+
+    // MARK: - 실행 파일 탐색
+
+    func testResolveExecutableFallsBackWhenPathLacksCodex() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("codex-resolve-\(UUID().uuidString)")
+        let emptyDir = root.appendingPathComponent("empty")
+        let fallbackDir = root.appendingPathComponent("fallback")
+        try fm.createDirectory(at: emptyDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: fallbackDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let fake = fallbackDir.appendingPathComponent("codex")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: fake)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+
+        let found = CodexAppServerProvider.resolveExecutable(
+            nil, environment: ["PATH": emptyDir.path], fallbackDirectories: [fallbackDir.path])
+        XCTAssertEqual(found?.path, fake.path)
+
+        XCTAssertNil(CodexAppServerProvider.resolveExecutable(
+            nil, environment: [:], fallbackDirectories: [emptyDir.path]))
+        // 명시 경로가 있으면 그 경로만 본다(대체 탐색 안 함).
+        XCTAssertNil(CodexAppServerProvider.resolveExecutable(
+            emptyDir.appendingPathComponent("codex").path,
+            environment: ["PATH": fallbackDir.path], fallbackDirectories: [fallbackDir.path]))
+    }
 }

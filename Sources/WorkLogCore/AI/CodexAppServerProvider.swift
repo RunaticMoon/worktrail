@@ -245,16 +245,22 @@ public final class CodexAppServerProvider: AIProvider, @unchecked Sendable {
         return ProcessLineTransport(executableURL: executable, arguments: ["app-server"])
     }
 
-    /// executablePath가 있으면 그 경로만, 없으면 PATH에서 "codex"를 찾는다.
-    static func resolveExecutable(_ explicitPath: String?) -> URL? {
+    /// Finder·Dock으로 실행한 macOS 앱은 로그인 셸의 PATH를 물려받지 않으므로
+    /// PATH 다음에 흔한 설치 위치를 확인한다(Homebrew Apple Silicon/Intel). 실제 Mac에서는 미검증.
+    static let fallbackDirectories = ["/opt/homebrew/bin", "/usr/local/bin"]
+
+    /// executablePath가 있으면 그 경로만, 없으면 PATH → fallbackDirectories 순서로 "codex"를 찾는다.
+    static func resolveExecutable(_ explicitPath: String?,
+                                  environment: [String: String] = ProcessInfo.processInfo.environment,
+                                  fallbackDirectories: [String] = CodexAppServerProvider.fallbackDirectories) -> URL? {
         let fileManager = FileManager.default
         if let explicitPath, !explicitPath.isEmpty {
             return fileManager.isExecutableFile(atPath: explicitPath)
                 ? URL(fileURLWithPath: explicitPath) : nil
         }
-        guard let pathValue = ProcessInfo.processInfo.environment["PATH"] else { return nil }
-        for directory in pathValue.split(separator: ":") {
-            let candidate = String(directory) + "/codex"
+        let pathDirectories = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        for directory in pathDirectories + fallbackDirectories where !directory.isEmpty {
+            let candidate = directory + "/codex"
             if fileManager.isExecutableFile(atPath: candidate) {
                 return URL(fileURLWithPath: candidate)
             }
