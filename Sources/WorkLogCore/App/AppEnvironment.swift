@@ -246,10 +246,36 @@ public final class AppEnvironment {
     /// - mondayReview → 그 주 월요일 제출용 주간보고 초안(게시하지 않음)
     @discardableResult
     public func runScheduledReports(since: WorkDate, maxAttempts: Int = 3) async throws -> [ScheduledJob] {
-        let reports = self.reports
         let useAI = aiRunner != nil && settings.aiEnabled
+        return try await runScheduled(since: since, maxAttempts: maxAttempts) { _ in useAI }
+    }
+
+    /// 앱 시작 시 놓친 예약 리포트를 만든다.
+    /// since = max(가장 이른 기록 업무일, 오늘 - maxLookbackDays). 기록이 없으면 어제.
+    /// AI는 scheduledFor가 최근 aiRecentDays 이내인 작업에만 쓰고(설정상 AI 사용 가능할 때),
+    /// 그보다 오래된 catch-up은 결정적 초안만 만든다.
+    @discardableResult
+    public func runStartupCatchUp(maxLookbackDays: Int = 92,
+                                  aiRecentDays: Int = 7) async throws -> [ScheduledJob] {
+        let now = options.clock.now()
+        let today = calendar.workDate(of: now)
+        let yesterday = calendar.adding(days: -1, to: today)
+        let floor = calendar.adding(days: -max(0, maxLookbackDays), to: today)
+        let since = max(try repo.earliestRecordedWorkDate() ?? yesterday, floor)
+
+        let baseUseAI = aiRunner != nil && settings.aiEnabled
+        let aiCutoff = now.addingTimeInterval(-Double(max(0, aiRecentDays)) * 86_400)
+        return try await runScheduled(since: since) { job in
+            baseUseAI && job.scheduledFor >= aiCutoff
+        }
+    }
+
+    /// 공통 실행기. 작업별로 AI 사용 여부를 판정하는 클로저를 받아 처리한다.
+    private func runScheduled(since: WorkDate, maxAttempts: Int = 3,
+                              useAIFor: (DueJob) -> Bool) async throws -> [ScheduledJob] {
+        let reports = self.reports
         return try await makeScheduler(since: since).runDue(maxAttempts: maxAttempts) { job in
-            try await Self.handleScheduled(job, reports: reports, useAI: useAI)
+            try await Self.handleScheduled(job, reports: reports, useAI: useAIFor(job))
         }
     }
 
