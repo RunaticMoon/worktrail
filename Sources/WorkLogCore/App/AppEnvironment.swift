@@ -72,6 +72,8 @@ public final class AppEnvironment {
     public let clipboard: ClipboardGuard
     public let backup: BackupService
     public let aiRunner: AIJobRunner?
+    /// 설정의 작업별 스킬 바인딩 해석기. AI가 꺼져 있어도 설정을 읽을 수 있게 항상 존재한다.
+    public let skillResolver: SkillBindingResolver
     public let memoLinks: MemoLinkSuggestionService?
     public let quiz: EvidenceQuizService?
     /// 사용자가 명시적으로 실행하는 기록 기반 AI 답변(타이핑 중 자동 실행 없음)
@@ -84,7 +86,8 @@ public final class AppEnvironment {
                  factsBuilder: ReportFactsBuilder, reportStore: ReportStore, reports: ReportService,
                  vaultSession: VaultSession, clipboard: ClipboardGuard, backup: BackupService,
                  aiRunner: AIJobRunner?, memoLinks: MemoLinkSuggestionService?,
-                 quiz: EvidenceQuizService?, groundedAnswers: GroundedAnswerService?) {
+                 quiz: EvidenceQuizService?, groundedAnswers: GroundedAnswerService?,
+                 skillResolver: SkillBindingResolver) {
         self.options = options
         self.settings = settings
         self.settingsStore = settingsStore
@@ -107,6 +110,7 @@ public final class AppEnvironment {
         self.memoLinks = memoLinks
         self.quiz = quiz
         self.groundedAnswers = groundedAnswers
+        self.skillResolver = skillResolver
     }
 
     // MARK: - 열기
@@ -150,6 +154,7 @@ public final class AppEnvironment {
                                        clearAfter: TimeInterval(settings.clipboardClearSeconds))
         let backup = BackupService(paths: paths, workDB: workDB, vaultDB: vaultDB,
                                    clock: options.clock, ids: options.ids)
+        let skillResolver = SkillBindingResolver(bindings: settings.skillBindings)
 
         var aiRunner: AIJobRunner?
         var memoLinks: MemoLinkSuggestionService?
@@ -162,7 +167,7 @@ public final class AppEnvironment {
                 paths.backupRoot.path,
             ])
             let runner = AIJobRunner(repo: repo, provider: provider, stagingRoot: paths.aiJobsDirectory,
-                                     guard: payloadGuard)
+                                     guard: payloadGuard, skillResolver: skillResolver)
             aiRunner = runner
             memoLinks = MemoLinkSuggestionService(repo: repo, runner: runner, templates: templates)
             quiz = EvidenceQuizService(repo: repo, runner: runner, templates: templates,
@@ -179,7 +184,7 @@ public final class AppEnvironment {
                               evaluationPeriods: evaluationPeriods, factsBuilder: factsBuilder,
                               reportStore: reportStore, reports: reports, vaultSession: vaultSession, clipboard: clipboard,
                               backup: backup, aiRunner: aiRunner, memoLinks: memoLinks, quiz: quiz,
-                              groundedAnswers: groundedAnswers)
+                              groundedAnswers: groundedAnswers, skillResolver: skillResolver)
     }
 
     // MARK: - 시작 회복
@@ -210,6 +215,7 @@ public final class AppEnvironment {
         settings = new
         vaultSession.idleTimeout = TimeInterval(new.secretIdleLockMinutes * 60)
         clipboard.clearAfter = TimeInterval(new.clipboardClearSeconds)
+        skillResolver.update(bindings: new.skillBindings)
     }
 
     /// 화면 잠금·앱 종료 시 호출: Secret 잠금 + 조건부 클립보드 삭제.

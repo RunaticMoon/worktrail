@@ -249,7 +249,9 @@ public final class ReportService {
         let draft = GeneratedDraft(
             content: render(aiDraft), structuredJSON: try aiDraft.structuredJSON(),
             warnings: warnings, generator: "codex", aiModel: output.model,
-            templateVersionId: version.id, evidence: evidence(aiDraft))
+            templateVersionId: version.id,
+            skillRef: result.skill.map { "\($0.name)@\($0.contentHash ?? "-")" },
+            evidence: evidence(aiDraft))
         let outcome = try store.saveGenerated(reportId: report.id, facts: facts, draft: draft, mode: mode)
         return ReportGenerationResult(outcome: outcome, report: report, facts: facts,
                                       findings: findings, aiJobStatus: aiJobStatus,
