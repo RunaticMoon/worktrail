@@ -501,4 +501,128 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(try backupService.applyRetention(keepDays: 1, lastBackupSucceeded: true), [])
         XCTAssertEqual(try backupService.listBackups().count, 1)
     }
+
+    // MARK: - BACK-T09: manifest의 vault key_version 대조
+
+    func testVerifyRejectsManifestKeyVersionMismatch() throws {
+        let root = try makeRoot()
+        let paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock,
+                                    ids: SequentialIDGenerator(prefix: "src"))
+        defer { stores.close() }
+        _ = try stores.vault.create(title: "서버", groupName: nil,
+                                    rows: [SecretRowInput(key: "K", value: "V")])
+
+        let backupService = makeService(paths, stores, clock: clock)
+        let info = try backupService.createBackup(reason: .manual)
+        XCTAssertEqual(info.manifest.vaultKeyVersion, try stores.vault.keyVersion)
+
+        // manifest의 vaultKeyVersion만 다른 값으로 바꿔 다시 기록한다(파일 해시 대상이 아니다).
+        let manifestURL = info.directory.appendingPathComponent("manifest.json")
+        var manifest = try StableJSON.decode(BackupManifest.self,
+                                             from: try XCTUnwrap(fileBytes(manifestURL)))
+        manifest.vaultKeyVersion = "tampered-key-version"
+        try StableJSON.encode(manifest).write(to: manifestURL)
+
+        let reread = try XCTUnwrap(try backupService.listBackups().first)
+        XCTAssertThrowsError(try backupService.verify(reread)) { error in
+            guard case .manifestInvalid? = error as? BackupFailure else {
+                return XCTFail("manifestInvalid를 기대했지만 \(error)")
+            }
+        }
+    }
+
+    // MARK: - BACK-T10: 같은 키 id지만 다른 키 바이트 → 시험 복호화 실패, 대상 불변
+
+    func testRestoreRejectsWrongKeyBytesAndLeavesTargetUntouched() throws {
+        let root = try makeRoot()
+        let clock = fixedClock()
+        let sourceKeyStore = InMemoryVaultKeyStore()
+        let sourcePaths = makePaths(root: root.appendingPathComponent("source"))
+        let sourceStores = try openStores(sourcePaths, keyStore: sourceKeyStore, clock: clock,
+                                          ids: SequentialIDGenerator(prefix: "src"))
+        _ = try sourceStores.vault.create(title: "Secret", groupName: nil,
+                                          rows: [SecretRowInput(key: "K", value: "V")])
+        let sourceKeyVersion = try XCTUnwrap(sourceStores.vault.keyVersion)
+        let sourceKeyBytes = try XCTUnwrap(sourceKeyStore.loadKey(id: sourceKeyVersion))
+        let backupService = makeService(sourcePaths, sourceStores, clock: clock)
+        let info = try backupService.createBackup(reason: .manual)
+        sourceStores.close()
+
+        // 같은 키 id에 다른 바이트를 넣은 KeyStore.
+        let wrongKeyStore = InMemoryVaultKeyStore()
+        var wrongBytes = sourceKeyBytes
+        wrongBytes[0] ^= 0xFF
+        try wrongKeyStore.storeKey(wrongBytes, id: sourceKeyVersion)
+
+        // 복원 대상에 기존 데이터가 있다(불변이어야 함).
+        let targetPaths = makePaths(root: root.appendingPathComponent("target"))
+        let targetStores = try openStores(targetPaths, keyStore: InMemoryVaultKeyStore(), clock: clock,
+                                          ids: SequentialIDGenerator(prefix: "tgt"))
+        try targetStores.repo.insertMemo(Memo(id: "old", body: "기존",
+                                              workDate: WorkDate(year: 2026, month: 10, day: 1),
+                                              recordedAt: clock.now()))
+        targetStores.close()
+        let beforeWork = databaseBytes(targetPaths.workDatabase)
+        let beforeVault = databaseBytes(targetPaths.vaultDatabase)
+
+        XCTAssertThrowsError(
+            try BackupService.restore(info, into: targetPaths, keyStore: wrongKeyStore,
+                                      includeVault: true, clock: clock)) { error in
+            guard case .vaultKeyMismatch(let version)? = error as? BackupFailure else {
+                return XCTFail("vaultKeyMismatch를 기대했지만 \(error)")
+            }
+            XCTAssertEqual(version, sourceKeyVersion)
+        }
+
+        // 대상 파일은 그대로이고, preRestore 백업이 만들어지지 않았다.
+        XCTAssertEqual(databaseBytes(targetPaths.workDatabase), beforeWork)
+        XCTAssertEqual(databaseBytes(targetPaths.vaultDatabase), beforeVault)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: targetPaths.backupRoot.path),
+                       "검증 실패인데 preRestore 백업이 생겼다")
+    }
+
+    // MARK: - BACK-T11: 롤백이 새로 놓은 파일까지 제거
+
+    func testRestoreRollbackRemovesNewlyPlacedFiles() throws {
+        let root = try makeRoot()
+        let clock = fixedClock()
+        let keyStore = InMemoryVaultKeyStore()
+        let sourcePaths = makePaths(root: root.appendingPathComponent("source"))
+        let sourceStores = try openStores(sourcePaths, keyStore: keyStore, clock: clock,
+                                          ids: SequentialIDGenerator(prefix: "src"))
+        _ = try sourceStores.vault.create(title: "Secret", groupName: nil,
+                                          rows: [SecretRowInput(key: "K", value: "V")])
+        let backupService = makeService(sourcePaths, sourceStores, clock: clock)
+        let info = try backupService.createBackup(reason: .manual)
+        sourceStores.close()
+
+        // 대상에는 아직 아무 파일도 없다.
+        let targetPaths = makePaths(root: root.appendingPathComponent("target"))
+        try FileManager.default.createDirectory(at: targetPaths.dataRoot,
+                                                withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(
+            try BackupService.restore(info, into: targetPaths, keyStore: keyStore,
+                                      includeVault: true, clock: clock) { name in
+                // 첫 파일(work.sqlite)은 이미 놓였고, 두 번째 배치 직전에 실패를 주입한다.
+                if name == "vault.sqlite" { throw BackupFailure.ioFailed("주입 오류") }
+            }) { error in
+            guard case .ioFailed? = error as? BackupFailure else {
+                return XCTFail("ioFailed를 기대했지만 \(error)")
+            }
+        }
+
+        let fm = FileManager.default
+        XCTAssertFalse(fm.fileExists(atPath: targetPaths.workDatabase.path),
+                       "새로 놓은 work.sqlite가 남았다")
+        XCTAssertFalse(fm.fileExists(atPath: targetPaths.vaultDatabase.path),
+                       "새로 놓은 vault.sqlite가 남았다")
+        let leftovers = allFiles(in: targetPaths.dataRoot).map(\.lastPathComponent)
+        XCTAssertFalse(leftovers.contains { $0.contains(".restore-") }, "temp 파일이 남았다: \(leftovers)")
+        XCTAssertFalse(leftovers.contains { $0.contains(".stash-") }, "stash 파일이 남았다: \(leftovers)")
+        XCTAssertFalse(fm.fileExists(atPath: targetPaths.backupRoot.path),
+                       "대상에 원본이 없었는데 preRestore 백업이 생겼다")
+    }
 }

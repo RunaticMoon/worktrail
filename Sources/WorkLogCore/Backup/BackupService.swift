@@ -376,6 +376,25 @@ public final class BackupService: @unchecked Sendable {
                 throw BackupFailure.integrityFailed(file: entry.name)
             }
         }
+
+        // vault.sqlite가 있으면 실제 vault_meta.key_version이 manifest와 같은지 대조한다.
+        // 손상·누락 시에도 값이나 Secret 내용 없이 manifestInvalid로만 알린다.
+        if manifest.files.contains(where: { $0.name == vaultFileName }) {
+            let url = backup.directory.appendingPathComponent(vaultFileName)
+            do {
+                let db = try SQLiteDatabase(path: url.path, readOnly: true)
+                defer { db.close() }
+                let actual = try db.queryOne(
+                    "SELECT value FROM vault_meta WHERE key = ?", ["key_version"])?.string("value")
+                guard actual == manifest.vaultKeyVersion else {
+                    throw BackupFailure.manifestInvalid("vault key_version이 manifest와 다릅니다")
+                }
+            } catch let failure as BackupFailure {
+                throw failure
+            } catch {
+                throw BackupFailure.manifestInvalid("vault key_version이 manifest와 다릅니다")
+            }
+        }
     }
 
     // MARK: - 복원
@@ -391,6 +410,16 @@ public final class BackupService: @unchecked Sendable {
     public static func restore(_ backup: BackupInfo, into target: AppPaths,
                                keyStore: VaultKeyStore, includeVault: Bool = true,
                                clock: Clock = SystemClock()) throws {
+        try restore(backup, into: target, keyStore: keyStore, includeVault: includeVault,
+                    clock: clock, beforePlacing: nil)
+    }
+
+    /// public `restore`의 구현. `beforePlacing`은 각 파일을 temp→final로 옮기기 직전에 호출되는
+    /// 테스트용 훅이며, 기본값 nil이면 동작에 영향이 없다.
+    static func restore(_ backup: BackupInfo, into target: AppPaths,
+                        keyStore: VaultKeyStore, includeVault: Bool = true,
+                        clock: Clock = SystemClock(),
+                        beforePlacing: ((String) throws -> Void)?) throws {
         try verifyBackup(backup)
         let manifest = backup.manifest
         let fm = FileManager.default
@@ -404,6 +433,8 @@ public final class BackupService: @unchecked Sendable {
             guard let key, !key.isEmpty else {
                 throw BackupFailure.vaultKeyMissing(keyVersion: keyVersion)
             }
+            // 대상 파일을 하나도 바꾸기 전에 실제 복호화가 되는지 시험한다.
+            try probeVaultDecryptable(directory: backup.directory, keyVersion: keyVersion, key: key)
         }
 
         var restoreNames: [String] = []
@@ -444,6 +475,8 @@ public final class BackupService: @unchecked Sendable {
             }
 
             // 교체 전 원본을 잠시 옮겨 두고, 실패하면 되돌린다.
+            // 이번에 성공적으로 놓은 final도 기록해, 원래 없던 파일이 남지 않게 한다.
+            var placed: [URL] = []
             var stashed: [(stash: URL, final: URL)] = []
             do {
                 for item in prepared where fm.fileExists(atPath: item.final.path) {
@@ -458,12 +491,21 @@ public final class BackupService: @unchecked Sendable {
                     try? fm.removeItem(atPath: item.final.path + "-shm")
                 }
                 for item in prepared {
+                    try beforePlacing?(item.name)
                     try fm.moveItem(at: item.temp, to: item.final)
                     try setPermissions(0o600, at: item.final)
+                    placed.append(item.final)
                 }
                 for entry in stashed { try? fm.removeItem(at: entry.stash) }
             } catch {
-                // 되돌리기: 새로 놓은 것을 지우고 stash를 복구한다.
+                // 되돌리기: (1) 이번에 새로 놓은 final 제거 (2) 남은 temp 제거 (3) stash 복구.
+                for final in placed {
+                    try? fm.removeItem(at: final)
+                    if final.path.hasSuffix(".sqlite") {
+                        try? fm.removeItem(atPath: final.path + "-wal")
+                        try? fm.removeItem(atPath: final.path + "-shm")
+                    }
+                }
                 for item in prepared {
                     if fm.fileExists(atPath: item.temp.path) { try? fm.removeItem(at: item.temp) }
                 }
@@ -476,6 +518,50 @@ public final class BackupService: @unchecked Sendable {
         } catch {
             for item in prepared { try? fm.removeItem(at: item.temp) }
             throw BackupFailure.from(error)
+        }
+    }
+
+    /// 백업의 vault.sqlite에서 최신 revision 하나를 읽어 현재 키로 실제 복호화가 되는지 시험한다.
+    /// 복호화한 평문은 즉시 버리고 기록·로그하지 않는다. 실패는 모두 `vaultKeyMismatch`로 알린다.
+    private static func probeVaultDecryptable(directory: URL, keyVersion: String, key: Data) throws {
+        // SecretVault의 private 상수 `schemaVersion = 1`과 같아야 한다.
+        let schemaVersion = 1
+        let url = directory.appendingPathComponent(vaultFileName)
+        let db: SQLiteDatabase
+        do {
+            db = try SQLiteDatabase(path: url.path, readOnly: true)
+        } catch {
+            throw BackupFailure.vaultKeyMismatch(keyVersion: keyVersion)
+        }
+        defer { db.close() }
+
+        let row: SQLRow?
+        do {
+            row = try db.queryOne("""
+                SELECT id, secret_id, version, key_version, encrypted_payload
+                FROM secret_revision ORDER BY created_at DESC, id DESC LIMIT 1
+                """)
+        } catch {
+            throw BackupFailure.vaultKeyMismatch(keyVersion: keyVersion)
+        }
+        guard let row else { return }
+
+        guard row.string("key_version") == keyVersion else {
+            throw BackupFailure.vaultKeyMismatch(keyVersion: keyVersion)
+        }
+        guard let revisionId = row.string("id"),
+              let secretId = row.string("secret_id"),
+              let version = row.int("version"),
+              let encrypted = row.data("encrypted_payload") else {
+            throw BackupFailure.vaultKeyMismatch(keyVersion: keyVersion)
+        }
+        let aad = VaultCrypto.aad(secretId: secretId, revisionId: revisionId, version: version,
+                                  schemaVersion: schemaVersion)
+        do {
+            // 평문은 사용하지 않고 즉시 버린다.
+            _ = try VaultCrypto.open(encrypted, key: key, aad: aad)
+        } catch {
+            throw BackupFailure.vaultKeyMismatch(keyVersion: keyVersion)
         }
     }
 
