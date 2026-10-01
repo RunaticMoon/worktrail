@@ -72,12 +72,7 @@ import WorkLogCore
                 onCapture: { [weak self] in self?.showCapture() }, onSearch: { [weak self] in self?.showSearch() })
             hotkeys = keys
             if !failures.isEmpty { notice = failures.joined(separator: "\n") }
-            // Catch up from the oldest ordinary source, never from Secret data.
-            let today = env.calendar.workDate(of: env.options.clock.now())
-            let sources = try env.search.search(SearchQuery(text: "", limit: Int.max))
-            let dates = sources.compactMap(\.workDate) + (try env.repo.allEvents()).map(\.effectiveDate)
-            let since = dates.min() ?? env.calendar.adding(days: -1, to: today)
-            do { try await env.runScheduledReports(since: since) }
+            do { try await env.runStartupCatchUp() }
             catch { notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다." }
         } catch {
             startupError = "WorkLog 저장소를 열지 못했습니다. 저장소 권한과 설정 파일을 확인하고 다시 시도하세요."

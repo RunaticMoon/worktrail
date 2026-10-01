@@ -321,4 +321,107 @@ final class AppEnvironmentTests: XCTestCase {
             XCTAssertEqual(error, .vaultKeyMissing)
         }
     }
+
+    // MARK: - 9. 시작 시 catch-up 범위 제한
+
+    /// AI 입력 payloadJSON에서 리포트 구간 시작을 꺼내기 위한 최소 디코딩 뷰.
+    private struct CatchUpPayload: Decodable {
+        struct Facts: Decodable {
+            struct Range: Decodable { let start: WorkDate }
+            let range: Range
+        }
+        let facts: Facts
+    }
+
+    private func payloadStarts(_ provider: MockAIProvider) throws -> [WorkDate] {
+        try provider.receivedInputs.map {
+            try JSONDecoder().decode(CatchUpPayload.self,
+                                     from: Data($0.payloadJSON.utf8)).facts.range.start
+        }
+    }
+
+    func testStartupCatchUpBoundsSinceToLookbackWindow() async throws {
+        let paths = try makePaths()
+        let clock = fixedClock()
+        let env = try AppEnvironment.open(makeOptions(paths: paths, clock: clock))
+        let today = env.calendar.workDate(of: clock.now())
+        let oldest = env.calendar.adding(days: -400, to: today)
+        let yesterday = env.calendar.adding(days: -1, to: today)
+        _ = try env.tasks.captureMemo(body: "아주 오래된 기록", workDate: oldest)
+        _ = try env.tasks.captureMemo(body: "어제 기록", workDate: yesterday)
+
+        XCTAssertEqual(try env.repo.earliestRecordedWorkDate(), oldest)
+
+        let processed = try await env.runStartupCatchUp()
+        let daily = processed.filter { $0.type == .dailyClose }
+        XCTAssertFalse(daily.isEmpty, "catch-up은 dailyClose를 만들어야 함")
+        let floor = env.calendar.adding(days: -92, to: today)
+        let keys = daily.compactMap { WorkDate($0.periodKey) }
+        XCTAssertEqual(keys.count, daily.count)
+        XCTAssertTrue(keys.allSatisfy { $0 >= floor },
+                      "400일 전 기록이 있어도 dailyClose는 92일 창 안에서만: \(keys.map(\.iso))")
+        XCTAssertFalse(keys.contains(oldest))
+    }
+
+    func testStartupCatchUpUsesAIOnlyForRecentJobs() async throws {
+        let paths = try makePaths()
+        // 2026-10-19(월) 10:00 KST: catch-up 시작(10일 전)이 같은 달·분기 안이라 월/분기 작업이 없다.
+        let now = ISO8601DateFormatter().date(from: "2026-10-19T01:00:00Z")!
+        let provider = MockAIProvider()
+        let env = try AppEnvironment.open(makeOptions(paths: paths, aiProvider: provider,
+                                                      clock: FixedClock(now)))
+        _ = env.onLaunch()
+        let today = env.calendar.workDate(of: now)
+        let old = env.calendar.adding(days: -10, to: today)
+        let recent = env.calendar.adding(days: -2, to: today)
+        _ = try env.tasks.captureMemo(body: "열흘 전 기록", workDate: old)
+        _ = try env.tasks.captureMemo(body: "이틀 전 기록", workDate: recent)
+
+        _ = try await env.runStartupCatchUp()
+
+        let inputs = provider.receivedInputs
+        XCTAssertFalse(inputs.isEmpty, "최근 작업에는 AI가 쓰여야 한다")
+        let cutoff = env.calendar.adding(days: -7, to: today)
+        let starts = try payloadStarts(provider)
+        XCTAssertEqual(starts.count, inputs.count)
+        XCTAssertTrue(starts.allSatisfy { $0 >= cutoff },
+                      "AI 입력은 최근 7일 작업에만: \(starts.map(\.iso))")
+        XCTAssertFalse(starts.contains(old), "10일 전 작업에는 AI를 쓰지 않는다")
+
+        // 오래된 dailyClose 리포트는 AI 없이 결정적 초안으로 저장된다.
+        let oldReport = try XCTUnwrap(env.repo.report(family: .performance, periodType: .daily,
+                                                       periodKey: old.iso))
+        let oldVersion = try XCTUnwrap(env.repo.reportVersions(reportId: oldReport.id).last)
+        XCTAssertEqual(oldVersion.generator, "deterministic")
+    }
+
+    func testStartupCatchUpWithoutRecordsUsesYesterday() async throws {
+        let paths = try makePaths()
+        let clock = fixedClock()
+        let env = try AppEnvironment.open(makeOptions(paths: paths, clock: clock))
+        let today = env.calendar.workDate(of: clock.now())
+        XCTAssertNil(try env.repo.earliestRecordedWorkDate())
+
+        let processed = try await env.runStartupCatchUp()
+        let daily = processed.filter { $0.type == .dailyClose }
+        XCTAssertEqual(daily.map(\.periodKey),
+                       [env.calendar.adding(days: -1, to: today).iso],
+                       "기록이 없으면 since=어제")
+    }
+
+    func testEarliestRecordedWorkDateIgnoresSecrets() async throws {
+        let paths = try makePaths()
+        let clock = fixedClock()
+        let env = try AppEnvironment.open(makeOptions(paths: paths, clock: clock))
+        let today = env.calendar.workDate(of: clock.now())
+        let old = env.calendar.adding(days: -300, to: today)
+        _ = try env.tasks.captureMemo(body: "일반 기록", workDate: old)
+        XCTAssertEqual(try env.repo.earliestRecordedWorkDate(), old)
+
+        try await env.vaultSession.unlock(reason: "테스트")
+        _ = try env.vaultSession.create(title: "초기 Secret", groupName: nil,
+                                        rows: [SecretRowInput(key: "비밀", value: "값")])
+        // Secret은 별도 vault DB에만 저장되므로 일반 기록 경계는 변하지 않는다.
+        XCTAssertEqual(try env.repo.earliestRecordedWorkDate(), old)
+    }
 }
