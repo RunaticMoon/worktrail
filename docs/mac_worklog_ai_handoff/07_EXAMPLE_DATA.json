@@ -1,0 +1,477 @@
+{
+  "schemaVersion": 1,
+  "fixtureOnly": true,
+  "description": "가짜 값과 임시 ID로만 만든 설계 검증 픽스처. 실사용 데이터/최종 DB 스키마가 아님.",
+  "clock": {
+    "timezone": "Asia/Seoul",
+    "now": "2026-10-05T10:30:00+09:00"
+  },
+  "reportContext": {
+    "previousWeekStart": "2026-09-28",
+    "previousWeekEndExclusive": "2026-10-05",
+    "currentWeekStart": "2026-10-05",
+    "currentWeekEndExclusive": "2026-10-12",
+    "pastConfirmedSnapshotAt": "2026-10-04T23:59:00+09:00"
+  },
+  "projects": [
+    {
+      "id": "project-G",
+      "name": "G"
+    },
+    {
+      "id": "project-J",
+      "name": "J"
+    },
+    {
+      "id": "project-K",
+      "name": "K"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-A",
+      "title": "공통 인프라 설정 개선",
+      "projectIds": [
+        "project-G",
+        "project-J",
+        "project-K"
+      ],
+      "projectTrackingMode": "per_project",
+      "dueOn": "2026-10-09"
+    },
+    {
+      "id": "task-B",
+      "title": "배포 스크립트 정리",
+      "projectIds": [
+        "project-G"
+      ],
+      "projectTrackingMode": "shared",
+      "dueOn": null
+    },
+    {
+      "id": "task-C",
+      "title": "품질 테스트 설정 수정",
+      "projectIds": [
+        "project-J"
+      ],
+      "projectTrackingMode": "shared",
+      "dueOn": null
+    }
+  ],
+  "checklists": [
+    {
+      "id": "checklist-docs",
+      "taskId": "task-A",
+      "text": "공통 운영 문서 정리",
+      "projectIds": [],
+      "done": false
+    }
+  ],
+  "events": [
+    {
+      "id": "event-A-create",
+      "taskId": "task-A",
+      "scope": "task",
+      "scopeId": "task-A",
+      "kind": "created",
+      "status": "planned",
+      "effectiveDate": "2026-09-28",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-09-28T09:00:00+09:00"
+    },
+    {
+      "id": "event-A-start",
+      "taskId": "task-A",
+      "scope": "task",
+      "scopeId": "task-A",
+      "kind": "started",
+      "status": "in_progress",
+      "effectiveDate": "2026-09-28",
+      "effectiveOrder": 2,
+      "recordedAt": "2026-09-28T09:10:00+09:00"
+    },
+    {
+      "id": "event-A-G-done",
+      "taskId": "task-A",
+      "scope": "task_project",
+      "scopeId": "task-A/project-G",
+      "kind": "project_completed",
+      "status": "completed",
+      "effectiveDate": "2026-10-01",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-10-01T16:00:00+09:00"
+    },
+    {
+      "id": "event-A-J-start",
+      "taskId": "task-A",
+      "scope": "task_project",
+      "scopeId": "task-A/project-J",
+      "kind": "project_started",
+      "status": "in_progress",
+      "effectiveDate": "2026-10-02",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-10-02T11:00:00+09:00"
+    },
+    {
+      "id": "event-A-K-planned",
+      "taskId": "task-A",
+      "scope": "task_project",
+      "scopeId": "task-A/project-K",
+      "kind": "project_planned",
+      "status": "planned",
+      "effectiveDate": "2026-09-28",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-09-28T09:05:00+09:00"
+    },
+    {
+      "id": "event-B-create",
+      "taskId": "task-B",
+      "scope": "task",
+      "scopeId": "task-B",
+      "kind": "created",
+      "status": "planned",
+      "effectiveDate": "2026-10-02",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-10-02T13:00:00+09:00"
+    },
+    {
+      "id": "event-B-start",
+      "taskId": "task-B",
+      "scope": "task",
+      "scopeId": "task-B",
+      "kind": "started",
+      "status": "in_progress",
+      "effectiveDate": "2026-10-02",
+      "effectiveOrder": 2,
+      "recordedAt": "2026-10-02T13:10:00+09:00"
+    },
+    {
+      "id": "event-B-done",
+      "taskId": "task-B",
+      "scope": "task",
+      "scopeId": "task-B",
+      "kind": "completed",
+      "status": "completed",
+      "effectiveDate": "2026-10-05",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-10-05T09:00:00+09:00"
+    },
+    {
+      "id": "event-C-create",
+      "taskId": "task-C",
+      "scope": "task",
+      "scopeId": "task-C",
+      "kind": "created",
+      "status": "planned",
+      "effectiveDate": "2026-10-02",
+      "effectiveOrder": 1,
+      "recordedAt": "2026-10-05T10:00:00+09:00"
+    },
+    {
+      "id": "event-C-done",
+      "taskId": "task-C",
+      "scope": "task",
+      "scopeId": "task-C",
+      "kind": "completed",
+      "status": "completed",
+      "effectiveDate": "2026-10-02",
+      "effectiveOrder": 2,
+      "recordedAt": "2026-10-05T10:00:00+09:00"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-A-G",
+      "kind": "activity",
+      "taskId": "task-A",
+      "projectIds": [
+        "project-G"
+      ],
+      "workDate": "2026-10-01",
+      "recordedAt": "2026-10-01T16:00:00+09:00",
+      "revision": 1,
+      "text": "G 프로젝트 설정 반영 및 검증 완료.",
+      "sourceUrl": "https://github.example.invalid/platform/infra/pull/123",
+      "urlBodyFetched": false
+    },
+    {
+      "id": "source-A-J",
+      "kind": "activity",
+      "taskId": "task-A",
+      "projectIds": [
+        "project-J"
+      ],
+      "workDate": "2026-10-02",
+      "recordedAt": "2026-10-02T11:00:00+09:00",
+      "revision": 1,
+      "text": "J 프로젝트 적용 검증 중. K 적용은 아직 착수하지 않음."
+    },
+    {
+      "id": "source-B-start",
+      "kind": "activity",
+      "taskId": "task-B",
+      "projectIds": [
+        "project-G"
+      ],
+      "workDate": "2026-10-02",
+      "recordedAt": "2026-10-02T13:10:00+09:00",
+      "revision": 1,
+      "text": "미사용 배포 스크립트 정리 시작."
+    },
+    {
+      "id": "source-B-done",
+      "kind": "activity",
+      "taskId": "task-B",
+      "projectIds": [
+        "project-G"
+      ],
+      "workDate": "2026-10-05",
+      "recordedAt": "2026-10-05T09:00:00+09:00",
+      "revision": 1,
+      "text": "배포 스크립트 정리 완료."
+    },
+    {
+      "id": "source-C-late",
+      "kind": "activity",
+      "taskId": "task-C",
+      "projectIds": [
+        "project-J"
+      ],
+      "workDate": "2026-10-02",
+      "recordedAt": "2026-10-05T10:00:00+09:00",
+      "revision": 1,
+      "text": "지난 금요일에 완료한 품질 테스트 설정 수정 내용을 늦게 기록."
+    },
+    {
+      "id": "source-memo-1",
+      "kind": "memo",
+      "taskId": null,
+      "projectIds": [
+        "project-G",
+        "project-J"
+      ],
+      "workDate": "2026-09-30",
+      "recordedAt": "2026-09-30T15:00:00+09:00",
+      "revision": 1,
+      "text": "회의에서 공통 설정을 맞추기로 논의함. 적용 결과는 별도 확인 필요."
+    }
+  ],
+  "memoTaskLinks": [
+    {
+      "memoSourceId": "source-memo-1",
+      "taskId": "task-A",
+      "status": "accepted"
+    }
+  ],
+  "weekPlanItems": [
+    {
+      "id": "plan-J",
+      "taskId": "task-A",
+      "scopeType": "task_project",
+      "scopeId": "task-A/project-J",
+      "text": "J 적용 마무리",
+      "status": "confirmed"
+    },
+    {
+      "id": "plan-docs",
+      "taskId": "task-A",
+      "scopeType": "checklist",
+      "scopeId": "checklist-docs",
+      "text": "공통 운영 문서 정리",
+      "status": "confirmed"
+    },
+    {
+      "id": "candidate-K",
+      "taskId": "task-A",
+      "scopeType": "task_project",
+      "scopeId": "task-A/project-K",
+      "text": "K 적용 착수",
+      "status": "candidate"
+    }
+  ],
+  "evidenceSupplements": [
+    {
+      "id": "supplement-A",
+      "taskId": "task-A",
+      "recordedAt": "2026-10-05T10:20:00+09:00",
+      "appliesStart": "2026-09-28",
+      "appliesEndExclusive": "2026-10-05",
+      "question": "이 변경이 필요했던 이유가 있나요?",
+      "answer": "프로젝트 간 설정 차이를 줄이기 위한 작업. 정량 효과는 아직 확인하지 않음.",
+      "countsAsNewActivityOnRecordedDate": false
+    }
+  ],
+  "secretTrimCases": [
+    {
+      "id": "row-api",
+      "input": {
+        "key": "  API_KEY  ",
+        "value": "  fake-token-001  "
+      },
+      "expected": {
+        "key": "API_KEY",
+        "value": "fake-token-001"
+      }
+    },
+    {
+      "id": "row-phrase",
+      "input": {
+        "key": " PHRASE ",
+        "value": "  abc  123  "
+      },
+      "expected": {
+        "key": "PHRASE",
+        "value": "abc  123"
+      }
+    },
+    {
+      "id": "row-pin",
+      "input": {
+        "key": "PIN",
+        "value": " 00123 "
+      },
+      "expected": {
+        "key": "PIN",
+        "value": "00123"
+      }
+    },
+    {
+      "id": "row-bool",
+      "input": {
+        "key": "ENABLED",
+        "value": " true "
+      },
+      "expected": {
+        "key": "ENABLED",
+        "value": "true"
+      }
+    },
+    {
+      "id": "row-multiline",
+      "input": {
+        "key": "\tMULTILINE\n",
+        "value": "\n line1\nline  2\t"
+      },
+      "expected": {
+        "key": "MULTILINE",
+        "value": "line1\nline  2"
+      }
+    },
+    {
+      "id": "row-unicode",
+      "input": {
+        "key": " 설명 ",
+        "value": "  한 글  은  "
+      },
+      "expected": {
+        "key": "설명",
+        "value": "한 글  은"
+      }
+    }
+  ],
+  "secretAutoKeyCase": {
+    "existingKeys": [
+      "key1"
+    ],
+    "input": [
+      {
+        "key": "",
+        "value": " fake-unlabeled "
+      }
+    ],
+    "expected": [
+      {
+        "key": "key2",
+        "value": "fake-unlabeled"
+      }
+    ]
+  },
+  "secretPartialUpdateCase": {
+    "initialRows": [
+      {
+        "id": "row-host",
+        "key": "HOST",
+        "value": "host.example.invalid"
+      },
+      {
+        "id": "row-key",
+        "key": "API_KEY",
+        "value": "fake-old-key"
+      }
+    ],
+    "patch": {
+      "id": "row-key",
+      "key": " API_KEY ",
+      "value": " fake-new-key "
+    },
+    "expectedRows": [
+      {
+        "id": "row-host",
+        "key": "HOST",
+        "value": "host.example.invalid"
+      },
+      {
+        "id": "row-key",
+        "key": "API_KEY",
+        "value": "fake-new-key"
+      }
+    ],
+    "expectedRevisionCountAfterOneSave": 2
+  },
+  "pasteExamples": [
+    {
+      "input": "A=B=C",
+      "expectedKey": "A",
+      "expectedValue": "B=C"
+    },
+    {
+      "input": "A : B:C",
+      "expectedKey": "A",
+      "expectedValue": "B:C"
+    },
+    {
+      "input": "only-fake-value",
+      "expectedKey": "key1",
+      "expectedValue": "only-fake-value"
+    }
+  ],
+  "expected": {
+    "taskStateOnSundayKnownMonday": {
+      "task-A": "in_progress",
+      "task-B": "in_progress",
+      "task-C": "completed"
+    },
+    "taskStateOnSundayKnownSunday": {
+      "task-A": "in_progress",
+      "task-B": "in_progress",
+      "task-C": null
+    },
+    "taskStateMondayNow": {
+      "task-A": "in_progress",
+      "task-B": "completed",
+      "task-C": "completed"
+    },
+    "taskAProjectStates": {
+      "project-G": "completed",
+      "project-J": "in_progress",
+      "project-K": "planned"
+    },
+    "taskCDerivedStartDate": null,
+    "confirmedPlanIds": [
+      "plan-J",
+      "plan-docs"
+    ],
+    "excludedCandidateIds": [
+      "candidate-K"
+    ],
+    "uniqueTaskCountKnownMonday": 3,
+    "projectAssociationCount": 5,
+    "weeklySubmissionCommonTaskAppearancesPerCategory": {
+      "task-A": 1
+    },
+    "secretAIRequestCount": 0,
+    "secretValuesAllowedInGeneralAIInput": false,
+    "previousConfirmedReportMustMutate": false,
+    "linkFetchRequiredForMVP": false
+  }
+}
