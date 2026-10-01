@@ -108,7 +108,7 @@ final class CLITests: XCTestCase {
 
         let submission = await run(["report", "submission", "2026-10-05"], dataDir: dir)
         XCTAssertEqual(submission.exitCode, 0, submission.stderr)
-        XCTAssertTrue(submission.stdout.hasPrefix("[제출용 주간보고] 기간 "), submission.stdout)
+        XCTAssertTrue(submission.stdout.hasPrefix("[제출용 주간보고] 실적 기간 "), submission.stdout)
 
         let performance = await run(["report", "performance", "weekly", "2026-10-05"], dataDir: dir)
         XCTAssertEqual(performance.exitCode, 0, performance.stderr)
@@ -134,6 +134,25 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(try env.repo.reports(family: .performance).count, 1)
     }
 
+    // MARK: - 4b. 리포트 머리말은 포함 종료일을 쓴다
+
+    func testReportHeadersUseInclusivePeriod() async throws {
+        let dir = try makeDataDir()
+
+        let submission = await run(["report", "submission", "2026-10-05"], dataDir: dir)
+        XCTAssertEqual(submission.exitCode, 0, submission.stderr)
+        XCTAssertEqual(firstLine(submission.stdout),
+                       "[제출용 주간보고] 실적 기간 2026-09-28 ~ 2026-10-04"
+                           + " · 계획 기간 2026-10-05 ~ 2026-10-11",
+                       submission.stdout)
+
+        let performance = await run(["report", "performance", "weekly", "2026-10-05"], dataDir: dir)
+        XCTAssertEqual(performance.exitCode, 0, performance.stderr)
+        XCTAssertEqual(firstLine(performance.stdout),
+                       "[상세 성과 리포트] weekly 기간 2026-10-05 ~ 2026-10-11",
+                       performance.stdout)
+    }
+
     // MARK: - 5. backup create → list → verify
 
     func testBackupCreateListVerify() async throws {
@@ -151,6 +170,45 @@ final class CLITests: XCTestCase {
 
         let verify = await run(["backup", "verify", directoryName], dataDir: dir)
         XCTAssertEqual(verify.exitCode, 0, verify.stderr)
+    }
+
+    func testBackupVerifyDistinguishesCorruptManifest() async throws {
+        let dir = try makeDataDir()
+
+        let create = await run(["backup", "create"], dataDir: dir)
+        XCTAssertEqual(create.exitCode, 0, create.stderr)
+        let name = lastToken(create.stdout)
+        XCTAssertFalse(name.isEmpty)
+
+        // manifest.json을 깨뜨려도 디렉터리는 남는다. listBackups()는 건너뛰지만 verify는 손상을 알려야 한다.
+        let manifest = URL(fileURLWithPath: dir, isDirectory: true)
+            .appendingPathComponent("backups", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
+            .appendingPathComponent("manifest.json")
+        try Data("{".utf8).write(to: manifest)
+
+        let result = await run(["backup", "verify", name], dataDir: dir)
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertFalse(result.stderr.contains("찾을 수 없습니다"), result.stderr)
+        XCTAssertTrue(result.stderr.contains("manifest"), result.stderr)
+    }
+
+    func testBackupVerifyMissingNameNotFound() async throws {
+        let dir = try makeDataDir()
+        _ = await run(["backup", "create"], dataDir: dir)
+
+        let result = await run(["backup", "verify", "no-such-backup"], dataDir: dir)
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertTrue(result.stderr.contains("찾을 수 없습니다"), result.stderr)
+    }
+
+    func testBackupVerifyPathTraversalNameNotFound() async throws {
+        let dir = try makeDataDir()
+        _ = await run(["backup", "create"], dataDir: dir)
+
+        let result = await run(["backup", "verify", "../x"], dataDir: dir)
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertTrue(result.stderr.contains("찾을 수 없습니다"), result.stderr)
     }
 
     // MARK: - 6. 알 수 없는 명령 exit 2
