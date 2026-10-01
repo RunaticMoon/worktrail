@@ -438,4 +438,98 @@ final class VaultSessionTests: XCTestCase {
         XCTAssertEqual(pb.string, "external")
         XCTAssertFalse(clipboardGuard.hasPendingClear)
     }
+
+    // MARK: - 13. 잠금 상태에서는 파사드 값 접근이 vaultLocked (WLOG-45A3 AB2)
+
+    func testFacadeMethodsThrowVaultLockedWhenLocked() throws {
+        let clock = fixedClock()
+        let (db, vault) = try makeVault(clock: clock)
+        defer { db.close() }
+
+        let session = makeSession(vault, authenticator: MockDeviceAuthenticator(), clock: clock)
+        XCTAssertEqual(session.state, .locked)
+
+        XCTAssertThrowsError(try session.create(title: "차단", groupName: nil,
+                                                rows: [SecretRowInput(key: "A", value: "1")])) { error in
+            XCTAssertEqual(error as? WorkLogError, .vaultLocked)
+        }
+        XCTAssertThrowsError(try session.currentRows(secretId: "missing")) { error in
+            XCTAssertEqual(error as? WorkLogError, .vaultLocked)
+        }
+        XCTAssertThrowsError(try session.save(secretId: "missing",
+                                              changes: SecretChangeSet())) { error in
+            XCTAssertEqual(error as? WorkLogError, .vaultLocked)
+        }
+        XCTAssertThrowsError(try session.loadDraft()) { error in
+            XCTAssertEqual(error as? WorkLogError, .vaultLocked)
+        }
+        // 잠금 중에는 아무것도 저장되지 않는다.
+        XCTAssertEqual(try db.query("SELECT 1 AS x FROM secret_item").count, 0)
+    }
+
+    // MARK: - 14. unlock 후 파사드 전체 왕복 (WLOG-45A3 AB2)
+
+    func testFacadeRoundTripAfterUnlock() async throws {
+        let clock = fixedClock()
+        let (db, vault) = try makeVault(clock: clock)
+        defer { db.close() }
+
+        let session = makeSession(vault, authenticator: MockDeviceAuthenticator(), clock: clock)
+        try await session.unlock(reason: "생성")
+
+        let meta = try session.create(title: "왕복", groupName: "grp", rows: [
+            SecretRowInput(key: "A", value: "1"),
+            SecretRowInput(key: "B", value: "2"),
+        ])
+        let rowsV1 = try session.currentRows(secretId: meta.id)
+        XCTAssertEqual(rowsV1.count, 2)
+        let revision1 = try XCTUnwrap(try session.revisions(secretId: meta.id).first)
+        let aId = try XCTUnwrap(rowsV1.first { $0.key == "A" }?.id)
+
+        XCTAssertEqual(try session.save(secretId: meta.id, changes: SecretChangeSet(upserts: [
+            SecretRowInput(id: aId, key: "A", value: "1-updated")
+        ])), .saved(version: 2))
+        XCTAssertEqual(try session.currentRows(secretId: meta.id).first { $0.key == "A" }?.value,
+                       "1-updated")
+        XCTAssertEqual(try session.revisions(secretId: meta.id).count, 2)
+        XCTAssertEqual(try session.rows(secretId: meta.id, revisionId: revision1.id)
+            .first { $0.key == "A" }?.value, "1")
+
+        XCTAssertEqual(try session.restoreRevision(secretId: meta.id, revisionId: revision1.id),
+                       .saved(version: 3))
+        XCTAssertEqual(try session.currentRows(secretId: meta.id).first { $0.key == "A" }?.value, "1")
+    }
+
+    // MARK: - 15. 중복 key 오류 메시지에 key 문자열이 남지 않는다 (WLOG-45A3 AB2)
+
+    func testDuplicateKeyErrorHidesKeyString() async throws {
+        let clock = fixedClock()
+        let (db, vault) = try makeVault(clock: clock)
+        defer { db.close() }
+
+        let canary = "DUP_KEY_CANARY_77"
+        let session = makeSession(vault, authenticator: MockDeviceAuthenticator(), clock: clock)
+        try await session.unlock(reason: "저장")
+
+        var caught: Error?
+        do {
+            _ = try session.create(title: "중복", groupName: nil, rows: [
+                SecretRowInput(key: canary, value: "1"),
+                SecretRowInput(key: "  \(canary)  ", value: "2"),
+            ])
+            XCTFail("validation 오류를 기대")
+        } catch {
+            caught = error
+        }
+
+        let error = try XCTUnwrap(caught)
+        XCTAssertEqual(error as? WorkLogError,
+                       .validation("Secret 저장 전 확인이 필요합니다: 중복된 항목 이름(행 1, 2)"))
+        XCTAssertFalse(String(describing: error).contains(canary),
+                       "String(describing:)에 key 문자열이 남음")
+        XCTAssertFalse(error.localizedDescription.contains(canary),
+                       "localizedDescription에 key 문자열이 남음")
+        // 중복 오류면 아무것도 저장하지 않는다.
+        XCTAssertEqual(try db.query("SELECT 1 AS x FROM secret_item").count, 0)
+    }
 }

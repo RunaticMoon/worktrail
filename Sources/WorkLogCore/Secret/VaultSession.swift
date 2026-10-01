@@ -205,8 +205,70 @@ public final class VaultSession: @unchecked Sendable {
         try vault.searchTitles(query, limit: limit)
     }
 
+    // MARK: - SecretVault 파사드(잠금 게이트 통과 후에만 값 접근)
+    //
+    // SecretVault의 복호화·쓰기 메서드는 internal이므로 앱 계층은 이 파사드를 거쳐야 한다.
+    // 모든 메서드는 withUnlocked를 통과하며, 잠금이면 vaultLocked를 던진다.
+
+    public func create(title: String?, groupName: String?,
+                       rows: [SecretRowInput]) throws -> SecretMetadata {
+        try withUnlocked { try $0.create(title: title, groupName: groupName, rows: rows) }
+    }
+
+    public func save(secretId: String, changes: SecretChangeSet) throws -> SecretSaveOutcome {
+        try withUnlocked { try $0.save(secretId: secretId, changes: changes) }
+    }
+
+    public func rename(secretId: String, title: String, groupName: String?) throws {
+        try withUnlocked { try $0.rename(secretId: secretId, title: title, groupName: groupName) }
+    }
+
+    public func currentRows(secretId: String) throws -> [SecretRow] {
+        try withUnlocked { try $0.currentRows(secretId: secretId) }
+    }
+
+    public func revisions(secretId: String) throws -> [SecretRevisionInfo] {
+        try withUnlocked { try $0.revisions(secretId: secretId) }
+    }
+
+    public func rows(secretId: String, revisionId: String) throws -> [SecretRow] {
+        try withUnlocked { try $0.rows(secretId: secretId, revisionId: revisionId) }
+    }
+
+    public func restoreRevision(secretId: String, revisionId: String) throws -> SecretSaveOutcome {
+        try withUnlocked { try $0.restoreRevision(secretId: secretId, revisionId: revisionId) }
+    }
+
+    public func moveToTrash(secretId: String) throws {
+        try withUnlocked { try $0.moveToTrash(secretId: secretId) }
+    }
+
+    public func restoreFromTrash(secretId: String) throws {
+        try withUnlocked { try $0.restoreFromTrash(secretId: secretId) }
+    }
+
+    public func trash() throws -> [SecretMetadata] {
+        try withUnlocked { try $0.trash() }
+    }
+
+    public func purge(secretId: String) throws {
+        try withUnlocked { try $0.purge(secretId: secretId) }
+    }
+
+    public func saveDraft(_ payload: SecretPayload) throws {
+        try withUnlocked { try $0.saveDraft(payload) }
+    }
+
+    public func loadDraft() throws -> SecretPayload? {
+        try withUnlocked { try $0.loadDraft() }
+    }
+
+    public func clearDraft() throws {
+        try withUnlocked { try $0.clearDraft() }
+    }
+
     /// 잠금이면 vaultLocked를 던진다(만료 검사 포함). 성공 시 활동 시각을 갱신한 뒤 body를 실행한다.
-    public func withUnlocked<T>(_ body: (SecretVault) throws -> T) throws -> T {
+    func withUnlocked<T>(_ body: (SecretVault) throws -> T) throws -> T {
         mutex.lock()
         if expireForIdleLocked(now: clock.now()) {
             let handler = lockHandler
