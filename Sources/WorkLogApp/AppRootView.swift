@@ -104,6 +104,16 @@ struct AppRootView: View {
             }.navigationTitle("현재 업무")
         case .search:
             if let search = controller.search { SearchScreen(model: search, environment: environment) }
+        case .secrets:
+            if let secrets = controller.secrets { SecretsScreen(model: secrets) }
+        case .settings:
+            if let settings = controller.settingsModel { SettingsScreen(model: settings, onSave: { controller.saveSettings() }) }
+        case .backups:
+            if let backups = controller.backups {
+                BackupScreen(model: backups, onRestore: { backup, include in
+                    Task { await controller.restoreBackup(backup, includeVault: include) }
+                })
+            }
         default:
             EmptyMessage(title: (controller.route ?? .day).title, detail: "준비 중입니다.")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
