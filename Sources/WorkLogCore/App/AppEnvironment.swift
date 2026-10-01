@@ -38,13 +38,16 @@ public struct LaunchReport: Sendable {
     public var recoveredAIJobs: Int
     public var backupCreated: Bool
     public var backupError: String?
+    /// 보관 기간(settings.backupRetentionDays)이 지나 삭제한 백업 id. 백업이 실패한 실행에서는 지우지 않는다.
+    public var removedBackups: [String]
 
     public init(seededTemplates: Int = 0, recoveredAIJobs: Int = 0,
-                backupCreated: Bool = false, backupError: String? = nil) {
+                backupCreated: Bool = false, backupError: String? = nil, removedBackups: [String] = []) {
         self.seededTemplates = seededTemplates
         self.recoveredAIJobs = recoveredAIJobs
         self.backupCreated = backupCreated
         self.backupError = backupError
+        self.removedBackups = removedBackups
     }
 }
 
@@ -189,7 +192,7 @@ public final class AppEnvironment {
 
     // MARK: - 시작 회복
 
-    /// 앱 시작 시: 기본 템플릿 시드, 중단된 AI 작업 회복, 상태 캐시 재계산, 일일 백업.
+    /// 앱 시작 시: 기본 템플릿 시드, 중단된 AI 작업 회복, 상태 캐시 재계산, 일일 백업, 보관 기간 정리.
     /// 백업 실패는 throw하지 않고 결과에 기록한다.
     public func onLaunch() -> LaunchReport {
         var report = LaunchReport()
@@ -204,6 +207,8 @@ public final class AppEnvironment {
         } catch {
             report.backupError = String(describing: error)
         }
+        report.removedBackups = (try? backup.applyRetention(keepDays: settings.backupRetentionDays,
+                                                            lastBackupSucceeded: report.backupError == nil)) ?? []
         return report
     }
 

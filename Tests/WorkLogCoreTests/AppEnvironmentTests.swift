@@ -148,6 +148,29 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertEqual(second.seededTemplates, 0)
     }
 
+    func testOnLaunchAppliesBackupRetention() throws {
+        let paths = try makePaths()
+        let clock = fixedClock()
+        let env = try AppEnvironment.open(makeOptions(paths: paths, clock: clock))
+
+        let first = env.onLaunch()
+        XCTAssertTrue(first.backupCreated)
+        XCTAssertEqual(first.removedBackups, [])
+        let oldIds = try env.backup.listBackups().map(\.id)
+        XCTAssertEqual(oldIds.count, 1)
+
+        // 보관 기간(기본 30일)보다 뒤에 내용이 바뀐 상태로 다시 시작하면 새 백업을 만들고 오래된 것을 지운다.
+        clock.advance(by: 40 * 86_400)
+        _ = try env.tasks.captureMemo(body: "보관 기간 확인용 메모")
+        let second = env.onLaunch()
+        XCTAssertTrue(second.backupCreated)
+        XCTAssertNil(second.backupError)
+        XCTAssertEqual(second.removedBackups, oldIds)
+        let remaining = try env.backup.listBackups()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertFalse(oldIds.contains(remaining[0].id))
+    }
+
     // MARK: - 4b. 예약 작업 → 리포트 생성 연결
 
     func testScheduledJobsGenerateSeparateSubmissionAndPerformanceReports() async throws {
