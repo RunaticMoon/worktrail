@@ -11,6 +11,10 @@ import Observation
     public static let transmissionNotice = "회사 AI에는 일반 메모·업무·활동·계획·리포트와 관련 근거·질문·스킬 지침을 작업에 필요한 범위로 전송합니다. Secret은 제목·그룹·key·값·이전 버전·초안까지 모두 제외합니다."
     public init(environment: AppEnvironment) { self.environment = environment; draft = environment.settings }
     public var hasChanges: Bool { environment.map { draft != $0.settings } ?? false }
+    public var defaultCaptureKind: CaptureKind {
+        get { draft.defaultCaptureKind }
+        set { draft.defaultCaptureKind = newValue }
+    }
     public func detach() { environment = nil }
     public func reset() { if let environment { draft = environment.settings }; errors = []; message = nil }
     public func validate() -> Bool {

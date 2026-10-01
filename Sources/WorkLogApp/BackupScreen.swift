@@ -5,6 +5,7 @@ import WorkLogCore
 
 struct BackupScreen: View {
     @Bindable var model: BackupModel
+    let calendar: WorkCalendar
     let onRestore: (BackupInfo, Bool) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -20,8 +21,8 @@ struct BackupScreen: View {
                 if model.isBusy { ProgressView().controlSize(.small) }
             }
             Text(BackupManifest.standardNote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let at = model.status.lastSuccessAt { Text("마지막 성공: \(at.formatted(date: .numeric, time: .standard))") }
-            if let at = model.status.lastFailureAt { Text("마지막 실패: \(at.formatted(date: .numeric, time: .standard))").foregroundStyle(.red) }
+            if let at = model.status.lastSuccessAt { Text("마지막 성공: \(timestamp(at))") }
+            if let at = model.status.lastFailureAt { Text("마지막 실패: \(timestamp(at))").foregroundStyle(.red) }
             if let message = model.message { InlineNotice(message: message) }
             if model.backups.isEmpty {
                 EmptyMessage(title: "아직 복원 지점이 없습니다", detail: "‘지금 백업’으로 현재 기록과 암호화된 Secret을 보존하세요.")
@@ -30,7 +31,7 @@ struct BackupScreen: View {
                 List {
                     ForEach(model.backups, id: \.id) { backup in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(backup.manifest.createdAt.formatted(date: .numeric, time: .standard)).font(.headline)
+                            Text(timestamp(backup.manifest.createdAt)).font(.headline)
                             HStack {
                                 Text(BackupModel.reasonLabel(backup.manifest.reason))
                                 Text(ByteCountFormatter.string(fromByteCount: BackupModel.size(backup), countStyle: .file))
@@ -52,7 +53,7 @@ struct BackupScreen: View {
             if let backup = model.pendingRestore {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("이 복원 지점으로 되돌릴까요?").font(.title2)
-                    Text(backup.manifest.createdAt.formatted(date: .numeric, time: .standard))
+                    Text(timestamp(backup.manifest.createdAt))
                     Text("현재 기록·설정을 이 백업으로 교체합니다. 복원 직전 현재 데이터를 별도 백업으로 보존하고, 모든 저장소 연결을 닫은 후 복원합니다.")
                     if model.offersOrdinaryOnlyRestore, let message = model.message { InlineNotice(message: message) }
                     Toggle("Secret 포함", isOn: $model.includeSecrets)
@@ -69,6 +70,9 @@ struct BackupScreen: View {
                 }.padding(24).frame(minWidth: 440, idealWidth: 520)
             }
         }
+    }
+    private func timestamp(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .numeric, time: .standard, timeZone: calendar.timeZone))
     }
 }
 #endif

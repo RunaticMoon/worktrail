@@ -157,6 +157,7 @@ import Observation
         let snapshot = try environment.repo.sourceSnapshot(id: selected.sourceSnapshotId)
         let facts = try snapshot.map { try StableJSON.decode(ReportFacts.self, from: $0.frozenFactsJSON) }
         let stale = try environment.reports.isStale(versionId: selected.id)
+        proposal = nil
         version = selected; content = selected.content; evidence = rows; sources = facts?.sources ?? []; isStale = stale
         submissionDraft = report?.family == .submission ? selected.structuredJSON.flatMap { try? StableJSON.decode(SubmissionDraft.self, from: $0) } : nil
         includedSubmissionIds = Set(submissionDraft?.groups.flatMap(\.items).map(\.itemId) ?? [])
@@ -165,6 +166,7 @@ import Observation
         aiJobStatus = results[selected.id]?.aiJobStatus
     }
     private func clearPreview() {
+        proposal = nil
         report = nil; versions = []; version = nil; content = ""; evidence = []; sources = []
         submissionDraft = nil; includedSubmissionIds = []
         findings = []; usedFallback = false; aiJobStatus = nil; isStale = false

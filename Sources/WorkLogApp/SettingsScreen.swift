@@ -38,6 +38,13 @@ struct SettingsScreen: View {
                     }
                 }
                 Section("전역 단축키") {
+                    Picker("기본 입력 유형", selection: $model.defaultCaptureKind) {
+                        Text("Memo · 메모").tag(CaptureKind.memo)
+                        Text("Task · 업무").tag(CaptureKind.task)
+                        Text("Secret · 보관함").tag(CaptureKind.secret)
+                    }
+                    Text("Secret을 선택하면 입력 단축키로 보관함의 새 항목을 엽니다. 잠금 상태에서는 기기 인증이 필요합니다.")
+                        .foregroundStyle(.secondary)
                     TextField("빠른 입력", text: $model.draft.captureHotkey)
                     TextField("검색", text: $model.draft.searchHotkey)
                     Text("예: ctrl+opt+space, ctrl+opt+f. 다른 앱과 충돌하면 기존 단축키를 유지합니다.")

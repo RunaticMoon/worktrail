@@ -15,6 +15,7 @@ import Observation
     public private(set) var selectedRevisionId: String?
     public private(set) var duplicateRowIds: Set<String> = []
     public private(set) var hasRecoverableDraft = false
+    public var requestsNewEntry = false
     public var title = "" { didSet { preserveDraft() } }
     public var groupName = "" { didSet { preserveDraft() } }
     public var showsValues = false
@@ -118,6 +119,8 @@ import Observation
         replaceEditor(id: nil, title: "", group: "", items: [])
         message = nil
     }
+    /// The screen handles authentication and any existing encrypted draft before navigation.
+    public func requestNewEntry() { synchronizeLock(); requestsNewEntry = true }
     public func open(_ item: SecretMetadata) {
         guard let environment = requireUnlocked() else { return }
         do {

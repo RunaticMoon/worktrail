@@ -18,7 +18,9 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
 
 /// Ordinary record draft only. No Secret, network or AI path.
 @Observable @MainActor public final class CaptureModel {
-    public var text = ""
+    public var text = "" { didSet { selectionRange = nil } }
+    /// UTF-16 selection from the native editor; nil uses existing-name prefix matching.
+    public var selectionRange: NSRange?
     public var kind: RecordCaptureKind = .memo
     public var workDate: WorkDate
     public var targetTaskId: String?
@@ -32,6 +34,7 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
     public private(set) var errorMessage: String?
     public private(set) var isSubmitting = false
     public private(set) var lastSavedId: String?
+    public var requiresSecretEditor: Bool { environment.settings.defaultCaptureKind == .secret }
     @ObservationIgnored private let environment: AppEnvironment
 
     public init(environment: AppEnvironment) {
@@ -43,7 +46,9 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
 
     /// Applied only to a fresh draft; opening an existing draft preserves it.
     public func resetDefaults() {
-        kind = environment.settings.defaultCaptureKind == .task ? .task : .memo
+        if !requiresSecretEditor {
+            kind = environment.settings.defaultCaptureKind == .task ? .task : .memo
+        }
         workDate = environment.calendar.workDate(of: environment.options.clock.now())
     }
 
@@ -57,11 +62,27 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
     }
 
     private var token: (kind: CaptureCandidate.Kind, range: Range<String.Index>, query: String)? {
-        guard let marker = text.lastIndex(where: { $0 == "@" || $0 == "#" }) else { return nil }
+        let cursor = selectionRange.flatMap { Range($0, in: text)?.lowerBound }
+        let end = cursor ?? text.endIndex
+        guard let marker = text[..<end].lastIndex(where: { $0 == "@" || $0 == "#" }) else { return nil }
         if marker != text.startIndex && !text[text.index(before: marker)].isWhitespace { return nil }
-        let suffix = String(text[text.index(after: marker)...])
+        let start = text.index(after: marker)
+        let suffix = String(text[start..<end])
         guard !suffix.contains(where: \.isNewline) else { return nil }
-        return (text[marker] == "@" ? .project : .tag, marker..<text.endIndex, suffix)
+        let tokenKind: CaptureCandidate.Kind = text[marker] == "@" ? .project : .tag
+        let names = tokenKind == .project ? projects.map(\.name) : tags.map(\.name)
+        var query = suffix
+        if cursor == nil && !names.contains(where: { $0.lowercased().hasPrefix(suffix.lowercased()) }) {
+            // Without a caret, stop at the longest prefix shared with an existing name.
+            // This permits spaces in names without swallowing the following prose.
+            let matched = names.filter { name in
+                guard suffix.lowercased().hasPrefix(name.lowercased()) else { return false }
+                let rest = suffix.dropFirst(name.count)
+                return rest.isEmpty || rest.first?.isWhitespace == true
+            }.max { $0.count < $1.count }
+            if let matched { query = String(suffix.prefix(matched.count)) }
+        }
+        return (tokenKind, marker..<text.index(start, offsetBy: query.count), query)
     }
 
     public var candidates: [CaptureCandidate] {
@@ -80,16 +101,18 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
             all = tags.filter { !selectedTagIds.contains($0.id) }
                 .map { CaptureCandidate(id: $0.id, name: $0.name, kind: .tag) }
         }
-        var matches = Array(all.filter { token.query.isEmpty || $0.name.localizedCaseInsensitiveContains(token.query) }.prefix(8))
+        var matches = Array(all.filter { $0.name.lowercased().hasPrefix(token.query.lowercased()) }.prefix(8))
         let name = token.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let exists = token.kind == .project ? projects.contains { $0.name == name } : tags.contains { $0.name == name }
-        if !name.isEmpty && !exists && kind != .activity {
+        let hasExistingPrefix = (token.kind == .project ? projects.map(\.name) : tags.map(\.name))
+            .contains { $0.lowercased().hasPrefix(name.lowercased()) }
+        if !name.isEmpty && !exists && !hasExistingPrefix && kind != .activity {
             matches.append(CaptureCandidate(id: "new:\(token.kind):\(name)", name: name, kind: token.kind, isNew: true))
         }
         return matches
     }
 
-    /// Selection is stored by ID; the query token becomes a metadata chip.
+    /// Selection is stored by ID; replace only the query and preserve surrounding prose.
     public func select(_ candidate: CaptureCandidate) {
         guard candidates.contains(candidate), let token else { return }
         do {
@@ -104,7 +127,10 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
         } catch {
             errorMessage = "프로젝트·태그를 선택하지 못했습니다. 다시 시도하세요."; return
         }
-        text.removeSubrange(token.range)
+        let replacement = candidate.name + (token.range.upperBound == text.endIndex ? " " : "")
+        let caret = NSRange(token.range, in: text).location + replacement.utf16.count
+        text.replaceSubrange(token.range, with: replacement)
+        selectionRange = NSRange(location: caret, length: 0)
         reloadCandidates()
     }
 
@@ -112,6 +138,9 @@ public struct CaptureCandidate: Identifiable, Equatable, Sendable {
     public func removeTag(_ id: String) { selectedTagIds.removeAll { $0 == id } }
 
     @discardableResult public func submit() -> Bool {
+        guard !requiresSecretEditor else {
+            errorMessage = "Secret은 보관함에서 기기 인증 후 입력하세요."; return false
+        }
         guard !isSubmitting else { return false }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorMessage = "저장할 내용을 입력하세요."; return false
