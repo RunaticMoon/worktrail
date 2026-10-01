@@ -52,7 +52,7 @@ swift run worklog --data-dir "$D" task add "Java 자동 포맷팅 도입" --proj
 swift run worklog --data-dir "$D" activity <taskId> "전체 코드 포맷 적용" --date 2026-10-01
 swift run worklog --data-dir "$D" task done <taskId> --date 2026-10-02
 swift run worklog --data-dir "$D" search 포맷
-swift run worklog --data-dir "$D" report submission 2026-10-05          # 제출용 주간보고
+swift run worklog --data-dir "$D" report submission 2026-10-05          # 제출용 주간보고(실적 09-28~10-04 · 계획 10-05~10-11)
 swift run worklog --data-dir "$D" report performance weekly 2026-09-30  # 상세 성과 리포트(별개)
 swift run worklog --data-dir "$D" schedule run --since 2026-09-28
 swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir "$D" backup list
@@ -125,6 +125,25 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 - 표(key/value) 입력, `A=B`·`A : B` 붙여넣기 분리, 저장 시 trim, JSON/문자열 원문 보존, 버전·휴지통.
 - 모든 복호화·수정은 `VaultSession`(기기 인증 후, 미사용 30분 자동 잠금)을 거친다.
 
+## 화면 (macOS, 미검증)
+
+`Sources/WorkLogApp`에 SwiftUI/AppKit 코드가 있다. Linux에서는 구문 분석만 했고 macOS에서 컴파일·실행하지 않았다.
+
+- 사이드바: 날짜(3열: 타임라인·Task·Memo), 업무, 검색, 리포트(제출용/상세 성과 탭 분리), 이번 주 계획, Secret, 설정, 백업
+- 빠른 입력 패널(`⌃⌥Space` 제안값): Return 줄바꿈 · ⌘Return 저장 · Esc 초안 보존 후 닫기, `@프로젝트`·`#태그` 자동완성, 저장 후 이전 앱으로 복귀
+- 검색(`⌃⌥F` 제안값): 원문 검색, 명시적으로 요청할 때만 AI 답변(Secret 제외)
+- 설정의 기본 입력 유형이 Secret이면 입력 단축키가 기기 인증 후 Secret 새 항목 화면을 연다
+
+## 알려진 제한
+
+- AI 초안 생성이 실패한 뒤 원본 기록이 바뀌지 않았으면 자동 작업이 AI를 다시 호출하지 않는다(결정적 초안 유지). 다시 시도하려면 리포트 화면에서 다시 생성한다.
+- 앱 시작 시 놓친 예약 리포트는 최근 92일까지만 만들고, AI는 최근 7일 작업에만 쓴다(decisions T19).
+- 검색에서 태그 필터를 쓰는 동안에는 AI 답변을 요청할 수 없다.
+- 결정적 초안(AI 미사용, CLI 포함)에는 템플릿 버전이 기록되지 않는다(decisions T21).
+- 체크리스트·프로젝트 연결은 과거 시점(knownAt) 필터가 적용되지 않는다(기록 시각 컬럼 없음).
+- 향후 Task 링크 자동 수집(LINK-T02)은 미구현이다. 링크는 URL만 보관하고 가져오지 않는다.
+- Secret 항목은 행별 `복사` 버튼으로 값을 복사한다(사양의 "key 클릭=복사" 대신 명시적 버튼).
+
 ## 미검증 항목
 
 실제로 실행하지 못한 것은 통과로 보지 않는다.
@@ -133,7 +152,7 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 - 전역 단축키 등록·충돌 처리(Carbon)
 - Keychain 키 저장(`KeychainVaultKeyStore`), Touch ID/암호 인증(`LocalDeviceAuthenticator`), `NSPasteboard` 조건부 삭제(`SystemPasteboard`)
 - 실제 Codex Enterprise 계정 로그인·스킬 조회·턴 실행, 회사 정책 오류 분류(가짜 app-server 프로세스로 프로토콜만 테스트), 승인 거절 응답의 `decision` 필드 값
-- Codex read-only sandbox에서의 로컬 파일 읽기 잔여 위험(출력 검사로 저장만 차단)
+- Codex read-only sandbox가 실제로 vault·백업 파일 읽기를 막는지(AI-T07). 앱은 입력에서 해당 경로를 빼고 출력에 흔적이 있으면 저장하지 않을 뿐이다
 - `scripts/build-macos-app.sh`, `.github/workflows/macos.yml`(아직 실행 안 함), 로그인 시 실행
 - 대용량 성능(5만 건 삽입·검색 시간) 측정
 - 체크리스트·프로젝트 연결의 과거 시점(knownAt) 필터: 스키마에 기록 시각 컬럼이 없어 미적용

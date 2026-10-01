@@ -1,13 +1,13 @@
 # 인수 테스트 대응표 — 자동 테스트 대조
 
 원본: `docs/mac_worklog_ai_handoff/04_IMPLEMENTATION_PLAN_AND_TESTS.md` (§3 흐름 A~E, §4~§8 인수 테스트 표)
-대조 대상 저장소: 이 worktree (브랜치 `wlog-45a3/ae-acceptance-map`)
-작성 기준 커밋: `d60125d` (`wlog-45a3/mvp`). 이후 갱신: AG(`c48954c`) 직접 검증 7건·AF(`2fa2b2c`) 스킬 테스트 반영 — 갱신 시점 전체 `swift test` 409개 통과(실패 0).
+대조 대상 브랜치: `wlog-45a3/mvp`
+작성 기준 커밋: `d60125d`. 이후 갱신: AG(`c48954c`) 직접 검증 7건·AF(`2fa2b2c`) 스킬 테스트 반영, macOS UI 코드 추가(AD~AJ·AP) 및 독립 검증(AO) 결과 반영. 최종 갱신 시점 수치는 아래 "최신 실행" 참고.
 
 ## 실행 환경과 명령
 
 - 환경: Linux, Swift 6.3 툴체인 / aarch64-unknown-linux-gnu. **Linux(aarch64)에서 WorkLogCore와 그 테스트만 실행했다. macOS 앱 타깃(`Sources/WorkLogApp`)은 컴파일·실행하지 않았다.**
-- `Sources/WorkLogApp/main.swift`는 현재 진입점 스텁(`// TODO: macOS SwiftUI 앱 진입점`)이며, 실제 SwiftUI/AppKit UI·전역 단축키 등록 코드는 아직 없다. 따라서 UI·전역 단축키·창 전환·실제 Keychain/Touch ID/NSPasteboard 어댑터가 필요한 항목은 이 환경에서 검증할 수 없다.
+- `Sources/WorkLogApp`에는 SwiftUI/AppKit UI(`WorkLogApp.swift`, `AppController.swift`, `AppRootView.swift`, `CapturePanel.swift`, `GlobalHotkeys.swift`, 화면별 `*Screen.swift`)가 있다. 그러나 이 코드는 `#if os(macOS)` 안에 있어 Linux에서는 `swiftc -frontend -parse -target arm64-apple-macosx14.0`로 **구문 분석만** 했고, 타입 검사·컴파일·실행은 하지 않았다. 따라서 UI·전역 단축키·창 전환·실제 Keychain/Touch ID/NSPasteboard 어댑터가 필요한 항목은 이 환경에서 검증하지 못했다(`.github/workflows/macos.yml`이 macOS 컴파일 검증 수단이며 아직 실행하지 않음).
 - 실행 명령과 실제 결과:
 
 ```text
@@ -19,7 +19,7 @@ $ swift test 2>&1 | tail -5
 ✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
 ```
 
-- 즉 XCTest 371개 전부 통과(실패 0), Swift Testing 스위트는 0개다. 아래 표의 "자동 테스트 통과"는 이 실행에서 해당 함수가 통과했고 기대 결과를 실제로 assert함을 확인한 것이다.
+- 위는 최초 작성 시 실행 결과다. 즉 XCTest 371개 전부 통과(실패 0), Swift Testing 스위트는 0개였다. 최신 실행 결과는 문서 끝 "최신 실행" 절에 있다. 아래 표의 "자동 테스트 통과"는 이 실행에서 해당 함수가 통과했고 기대 결과를 실제로 assert함을 확인한 것이다.
 
 ## 상태 정의
 
@@ -39,8 +39,8 @@ $ swift test 2>&1 | tail -5
 
 | 상태 | 개수 |
 |---|---|
-| 자동 테스트 통과 | 116 |
-| 부분 | 5 |
+| 자동 테스트 통과 | 115 |
+| 부분 | 6 |
 | 미검증(macOS) | 4 |
 | 미검증(실계정) | 0 (해당 ID 없음 — 실계정 잔여 항목은 §잔여 참고) |
 | 미구현 | 1 |
@@ -52,14 +52,14 @@ $ swift test 2>&1 | tail -5
 
 | ID | 요구 | 시나리오(짧게) | 상태 | 근거 테스트(파일:함수) | 비고 |
 |---|---|---|---|---|---|
-| CAP-T01 | CAP-01 | 입력/검색 핫키 각각 실행 → 서로 다른 창/모드 | 미검증(macOS) | (없음) | 전역 단축키·창 분리 UI 코드 없음. 설정에 `captureHotkey`/`searchHotkey` 문자열과 검증만 존재(`Support/SettingsStore.swift`, `Domain/Models.swift`). |
-| CAP-T02 | CAP-01 | 새 설치에서 다시 입력창 열기 → 기본 Memo | 부분 | SettingsStoreTests.swift:testEmptyObjectGivesAllDefaults | 기본값 `defaultCaptureKind = .memo`와 설정 디코딩은 검증. 입력창이 Memo로 열리는 UI 동작은 미검증. |
-| CAP-T03 | CAP-01 | 기본 유형을 Task로 변경 후 재시작 → 유지 | 부분 | SettingsStoreTests.swift:testSaveThenLoadRoundTripAndPermissions | 설정 영속화는 검증. `defaultCaptureKind`를 Task로 바꾼 뒤 재시작·창 열림은 UI 미검증. |
-| CAP-T04 | CAP-02 | Memo에서 Enter/⌘Enter/Esc 구분 | 미검증(macOS) | (없음) | 키 입력 처리 UI 코드 없음. |
+| CAP-T01 | CAP-01 | 입력/검색 핫키 각각 실행 → 서로 다른 창/모드 | 미검증(macOS) | (없음) | UI 코드 있음: `WorkLogApp/GlobalHotkeys.swift`(Carbon 등록), `AppController.showCapture/showSearch`(입력 패널·검색 화면 분리). macOS에서 컴파일·실행하지 않아 미검증. 설정 검증은 SettingsStoreTests. |
+| CAP-T02 | CAP-01 | 새 설치에서 다시 입력창 열기 → 기본 Memo | 부분 | SettingsStoreTests.swift:testEmptyObjectGivesAllDefaults | 기본값 `defaultCaptureKind = .memo`와 설정 디코딩은 검증. 입력 모델 기본 유형 적용은 `CaptureModel.resetDefaults`로 구현. 실제 패널이 Memo로 열리는 macOS 동작은 미검증. |
+| CAP-T03 | CAP-01 | 기본 유형을 Task로 변경 후 재시작 → 유지 | 부분 | SettingsStoreTests.swift:testSaveThenLoadRoundTripAndPermissions / SecretsSettingsBackupPresentationTests.swift:testDefaultCaptureKindSavesAndReloadsForAllSupportedKinds | 설정 화면 모델에서 Memo/Task/Secret 저장·재로드는 검증. 실제 앱 재시작 후 패널 열림은 macOS 미검증. |
+| CAP-T04 | CAP-02 | Memo에서 Enter/⌘Enter/Esc 구분 | 미검증(macOS) | (없음) | UI 코드 있음: `CapturePanel.swift`의 `CaptureNSTextView.keyDown`(Return 줄바꿈·⌘Return 저장, 한글 IME 조합 중 가드)·`KeyboardPanel.cancelOperation`(Esc 초안 보존). macOS에서 실제 키 입력은 미검증. |
 | CAP-T05 | MEM-01 | 제목 없이 여러 줄 Memo 저장 | 자동 테스트 통과 | TaskServiceTests.swift:testCaptureMemoStoresMultilineBodyAndLinksWithoutFetch / WorkRepositoryTests.swift:testMemoRoundTripPreservesBodyPreviewAndLinks | 전체 원문·첫 줄 preview·업무일 보존 assert. |
 | CAP-T06 | CAP-03 | 화요일에 월요일 업무 기록 | 자동 테스트 통과 | TaskServiceTests.swift:testCaptureMemoLateEntryBelongsToWorkDate / WorkRepositoryTests.swift:testLateEntryBelongsToWorkDateAndKeepsRecordedAt / DayBoxTests.swift:testLateActivityBelongsToItsWorkDateNotRecordDay | workDate 귀속과 recordedAt 보존, 타임라인 귀속 assert. |
 | CAP-T07 | CAP-02 | AI·네트워크 끄고 저장 | 자동 테스트 통과 | AppEnvironmentTests.swift:testNilProviderDisablesAIButMemoWorks | AI provider 없이 Memo 저장·검색 성공. "지연" 시나리오는 미시뮬레이션. |
-| CAP-T08 | CAP-01 | 다른 앱 사용 중 창 열기→저장→복귀 | 미검증(macOS) | (없음) | 창/포커스 전환 UI 코드 없음. |
+| CAP-T08 | CAP-01 | 다른 앱 사용 중 창 열기→저장→복귀 | 미검증(macOS) | (없음) | UI 코드 있음: `CapturePanelController`(비활성 앱 위 NSPanel, 저장·닫기 후 이전 앱 복귀). macOS에서 포커스 전환은 미검증. |
 | CAP-T09 | CAP-01 | 이미 사용 중인 단축키 설정 | 부분 | SettingsStoreTests.swift:testValidationRejectsInvalidValuesWithoutTouchingFile | 캡처=검색 단축키 동일 시 validation만 검증. OS가 점유한 단축키 등록 충돌·기존 동작 보존은 UI 미검증. |
 | CAP-T10 | CAP-03 | 같은 날 늦은 상태 기록 순서 모순 | 자동 테스트 통과 | StateReplayTests.swift:testImpossibleTransitionIsReportedNotThrown / TaskServiceTests.swift:testPausedAfterCompletionIsRejectedWithoutSaving / TaskServiceTests.swift:testLateRecordedStartBeforeLaterCompletion | 불가능 전이는 violation으로 보고(날조 없음), 늦은 시작은 현재 완료를 뒤집지 않음. |
 
@@ -148,7 +148,7 @@ $ swift test 2>&1 | tail -5
 | SEC-T14 | SEC-04 | trim 후 변경 없는 저장 | 자동 테스트 통과 | SecretNormalizerTests.swift:testWhitespaceOnlyChangeIsNotChanged / SecretVaultTests.swift:testWhitespaceOnlySaveIsUnchanged | 불필요 revision 없음. |
 | SEC-T15 | SEC-02 | 항목 key 이름 변경 | 자동 테스트 통과 | SecretNormalizerTests.swift:testRenamingKeyKeepsRowId / SecretVaultTests.swift:testKeyRenameKeepsRowIdAndHistory | 같은 row ID, 이전 값 이력. |
 | SEC-T16 | SEC-05 | 잠금 상태에서 제목 검색 | 자동 테스트 통과 | VaultSessionTests.swift:testInitiallyLockedAndTitleSearchWorksWhileLocked | 제목 검색 가능, value 접근은 인증 필요. |
-| SEC-T17 | SEC-05 | 검색 결과 key 선택 / 편집 셀 선택 | 미검증(macOS) | (Core: VaultSession.searchTitles/copyValue/currentRows) | "key 선택→복사 / 셀 선택→편집" UI 분기 코드 없음. |
+| SEC-T17 | SEC-05 | 검색 결과 key 선택 / 편집 셀 선택 | 미검증(macOS) | (Core: VaultSession.searchTitles/copyValue/currentRows) | UI 코드 있음: `SecretsScreen.swift`(제목 검색→항목 선택, 행별 `복사` 버튼으로 값 복사, key·value 셀 직접 편집, Tab 셀 이동). 사양의 "key 클릭=복사" 대신 명시적 복사 버튼을 둔 형태이며, macOS에서 실행·NSPasteboard 미검증. |
 | SEC-T18 | SEC-05 | 허용 시간 내 연속 복사 | 자동 테스트 통과 | VaultSessionTests.swift:testUnlockSucceedsThenNoReauthWithinWindow | 재인증 없음. |
 | SEC-T19 | SEC-05 | 화면 잠금 또는 앱 종료 | 자동 테스트 통과 | VaultSessionTests.swift:testExplicitLockReasonsAndDuplicateLockCallbackOnce / AppEnvironmentTests.swift:testLockSecretsLocksVaultSession | `.screenLocked`/`.appQuit` 잠금 사유·중복 콜백 1회. 실제 macOS 이벤트 연결은 미검증. |
 | SEC-T20 | SEC-05 | 복사 후 제한 시간 동안 clipboard 변경 없음 | 자동 테스트 통과 | VaultSessionTests.swift:testClipboardClearedAfterDelayWhenUnchanged | ClipboardGuard 로직 검증. 실제 NSPasteboard 어댑터는 macOS 미검증. |
@@ -181,7 +181,7 @@ $ swift test 2>&1 | tail -5
 | AI-T04 | AI-01 | 기존 스킬 조회/선택 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testListAvailableSkillsParsesAndDoesNotWrite | 발견 스킬만 사용, 쓰기 메서드 미호출. |
 | AI-T05 | AI-01 | 스킬 파일 변경/삭제 | 자동 테스트 통과 | SkillBindingTests.swift:testRunnerUsesResolvedSkillAndReusesUntilHashChanges / testMissingPathResolvesWithoutCrash / testReportVersionRecordsResolvedSkillOnAISuccess | 스킬 파일 해시가 바뀌면 새 실행, 같으면 재사용. 파일이 없어도 크래시 없이 해시 없는 참조. 리포트 버전에 `이름@해시` 기록(이전 버전 불변). 실제 Codex 스킬 실행은 미검증(실계정). |
 | AI-T06 | AI-01 | 프로토콜 불일치·끊긴 JSON·취소 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testTransportCloseFailsRunAndIgnoresMalformedLine / testCancelSendsInterruptAndRunIsCancelled / testErrorClassifierKeywords / JSONRPCConnectionTests.swift:testMalformedLineIsCountedAndConnectionContinues | 안전 오류·취소, DB 훼손 없음. |
-| AI-T07 | AI-01 | 샌드박스에서 가짜 vault 경로 읽기 시도 | 자동 테스트 통과 | AppEnvironmentTests.swift:testAIPayloadGuardBlocksVaultPath / AIJobRunnerTests.swift:testPayloadGuardBlocksBeforeCreatingRowOrCallingProvider / testOutputContainingBlockedPathIsNotStored | vault 경로 차단. 실제 codex read-only 샌드박스는 실계정 미검증. |
+| AI-T07 | AI-01 | 샌드박스에서 가짜 vault 경로 읽기 시도 | 부분 | AppEnvironmentTests.swift:testAIPayloadGuardBlocksVaultPath / AIJobRunnerTests.swift:testPayloadGuardBlocksBeforeCreatingRowOrCallingProvider / testOutputContainingBlockedPathIsNotStored | 앱 쪽 방어만 검증: 입력 payload의 vault 경로 차단, 출력에 vault 경로가 있으면 저장 안 함. **실제 Codex 샌드박스가 파일 읽기를 막는지는 실행하지 않아 미검증**(실계정·macOS 필요). 독립 검증 AO 지적으로 `자동 테스트 통과`→`부분` 정정. |
 | AI-T08 | AI-01 | 광범위한 권한을 요구하는 스킬 | 자동 테스트 통과 | CodexAppServerProviderTests.swift:testRunDeclinesCommandExecutionApproval / testRunAccumulatesDeltasAndStripsCodeFence | 승인 요청 decline, sandbox read-only·approvalPolicy never. |
 | AI-T09 | AI-01 | 근거 문서 인젝션 문구 | 자동 테스트 통과 | AcceptanceGapTests.swift:testAI_T09_InjectionIsTreatedAsDataAndSensitiveOutputBlocked / AIJobRunnerTests.swift:testOutputWithCredentialMarkerIsNotStored | 주입 문장은 payload 자료에만 있고 지침은 템플릿 그대로. 인증 정보 흔적 출력은 저장 안 됨(failed/output_invalid), 리포트는 결정적 초안 대체. 실제 모델의 인젝션 저항은 미검증(실계정). |
 | SCH-T01 | PERF-05 | 자정에 앱 실행 중 | 자동 테스트 통과 | SchedulerTests.swift:testDueDailyCloseAtNextMidnight | 전날 Daily job 1개. |
@@ -203,12 +203,12 @@ $ swift test 2>&1 | tail -5
 
 ## 3. 사용자 여정 A~E 대조
 
-Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단계를 구분한다. "Core ✓"는 이번 `swift test`에서 연결 테스트가 통과한 것, "UI 필요"는 macOS 앱 타깃이 스텁이라 Linux에서 검증 불가인 것, "수동/실계정"은 실제 계정·기기·정책이 필요한 것이다.
+Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단계를 구분한다. "Core ✓"는 이번 `swift test`에서 연결 테스트가 통과한 것, "UI 필요"는 macOS 앱 타깃(UI 코드 있음)을 Linux에서 컴파일·실행할 수 없어 검증하지 못한 것, "수동/실계정"은 실제 계정·기기·정책이 필요한 것이다.
 
 ### 흐름 A — 업무 중 기록
 | 단계 | 내용 | 상태 | 근거/사유 |
 |---|---|---|---|
-| A1 | 다른 앱에서 입력 핫키 | UI 필요(미검증 macOS) | 전역 단축키 등록 코드 없음(CAP-T01). |
+| A1 | 다른 앱에서 입력 핫키 | UI 필요(미검증 macOS) | 전역 단축키 UI 코드는 있으나 macOS 미실행(CAP-T01). |
 | A2 | Memo 본문 작성·저장 | Core ✓ | TaskServiceTests:testCaptureMemoStoresMultilineBodyAndLinksWithoutFetch (CAP-T05). |
 | A3 | 새 진행 Task 생성 | Core ✓ | TaskServiceTests:testCreateTaskNoteBecomesActivity / testAddActivityAppearsOnceOnItsDateAndDoesNotChangeStatus (TASK-T02). |
 | A4 | 기존 Task에 확인사항·링크 | Core ✓ | TaskServiceTests:testActivityBodyAndExplicitLinksAreStored. |
@@ -261,20 +261,14 @@ Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단�
 
 ## 잔여(미검증·미구현) 요약
 
-`부분` 12건 — 빠진 조건:
-- CAP-T02, CAP-T03 — 입력창 열림/defaultCaptureKind 변경·재시작 UI 미검증.
+`부분` 6건 — 빠진 조건:
+- CAP-T02, CAP-T03 — 실제 패널 열림·앱 재시작 후 기본 유형 유지는 macOS 미검증(설정 저장·재로드는 검증).
 - CAP-T09 — OS 점유 단축키 충돌·기존 동작 보존 UI 미검증.
-- REP-T09 — 컴포저가 수치·기여율을 임의 생성하지 않음을 직접 assert하는 테스트 없음.
 - QUIZ-T02 — 보고 클립보드 복사 UI/NSPasteboard 미검증.
-- MEM-T03 — URL 보유 Memo 승인 시 URL 수집 작업 미생성 직접 시나리오 없음.
-- SEC-T24 — 제목 인덱스 제거·"과거 백업 별개" 안내 문구 미검증.
-- SEC-T26 — 일반 검색 색인에서 Secret 값 배제를 직접 assert하는 테스트 없음.
-- SEARCH-T05 — 검색만으로 AI 미호출을 직접 assert하는 테스트 없음.
-- SEARCH-T08 — Secret 전용 검색 모드의 "AI 실행 불가·query 미전송" 직접 검증 없음.
-- AI-T05 — 실제 스킬 파일 변경 감지·출처 버전 보존 직접 테스트 없음.
-- AI-T09 — 프롬프트 인젝션을 자료로만 취급하는 직접 테스트 없음.
+- SEC-T24 — "과거 백업 별개" 안내 문구 macOS UI 미검증.
+- AI-T07 — 실제 Codex 샌드박스의 파일 읽기 격리 미검증(앱 쪽 입력·출력 차단만 검증).
 
-`미검증(macOS)` 4건 — CAP-T01, CAP-T04, CAP-T08, SEC-T17. 모두 전역 단축키·입력/창 UI·복사/편집 UI 선택 동작이며, `Sources/WorkLogApp/main.swift`가 스텁이라 실행 코드가 없다.
+`미검증(macOS)` 4건 — CAP-T01, CAP-T04, CAP-T08, SEC-T17. 해당 UI 코드는 `Sources/WorkLogApp`에 있으나 Linux에서는 구문 분석만 했고 macOS에서 컴파일·실행하지 않았다.
 
 `미구현` 1건 — LINK-T02(후속 L1 범위, PR/Jira 한정 링크 수집).
 
@@ -283,3 +277,18 @@ Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단�
 - 실제 macOS Keychain/Touch ID/Secure Enclave 대체물(현재 `InMemoryVaultKeyStore`·`MockDeviceAuthenticator`): SEC-T17~T21, SEC-T28.
 - 실제 NSPasteboard 어댑터: SEC-T20, SEC-T21, QUIZ-T02.
 - 실제 백업 파일에서 Codex 토큰 부재 확인: BACK-T04.
+
+---
+
+## 최신 실행 (통합 브랜치 `wlog-45a3/mvp`, 커밋 `e229680`)
+
+```text
+$ swift build --build-tests      # Build complete, warning 0
+$ swift test                     # 2회 실행
+	 Executed 466 tests, with 0 failures (0 unexpected)
+$ swiftc -frontend -parse -target arm64-apple-macosx14.0 Sources/WorkLogApp/*.swift   # exit 0 (구문 분석만)
+```
+
+- 독립 검증(AO, 코드 변경 없이 CLI·백업·스케줄 실행 확인)에서 찾은 결함은 모두 수정 후 회귀 테스트로 고정했다: UTF-8 분할 수신 유실(`JSONRPCConnectionTests.testStdoutSplitMultibyteCharacterStillEmitsLine`), DB 파일 0644(`SmokeTests.testNewDatabaseFilesAreCreatedWith0600`), CLI 보고 기간 표시(`CLITests.testReportHeadersUseInclusivePeriod`), 손상 백업 안내(`CLITests.testBackupVerifyDistinguishesCorruptManifest`).
+- 워커 한 명이 전체 스위트 1회에서 식별되지 않은 실패 1건을 관측했으나 이후 반복 실행(워커 9회, 지휘자 2회)에서 재현되지 않았다. 원인 미확인.
+- macOS 앱 컴파일·실행, Keychain·Touch ID·전역 단축키·NSPasteboard, 실제 Codex 계정·sandbox는 여전히 미검증이다.
