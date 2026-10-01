@@ -235,6 +235,35 @@ final class ReportStoreTests: XCTestCase {
         XCTAssertEqual(original.content, "확정 내용")
     }
 
+    // MARK: 8b — 확정본 편집으로 만든 새 버전은 근거(report_evidence)를 잇는다
+
+    func testEditConfirmedCopiesEvidence() throws {
+        let (store, repo) = try makeStore()
+        let report = try ensureSubmissionReport()
+        let facts = makeFacts(sources: [makeSource(id: "activity:a1", revision: 3),
+                                        makeSource(id: "activity:a2", revision: 5)],
+                              metrics: ReportMetrics(activityCount: 2))
+        let draft = makeDraft(evidence: [
+            DraftEvidence(itemId: "i1", taskId: "t1", sourceId: "activity:a1"),
+            DraftEvidence(itemId: "i2", taskId: "t1", sourceId: "activity:a2"),
+        ])
+
+        let first = try store.saveGenerated(reportId: report.id, facts: facts, draft: draft, mode: .automatic)
+        guard case .created(let v1) = first else { return XCTFail() }
+        _ = try store.confirm(versionId: v1.id)
+
+        let edited = try store.edit(versionId: v1.id, content: "확정 후 편집")
+        XCTAssertNotEqual(edited.id, v1.id)
+
+        let copied = try repo.reportEvidence(versionId: edited.id)
+        XCTAssertEqual(copied.count, 2, "확정본 편집으로 만든 새 버전도 근거를 잇는다")
+        XCTAssertEqual(copied.map(\.sourceId), ["activity:a1", "activity:a2"])
+        XCTAssertEqual(copied.map(\.sourceRevision), [3, 5])
+
+        let original = try repo.reportEvidence(versionId: v1.id)
+        XCTAssertEqual(original.count, 2, "원 확정 버전 근거도 그대로 남는다")
+    }
+
     // MARK: 9 — 두 번째 확정 → latestConfirmed, 이전 확정본 유지
 
     func testSecondConfirmKeepsPreviousConfirmed() throws {

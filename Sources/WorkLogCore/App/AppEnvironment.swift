@@ -244,7 +244,7 @@ public final class AppEnvironment {
     @discardableResult
     public func runScheduledReports(since: WorkDate, maxAttempts: Int = 3) async throws -> [ScheduledJob] {
         let reports = self.reports
-        let useAI = aiRunner != nil
+        let useAI = aiRunner != nil && settings.aiEnabled
         return try await makeScheduler(since: since).runDue(maxAttempts: maxAttempts) { job in
             try await Self.handleScheduled(job, reports: reports, useAI: useAI)
         }

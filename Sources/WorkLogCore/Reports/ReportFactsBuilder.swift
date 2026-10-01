@@ -125,10 +125,12 @@ public final class ReportFactsBuilder: @unchecked Sendable {
 
     // MARK: - digest
 
-    /// generatedAt을 제외한 내용의 SHA256 hex (StableJSON). 원본 변화 감지·스냅샷 digest용.
+    /// generatedAt·knownAt을 제외한 내용의 SHA256 hex (StableJSON). 원본 변화 감지·스냅샷 digest용.
+    /// knownAt은 필터링 기준일 뿐 내용이 아니므로, 필터 결과(포함된 원본)가 같으면 digest가 같아야 한다.
     public static func digest(_ facts: ReportFacts) throws -> String {
         var normalized = facts
         normalized.generatedAt = Date(timeIntervalSince1970: 0)
+        normalized.knownAt = Date(timeIntervalSince1970: 0)
         let data = try StableJSON.encode(normalized)
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

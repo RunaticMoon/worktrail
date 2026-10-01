@@ -207,6 +207,39 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertTrue(again.isEmpty)
     }
 
+    // MARK: - 4c. 예약 실행은 런타임 aiEnabled 설정을 따른다
+
+    func testScheduledReportsHonorRuntimeAIEnabledSetting() async throws {
+        let paths = try makePaths()
+        let now = ISO8601DateFormatter().date(from: "2026-10-05T01:00:00Z")!
+        let provider = MockAIProvider()
+        let env = try AppEnvironment.open(makeOptions(paths: paths, aiProvider: provider,
+                                                      clock: FixedClock(now)))
+        _ = env.onLaunch()
+        XCTAssertNotNil(env.aiRunner, "open 시점에는 AI가 켜져 있다")
+        XCTAssertTrue(env.settings.aiEnabled)
+
+        let task = try env.tasks.createTask(title: "포맷터 도입",
+                                            workDate: WorkDate(year: 2026, month: 9, day: 30))
+        _ = try env.tasks.addActivity(taskId: task.id, body: "전체 코드 포맷 적용",
+                                      workDate: WorkDate(year: 2026, month: 10, day: 1))
+
+        // 재시작 없이 런타임에 AI를 끈다. aiRunner는 남아 있지만 예약 리포트는 AI를 부르면 안 된다.
+        var disabled = env.settings
+        disabled.aiEnabled = false
+        try env.updateSettings(disabled)
+
+        let processed = try await env.runScheduledReports(since: WorkDate(year: 2026, month: 9, day: 28))
+        XCTAssertFalse(processed.isEmpty)
+        XCTAssertEqual(provider.runCount, 0, "런타임에 AI를 끄면 예약 리포트도 AI를 부르지 않는다")
+
+        // 결정적 초안으로 생성되었는지 확인.
+        let submission = try XCTUnwrap(env.repo.report(family: .submission, periodType: .weekly,
+                                                       periodKey: "2026-10-05"))
+        let version = try XCTUnwrap(env.repo.reportVersions(reportId: submission.id).last)
+        XCTAssertEqual(version.generator, "deterministic")
+    }
+
     // MARK: - 5. updateSettings 반영·지속·검증
 
     func testUpdateSettingsAppliesAndPersists() throws {
