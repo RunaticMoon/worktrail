@@ -40,11 +40,14 @@ public struct AIJobResult: Sendable {
     public var output: AIJobOutput?
     /// 같은 key의 성공 결과를 재사용했는지.
     public var reusedExisting: Bool
+    /// 실행·재사용 경로 모두 실제로 사용된 스킬(요청에 명시되었거나 바인딩에서 해석된 값).
+    public var skill: SkillRef?
 
-    public init(job: AIJob, output: AIJobOutput?, reusedExisting: Bool) {
+    public init(job: AIJob, output: AIJobOutput?, reusedExisting: Bool, skill: SkillRef? = nil) {
         self.job = job
         self.output = output
         self.reusedExisting = reusedExisting
+        self.skill = skill
     }
 }
 
@@ -116,18 +119,22 @@ public final class AIJobRunner: @unchecked Sendable {
     public let payloadGuard: AIPayloadGuard
     public let outputGuard: AIOutputGuard
     public let maxAttempts: Int
+    /// 설정의 작업별 스킬 바인딩 해석기. 요청에 skill이 없을 때만 사용한다.
+    public let skillResolver: SkillBindingResolver?
 
     private let executionLock = AsyncFIFOLock()
 
     public init(repo: WorkRepository, provider: AIProvider, stagingRoot: URL,
                 guard payloadGuard: AIPayloadGuard = AIPayloadGuard(), maxAttempts: Int = 3,
-                outputGuard: AIOutputGuard? = nil) {
+                outputGuard: AIOutputGuard? = nil,
+                skillResolver: SkillBindingResolver? = nil) {
         self.repo = repo
         self.provider = provider
         self.stagingRoot = stagingRoot
         self.payloadGuard = payloadGuard
         self.outputGuard = outputGuard ?? AIOutputGuard(blockedSubstrings: payloadGuard.blockedSubstrings)
         self.maxAttempts = maxAttempts
+        self.skillResolver = skillResolver
     }
 
     // MARK: - Key·Digest
@@ -155,6 +162,13 @@ public final class AIJobRunner: @unchecked Sendable {
     /// 1회 실행. provider 오류는 throw하지 않고 상태로 저장해 결과로 돌려준다.
     /// 저장소 오류만 throw한다.
     public func submit(_ request: AIJobRequest) async throws -> AIJobResult {
+        // 0) 명시 스킬이 없으면 설정 바인딩에서 해석한다. payloadGuard 검사·key 계산보다 먼저.
+        //    스킬 파일 해시가 바뀌면 새 key로 재생성되고, 같은 스킬이면 기존 결과를 재사용한다.
+        var request = request
+        if request.skill == nil, let resolved = skillResolver?.skill(for: request.jobType) {
+            request.skill = resolved
+        }
+
         // 1) 호출 전 차단. 차단 시 ai_job 행도 만들지 않고 provider도 부르지 않는다.
         try payloadGuard.check(request)
 
@@ -166,7 +180,7 @@ public final class AIJobRunner: @unchecked Sendable {
             switch existing.status {
             case .succeeded:
                 return AIJobResult(job: existing, output: Self.decodeOutput(existing.resultJSON),
-                                   reusedExisting: true)
+                                   reusedExisting: true, skill: request.skill)
             case .running:
                 throw WorkLogError.conflict("같은 AI 작업이 이미 실행 중입니다.")
             default:
@@ -184,7 +198,7 @@ public final class AIJobRunner: @unchecked Sendable {
             switch existing.status {
             case .succeeded:
                 return AIJobResult(job: existing, output: Self.decodeOutput(existing.resultJSON),
-                                   reusedExisting: true)
+                                   reusedExisting: true, skill: request.skill)
             case .running:
                 throw WorkLogError.conflict("같은 AI 작업이 이미 실행 중입니다.")
             case .failed, .blockedAuth, .blockedPolicy, .cancelled, .queued:
@@ -204,7 +218,7 @@ public final class AIJobRunner: @unchecked Sendable {
 
         // 4) 재시도 한도 도달 시 provider를 부르지 않고 현재 작업을 돌려준다.
         if job.attempts >= maxAttempts {
-            return AIJobResult(job: job, output: nil, reusedExisting: true)
+            return AIJobResult(job: job, output: nil, reusedExisting: true, skill: request.skill)
         }
 
         var running = job
@@ -228,7 +242,7 @@ public final class AIJobRunner: @unchecked Sendable {
                 running.updatedAt = repo.clock.now()
                 try repo.updateAIJob(running)
                 Self.cleanupStaging(stagingRoot: stagingRoot, jobId: running.id)
-                return AIJobResult(job: running, output: nil, reusedExisting: false)
+                return AIJobResult(job: running, output: nil, reusedExisting: false, skill: request.skill)
             }
             running.status = .succeeded
             running.resultJSON = try StableJSON.string(output)
@@ -236,7 +250,7 @@ public final class AIJobRunner: @unchecked Sendable {
             running.updatedAt = repo.clock.now()
             try repo.updateAIJob(running)   // 8)
             Self.cleanupStaging(stagingRoot: stagingRoot, jobId: running.id)   // 9)
-            return AIJobResult(job: running, output: output, reusedExisting: false)
+            return AIJobResult(job: running, output: output, reusedExisting: false, skill: request.skill)
         } catch {
             // provider 오류는 원문을 저장하지 않고 분류만 남긴다.
             running.status = Self.status(for: error)
@@ -245,7 +259,7 @@ public final class AIJobRunner: @unchecked Sendable {
             running.updatedAt = repo.clock.now()
             try repo.updateAIJob(running)
             Self.cleanupStaging(stagingRoot: stagingRoot, jobId: running.id)
-            return AIJobResult(job: running, output: nil, reusedExisting: false)
+            return AIJobResult(job: running, output: nil, reusedExisting: false, skill: request.skill)
         }
     }
 
