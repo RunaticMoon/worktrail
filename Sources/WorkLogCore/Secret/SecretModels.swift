@@ -61,3 +61,13 @@ public enum SecretValidationIssue: Hashable, Sendable {
     /// 존재하지 않는 행 ID로 수정 요청
     case unknownRowId(String)
 }
+
+extension SecretValidationIssue: CustomStringConvertible {
+    /// key·value는 암호화 payload의 민감 정보이므로 문자열 표현에 넣지 않는다.
+    public var description: String {
+        switch self {
+        case .duplicateKey: return "duplicateKey"
+        case .unknownRowId(let rowId): return "unknownRowId(\(rowId))"
+        }
+    }
+}

@@ -73,12 +73,12 @@ public final class SecretVault: @unchecked Sendable {
 
     // MARK: - 생성 · 저장
 
-    public func create(title: String?, groupName: String?, rows: [SecretRowInput]) throws -> SecretMetadata {
+    func create(title: String?, groupName: String?, rows: [SecretRowInput]) throws -> SecretMetadata {
         let key = try requireKey()
 
         let normalized = SecretNormalizer.apply(
             existing: [], changes: SecretChangeSet(upserts: rows), ids: ids)
-        try throwIfIssues(normalized.issues)
+        try throwIfIssues(normalized.issues, rows: normalized.rows)
 
         let now = clock.now()
         let resolvedTitle = resolveTitle(title, now: now)
@@ -108,7 +108,7 @@ public final class SecretVault: @unchecked Sendable {
         return meta
     }
 
-    public func save(secretId: String, changes: SecretChangeSet) throws -> SecretSaveOutcome {
+    func save(secretId: String, changes: SecretChangeSet) throws -> SecretSaveOutcome {
         let key = try requireKey()
         guard let meta = try metadata(id: secretId), meta.deletedAt == nil else {
             throw WorkLogError.notFound("Secret \(secretId)")
@@ -116,7 +116,7 @@ public final class SecretVault: @unchecked Sendable {
         let current = try currentRows(secretId: secretId)
 
         let normalized = SecretNormalizer.apply(existing: current, changes: changes, ids: ids)
-        try throwIfIssues(normalized.issues)
+        try throwIfIssues(normalized.issues, rows: normalized.rows)
         guard normalized.changed else { return .unchanged }
 
         let version = meta.latestVersion + 1
@@ -139,7 +139,7 @@ public final class SecretVault: @unchecked Sendable {
         return .saved(version: version)
     }
 
-    public func rename(secretId: String, title: String, groupName: String?) throws {
+    func rename(secretId: String, title: String, groupName: String?) throws {
         guard let meta = try metadata(id: secretId), meta.deletedAt == nil else {
             throw WorkLogError.notFound("Secret \(secretId)")
         }
@@ -168,14 +168,14 @@ public final class SecretVault: @unchecked Sendable {
             """, [id]).map { try metadataRow($0) }
     }
 
-    public func currentRows(secretId: String) throws -> [SecretRow] {
+    func currentRows(secretId: String) throws -> [SecretRow] {
         guard let meta = try metadata(id: secretId), let revisionId = meta.latestRevisionId else {
             return []
         }
         return try rows(secretId: secretId, revisionId: revisionId)
     }
 
-    public func revisions(secretId: String) throws -> [SecretRevisionInfo] {
+    func revisions(secretId: String) throws -> [SecretRevisionInfo] {
         try db.query("""
             SELECT id, version, created_at FROM secret_revision
             WHERE secret_id = ? ORDER BY version ASC
@@ -186,7 +186,7 @@ public final class SecretVault: @unchecked Sendable {
         }
     }
 
-    public func rows(secretId: String, revisionId: String) throws -> [SecretRow] {
+    func rows(secretId: String, revisionId: String) throws -> [SecretRow] {
         let key = try requireKey()
         guard let row = try db.queryOne("""
             SELECT version, encrypted_payload FROM secret_revision
@@ -204,7 +204,7 @@ public final class SecretVault: @unchecked Sendable {
     }
 
     /// 이전 revision 내용을 새 최신 revision으로 추가한다(과거 이력 삭제 없음).
-    public func restoreRevision(secretId: String, revisionId: String) throws -> SecretSaveOutcome {
+    func restoreRevision(secretId: String, revisionId: String) throws -> SecretSaveOutcome {
         let key = try requireKey()
         guard let meta = try metadata(id: secretId), meta.deletedAt == nil else {
             throw WorkLogError.notFound("Secret \(secretId)")
@@ -259,7 +259,7 @@ public final class SecretVault: @unchecked Sendable {
 
     // MARK: - 휴지통
 
-    public func moveToTrash(secretId: String) throws {
+    func moveToTrash(secretId: String) throws {
         guard try metadata(id: secretId) != nil else {
             throw WorkLogError.notFound("Secret \(secretId)")
         }
@@ -267,14 +267,14 @@ public final class SecretVault: @unchecked Sendable {
                    [clock.now(), secretId])
     }
 
-    public func restoreFromTrash(secretId: String) throws {
+    func restoreFromTrash(secretId: String) throws {
         guard try metadata(id: secretId) != nil else {
             throw WorkLogError.notFound("Secret \(secretId)")
         }
         try db.run("UPDATE secret_item SET deleted_at = NULL WHERE id = ?", [secretId])
     }
 
-    public func trash() throws -> [SecretMetadata] {
+    func trash() throws -> [SecretMetadata] {
         try db.query("""
             SELECT i.id, i.title, i.group_id, i.latest_revision_id, i.created_at, i.updated_at,
                    i.deleted_at,
@@ -289,7 +289,7 @@ public final class SecretVault: @unchecked Sendable {
     }
 
     /// 휴지통에 있는 항목만 현재 DB에서 영구 삭제한다(metadata + 모든 revision).
-    public func purge(secretId: String) throws {
+    func purge(secretId: String) throws {
         guard let meta = try metadata(id: secretId) else {
             throw WorkLogError.notFound("Secret \(secretId)")
         }
@@ -304,7 +304,7 @@ public final class SecretVault: @unchecked Sendable {
 
     // MARK: - 초안
 
-    public func saveDraft(_ payload: SecretPayload) throws {
+    func saveDraft(_ payload: SecretPayload) throws {
         let key = try requireKey()
         let encrypted = try encrypt(payload, key: key, aad: Self.draftAAD)
         try db.run("""
@@ -313,7 +313,7 @@ public final class SecretVault: @unchecked Sendable {
             """, [Self.draftId, keyVersionValue, encrypted, clock.now()])
     }
 
-    public func loadDraft() throws -> SecretPayload? {
+    func loadDraft() throws -> SecretPayload? {
         let key = try requireKey()
         guard let row = try db.queryOne(
             "SELECT encrypted_payload FROM secret_draft WHERE id = ?", [Self.draftId]) else {
@@ -325,7 +325,7 @@ public final class SecretVault: @unchecked Sendable {
         return try decrypt(encrypted, key: key, aad: Self.draftAAD)
     }
 
-    public func clearDraft() throws {
+    func clearDraft() throws {
         try db.run("DELETE FROM secret_draft WHERE id = ?", [Self.draftId])
     }
 
@@ -353,10 +353,23 @@ public final class SecretVault: @unchecked Sendable {
         return groupId
     }
 
-    private func throwIfIssues(_ issues: [SecretValidationIssue]) throws {
-        guard issues.isEmpty else {
-            throw WorkLogError.validation("Secret 저장 전 확인이 필요합니다: \(issues)")
+    /// 오류 메시지에 key·value를 넣지 않는다(key/value는 암호화 payload의 민감 정보).
+    /// 중복 key는 행 위치(1부터 시작)로만 안내한다.
+    private func throwIfIssues(_ issues: [SecretValidationIssue],
+                               rows: [SecretRow]) throws {
+        guard !issues.isEmpty else { return }
+        let positions = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0 + 1) })
+        let details = issues.map { issue -> String in
+            switch issue {
+            case .duplicateKey(_, let rowIds):
+                let ordinals = rowIds.compactMap { positions[$0] }.map(String.init)
+                    .joined(separator: ", ")
+                return "중복된 항목 이름(행 \(ordinals))"
+            case .unknownRowId:
+                return "알 수 없는 행"
+            }
         }
+        throw WorkLogError.validation("Secret 저장 전 확인이 필요합니다: \(details.joined(separator: "; "))")
     }
 
     private func metadataRow(_ row: SQLRow) throws -> SecretMetadata {
