@@ -67,6 +67,8 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
             self?.consumeStderr(handle.availableData)
         }
         process.terminationHandler = { [weak self] proc in
+            // 종료 전에 출력된 stdout 줄을 모두 전달한 뒤 종료를 알린다(응답 직후 종료하는 경우의 경쟁 방지).
+            self?.drainStdoutAfterExit()
             self?.emitClose(.exited(proc.terminationStatus))
         }
 
@@ -122,6 +124,16 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
         lock.unlock()
 
         for line in lines { handler?(line) }
+    }
+
+    private func drainStdoutAfterExit() {
+        let reader = stdoutPipe.fileHandleForReading
+        reader.readabilityHandler = nil
+        // readabilityHandler가 이미 읽어 처리 중인 블록이 버퍼에 반영되도록 잠금을 한 번 거친다.
+        lock.lock(); lock.unlock()
+        let rest = (try? reader.readToEnd()) ?? nil
+        if let rest, !rest.isEmpty { consumeStdout(rest) }
+        flushStdoutBuffer()
     }
 
     private func flushStdoutBuffer() {
