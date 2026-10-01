@@ -625,4 +625,57 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: targetPaths.backupRoot.path),
                        "대상에 원본이 없었는데 preRestore 백업이 생겼다")
     }
+
+    // MARK: - BACK-T12: move 성공 후 chmod 실패 구간에서도 롤백이 새 파일 제거
+
+    func testRestoreRollbackAfterMoveBeforeChmodRemovesPlacedFile() throws {
+        let root = try makeRoot()
+        let clock = fixedClock()
+        let keyStore = InMemoryVaultKeyStore()
+        let sourcePaths = makePaths(root: root.appendingPathComponent("source"))
+        let sourceStores = try openStores(sourcePaths, keyStore: keyStore, clock: clock,
+                                          ids: SequentialIDGenerator(prefix: "src"))
+        _ = try sourceStores.vault.create(title: "Secret", groupName: nil,
+                                          rows: [SecretRowInput(key: "K", value: "V")])
+        let backupService = makeService(sourcePaths, sourceStores, clock: clock)
+        let info = try backupService.createBackup(reason: .manual)
+        sourceStores.close()
+
+        // 대상에는 기존 work.sqlite만 둔다(vault.sqlite는 없다 → 새로 놓는 파일이 된다).
+        let targetPaths = makePaths(root: root.appendingPathComponent("target"))
+        let targetStores = try openStores(targetPaths, keyStore: InMemoryVaultKeyStore(), clock: clock,
+                                          ids: SequentialIDGenerator(prefix: "tgt"))
+        try targetStores.repo.insertMemo(Memo(id: "old", body: "기존",
+                                              workDate: WorkDate(year: 2026, month: 10, day: 1),
+                                              recordedAt: clock.now()))
+        targetStores.close()
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(atPath: targetPaths.vaultDatabase.path + suffix)
+        }
+        let beforeWork = databaseBytes(targetPaths.workDatabase)
+        XCTAssertFalse(beforeWork.isEmpty, "대상 work.sqlite가 있어야 롤백 복구를 확인할 수 있다")
+
+        // 두 번째 파일(vault.sqlite)이 move된 직후·chmod 전에 실패를 주입한다.
+        XCTAssertThrowsError(
+            try BackupService.restore(info, into: targetPaths, keyStore: keyStore,
+                                      includeVault: true, clock: clock,
+                                      beforePlacing: nil, afterPlacing: { name in
+                if name == "vault.sqlite" { throw BackupFailure.ioFailed("주입 오류") }
+            })) { error in
+            guard case .ioFailed? = error as? BackupFailure else {
+                return XCTFail("ioFailed를 기대했지만 \(error)")
+            }
+        }
+
+        let fm = FileManager.default
+        // 새로 놓았다가 실패한 vault.sqlite는 남지 않는다.
+        XCTAssertFalse(fm.fileExists(atPath: targetPaths.vaultDatabase.path),
+                       "move 성공 후 실패한 vault.sqlite가 남았다")
+        // 원본 work.sqlite는 stash에서 복구되어 바이트가 그대로다.
+        XCTAssertEqual(databaseBytes(targetPaths.workDatabase), beforeWork,
+                       "기존 work.sqlite가 원래 바이트로 복구되어야 한다")
+        let leftovers = allFiles(in: targetPaths.dataRoot).map(\.lastPathComponent)
+        XCTAssertFalse(leftovers.contains { $0.contains(".restore-") }, "temp 파일이 남았다: \(leftovers)")
+        XCTAssertFalse(leftovers.contains { $0.contains(".stash-") }, "stash 파일이 남았다: \(leftovers)")
+    }
 }

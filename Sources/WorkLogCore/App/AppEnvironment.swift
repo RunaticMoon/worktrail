@@ -157,7 +157,10 @@ public final class AppEnvironment {
                                        clearAfter: TimeInterval(settings.clipboardClearSeconds))
         let backup = BackupService(paths: paths, workDB: workDB, vaultDB: vaultDB,
                                    clock: options.clock, ids: options.ids)
-        let skillResolver = SkillBindingResolver(bindings: settings.skillBindings)
+        let skillResolver = SkillBindingResolver(
+            bindings: settings.skillBindings,
+            blockedPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path,
+                                  paths.vaultDatabase.deletingLastPathComponent().path])
 
         var aiRunner: AIJobRunner?
         var memoLinks: MemoLinkSuggestionService?

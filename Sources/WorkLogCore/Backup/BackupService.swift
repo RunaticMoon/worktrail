@@ -414,12 +414,14 @@ public final class BackupService: @unchecked Sendable {
                     clock: clock, beforePlacing: nil)
     }
 
-    /// public `restore`의 구현. `beforePlacing`은 각 파일을 temp→final로 옮기기 직전에 호출되는
-    /// 테스트용 훅이며, 기본값 nil이면 동작에 영향이 없다.
+    /// public `restore`의 구현. `beforePlacing`은 각 파일을 temp→final로 옮기기 직전에,
+    /// `afterPlacing`은 move 직후·chmod 직전에 호출되는 테스트용 훅이며,
+    /// 기본값 nil이면 동작에 영향이 없다.
     static func restore(_ backup: BackupInfo, into target: AppPaths,
                         keyStore: VaultKeyStore, includeVault: Bool = true,
                         clock: Clock = SystemClock(),
-                        beforePlacing: ((String) throws -> Void)?) throws {
+                        beforePlacing: ((String) throws -> Void)?,
+                        afterPlacing: ((String) throws -> Void)? = nil) throws {
         try verifyBackup(backup)
         let manifest = backup.manifest
         let fm = FileManager.default
@@ -493,8 +495,10 @@ public final class BackupService: @unchecked Sendable {
                 for item in prepared {
                     try beforePlacing?(item.name)
                     try fm.moveItem(at: item.temp, to: item.final)
-                    try setPermissions(0o600, at: item.final)
+                    // move 성공 직후 기록한다. 이어지는 chmod가 실패해도 롤백이 새 파일을 제거하도록.
                     placed.append(item.final)
+                    try afterPlacing?(item.name)
+                    try setPermissions(0o600, at: item.final)
                 }
                 for entry in stashed { try? fm.removeItem(at: entry.stash) }
             } catch {
@@ -524,8 +528,7 @@ public final class BackupService: @unchecked Sendable {
     /// 백업의 vault.sqlite에서 최신 revision 하나를 읽어 현재 키로 실제 복호화가 되는지 시험한다.
     /// 복호화한 평문은 즉시 버리고 기록·로그하지 않는다. 실패는 모두 `vaultKeyMismatch`로 알린다.
     private static func probeVaultDecryptable(directory: URL, keyVersion: String, key: Data) throws {
-        // SecretVault의 private 상수 `schemaVersion = 1`과 같아야 한다.
-        let schemaVersion = 1
+        let schemaVersion = SecretVault.schemaVersion
         let url = directory.appendingPathComponent(vaultFileName)
         let db: SQLiteDatabase
         do {

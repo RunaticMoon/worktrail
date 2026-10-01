@@ -32,7 +32,8 @@ public final class SecretVault: @unchecked Sendable {
 
     private static let metaKeyVersion = "key_version"
     private static let draftId = "draft"
-    private static let schemaVersion = 1
+    /// Secret payload/AAD의 스키마 버전. 백업 시험 복호화 등에서 참조하므로 internal로 둔다.
+    static let schemaVersion = 1
     /// 초안 AAD(단일 슬롯).
     private static let draftAAD = Data("worklog.secret.draft|v1".utf8)
 
