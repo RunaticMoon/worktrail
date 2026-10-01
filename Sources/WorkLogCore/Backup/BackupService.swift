@@ -352,7 +352,8 @@ public final class BackupService: @unchecked Sendable {
               isDir.boolValue else { return nil }
         let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
-        guard resolvedDirectory.deletingLastPathComponent() == resolvedRoot else { return nil }
+        // URL 비교는 끝 슬래시 차이에 민감하므로 경로 문자열로 비교한다.
+        guard resolvedDirectory.deletingLastPathComponent().path == resolvedRoot.path else { return nil }
         return directory
     }
 

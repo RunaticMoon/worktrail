@@ -280,15 +280,16 @@ Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단�
 
 ---
 
-## 최신 실행 (통합 브랜치 `wlog-45a3/mvp`, 커밋 `e229680`)
+## 최신 실행 (통합 브랜치 `wlog-45a3/mvp`, 검토 AT 지적 반영 후)
 
 ```text
 $ swift build --build-tests      # Build complete, warning 0
 $ swift test                     # 2회 실행
-	 Executed 466 tests, with 0 failures (0 unexpected)
+	 Executed 470 tests, with 0 failures (0 unexpected)
 $ swiftc -frontend -parse -target arm64-apple-macosx14.0 Sources/WorkLogApp/*.swift   # exit 0 (구문 분석만)
 ```
 
 - 독립 검증(AO, 코드 변경 없이 CLI·백업·스케줄 실행 확인)에서 찾은 결함은 모두 수정 후 회귀 테스트로 고정했다: UTF-8 분할 수신 유실(`JSONRPCConnectionTests.testStdoutSplitMultibyteCharacterStillEmitsLine`), DB 파일 0644(`SmokeTests.testNewDatabaseFilesAreCreatedWith0600`), CLI 보고 기간 표시(`CLITests.testReportHeadersUseInclusivePeriod`), 손상 백업 안내(`CLITests.testBackupVerifyDistinguishesCorruptManifest`).
+- 독립 코드 검토(AT) 지적도 수정했다: Secret 초안 복구 직후 새 항목 이동(`SecretsSettingsBackupPresentationTests.testRecoveringDraftConsumesPendingNewEntryRequest`), stderr 분할 수신 줄 수(`JSONRPCConnectionTests.testStderrSplitMultibyteCharacterCountsLines`), 백업 이름 심볼릭 링크 탈출(`BackupServiceTests.testVerifyByNameRejectsSymlinkOutsideBackupRoot`), README·대응표 문구.
 - 워커 한 명이 전체 스위트 1회에서 식별되지 않은 실패 1건을 관측했으나 이후 반복 실행(워커 9회, 지휘자 2회)에서 재현되지 않았다. 원인 미확인.
 - macOS 앱 컴파일·실행, Keychain·Touch ID·전역 단축키·NSPasteboard, 실제 Codex 계정·sandbox는 여전히 미검증이다.
