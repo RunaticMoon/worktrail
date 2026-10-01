@@ -59,7 +59,7 @@ $ swift test 2>&1 | tail -5
 | CAP-T05 | MEM-01 | 제목 없이 여러 줄 Memo 저장 | 자동 테스트 통과 | TaskServiceTests.swift:testCaptureMemoStoresMultilineBodyAndLinksWithoutFetch / WorkRepositoryTests.swift:testMemoRoundTripPreservesBodyPreviewAndLinks | 전체 원문·첫 줄 preview·업무일 보존 assert. |
 | CAP-T06 | CAP-03 | 화요일에 월요일 업무 기록 | 자동 테스트 통과 | TaskServiceTests.swift:testCaptureMemoLateEntryBelongsToWorkDate / WorkRepositoryTests.swift:testLateEntryBelongsToWorkDateAndKeepsRecordedAt / DayBoxTests.swift:testLateActivityBelongsToItsWorkDateNotRecordDay | workDate 귀속과 recordedAt 보존, 타임라인 귀속 assert. |
 | CAP-T07 | CAP-02 | AI·네트워크 끄고 저장 | 자동 테스트 통과 | AppEnvironmentTests.swift:testNilProviderDisablesAIButMemoWorks | AI provider 없이 Memo 저장·검색 성공. "지연" 시나리오는 미시뮬레이션. |
-| CAP-T08 | CAP-01 | 다른 앱 사용 중 창 열기→저장→복귀 | 미검증(macOS) | (없음) | UI 코드 있음: `CapturePanelController`(비활성 앱 위 NSPanel, 저장·닫기 후 이전 앱 복귀). macOS에서 포커스 전환은 미검증. |
+| CAP-T08 | CAP-01 | 다른 앱 사용 중 창 열기→저장→복귀 | 미검증(macOS) | (없음) | UI 코드 있음: `CapturePanelController`(비활성 앱 위 NSPanel, 저장·닫기 후 이전 앱 복귀). macOS에서 포커스 전환은 미검증. 기본 입력 유형이 Secret이면 패널 대신 메인 창 Secret 화면으로 가며 이전 앱 복귀는 적용하지 않는다(decisions T20). |
 | CAP-T09 | CAP-01 | 이미 사용 중인 단축키 설정 | 부분 | SettingsStoreTests.swift:testValidationRejectsInvalidValuesWithoutTouchingFile | 캡처=검색 단축키 동일 시 validation만 검증. OS가 점유한 단축키 등록 충돌·기존 동작 보존은 UI 미검증. |
 | CAP-T10 | CAP-03 | 같은 날 늦은 상태 기록 순서 모순 | 자동 테스트 통과 | StateReplayTests.swift:testImpossibleTransitionIsReportedNotThrown / TaskServiceTests.swift:testPausedAfterCompletionIsRejectedWithoutSaving / TaskServiceTests.swift:testLateRecordedStartBeforeLaterCompletion | 불가능 전이는 violation으로 보고(날조 없음), 늦은 시작은 현재 완료를 뒤집지 않음. |
 

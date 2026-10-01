@@ -129,10 +129,10 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 
 `Sources/WorkLogApp`에 SwiftUI/AppKit 코드가 있다. Linux에서는 구문 분석만 했고 macOS에서 컴파일·실행하지 않았다.
 
-- 사이드바: 날짜(3열: 타임라인·Task·Memo), 업무, 검색, 리포트(제출용/상세 성과 탭 분리), 이번 주 계획, Secret, 설정, 백업
+- 사이드바: 날짜(3열: 타임라인·Task·Memo), 업무, 검색, 리포트(제출용/상세 성과를 상단 선택기로 분리), 이번 주 계획, Secret, 설정, 백업
 - 빠른 입력 패널(`⌃⌥Space` 제안값): Return 줄바꿈 · ⌘Return 저장 · Esc 초안 보존 후 닫기, `@프로젝트`·`#태그` 자동완성, 저장 후 이전 앱으로 복귀
 - 검색(`⌃⌥F` 제안값): 원문 검색, 명시적으로 요청할 때만 AI 답변(Secret 제외)
-- 설정의 기본 입력 유형이 Secret이면 입력 단축키가 기기 인증 후 Secret 새 항목 화면을 연다
+- 설정의 기본 입력 유형이 Secret이면 입력 단축키가 빠른 입력 패널 대신 메인 창의 Secret 화면을 연다. 잠겨 있으면 사용자가 기기 인증을 해야 새 항목이 열리고, 복구할 암호화 초안이 있으면 먼저 복구/버리기를 고른다. 이 경로는 저장 후 이전 앱으로 돌아가지 않는다(decisions T20)
 
 ## 알려진 제한
 
