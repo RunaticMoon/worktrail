@@ -5,6 +5,7 @@ import Crypto
 // - ai_job 테이블에 작업 상태를 남기고, idempotency key로 중복 실행·저장을 막는다.
 // - 실제 AI 동시성은 1(FIFO 비동기 잠금). 호출 전 payloadGuard로 금지 문자열을 차단한다.
 // - Secret 타입은 이 경로의 어떤 입력에도 넣지 않는다.
+// - 출력 민감 마커 검사: provider 출력을 저장하기 전에 AIOutputGuard로 차단한다.
 // - print/로그 출력 금지. provider 오류는 throw하지 않고 상태로 환원한다.
 
 /// AI 작업 실행 요청. 자동 작업은 regenerationNonce를 nil로 둔다.
@@ -113,16 +114,19 @@ public final class AIJobRunner: @unchecked Sendable {
     public let provider: AIProvider
     public let stagingRoot: URL
     public let payloadGuard: AIPayloadGuard
+    public let outputGuard: AIOutputGuard
     public let maxAttempts: Int
 
     private let executionLock = AsyncFIFOLock()
 
     public init(repo: WorkRepository, provider: AIProvider, stagingRoot: URL,
-                guard payloadGuard: AIPayloadGuard = AIPayloadGuard(), maxAttempts: Int = 3) {
+                guard payloadGuard: AIPayloadGuard = AIPayloadGuard(), maxAttempts: Int = 3,
+                outputGuard: AIOutputGuard? = nil) {
         self.repo = repo
         self.provider = provider
         self.stagingRoot = stagingRoot
         self.payloadGuard = payloadGuard
+        self.outputGuard = outputGuard ?? AIOutputGuard(blockedSubstrings: payloadGuard.blockedSubstrings)
         self.maxAttempts = maxAttempts
     }
 
@@ -214,6 +218,18 @@ public final class AIJobRunner: @unchecked Sendable {
                                skill: request.skill)
         do {
             let output = try await provider.run(input)
+            // 출력 민감 마커 검사: 위반이면 출력 원문을 어디에도 남기지 않고 실패로 환원한다.
+            if outputGuard.containsSensitiveContent(output.rawJSON)
+                || outputGuard.containsSensitiveContent(output.model ?? "")
+                || outputGuard.containsSensitiveContent(output.providerRef ?? "") {
+                running.status = .failed
+                running.lastErrorClass = .outputInvalid
+                running.resultJSON = nil
+                running.updatedAt = repo.clock.now()
+                try repo.updateAIJob(running)
+                Self.cleanupStaging(stagingRoot: stagingRoot, jobId: running.id)
+                return AIJobResult(job: running, output: nil, reusedExisting: false)
+            }
             running.status = .succeeded
             running.resultJSON = try StableJSON.string(output)
             running.lastErrorClass = nil

@@ -345,6 +345,88 @@ final class AIJobRunnerTests: XCTestCase {
     private func stagingPath(_ root: URL, _ jobId: String) -> String {
         root.appendingPathComponent(jobId, isDirectory: true).path
     }
+
+    // MARK: 12. 출력 민감 마커 검사
+
+    func testOutputWithCredentialMarkerIsNotStored() async throws {
+        let repo = try makeRepo()
+        let mock = MockAIProvider(responses: [
+            .groundedAnswer: #"{"text":"see ~/.codex/auth.json refresh_token=abc"}"#,
+        ])
+        let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: makeTempRoot())
+
+        let result = try await runner.submit(makeRequest())
+
+        XCTAssertNil(result.output)
+        XCTAssertEqual(result.job.status, .failed)
+        XCTAssertEqual(result.job.lastErrorClass, .outputInvalid)
+        XCTAssertEqual(result.job.attempts, 1)
+
+        let stored = try XCTUnwrap(try repo.aiJob(id: result.job.id))
+        XCTAssertEqual(stored.status, .failed)
+        XCTAssertNil(stored.resultJSON)
+    }
+
+    func testOutputMarkerCheckIsCaseInsensitive() async throws {
+        let repo = try makeRepo()
+        let mock = MockAIProvider(responses: [
+            .groundedAnswer: #"{"text":"-----BEGIN private key-----"}"#,
+        ])
+        let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: makeTempRoot())
+
+        let result = try await runner.submit(makeRequest())
+
+        XCTAssertNil(result.output)
+        XCTAssertEqual(result.job.status, .failed)
+        XCTAssertEqual(result.job.lastErrorClass, .outputInvalid)
+    }
+
+    func testOutputContainingBlockedPathIsNotStored() async throws {
+        let repo = try makeRepo()
+        let mock = MockAIProvider(responses: [
+            .groundedAnswer: #"{"text":"/tmp/x/vault/vault.sqlite"}"#,
+        ])
+        // 입력에는 해당 경로가 없다 → payloadGuard가 아니라 출력 검사로 차단되어야 한다.
+        let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: makeTempRoot(),
+                                 guard: AIPayloadGuard(blockedSubstrings: ["/tmp/x/vault"]))
+
+        let result = try await runner.submit(makeRequest())
+
+        XCTAssertNil(result.output)
+        XCTAssertEqual(result.job.status, .failed)
+        XCTAssertEqual(result.job.lastErrorClass, .outputInvalid)
+        let stored = try XCTUnwrap(try repo.aiJob(id: result.job.id))
+        XCTAssertNil(stored.resultJSON)
+    }
+
+    func testCleanOutputStillSucceeds() async throws {
+        let repo = try makeRepo()
+        let mock = MockAIProvider(responses: [.groundedAnswer: #"{"answer":"ok"}"#])
+        let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: makeTempRoot())
+
+        let result = try await runner.submit(makeRequest())
+
+        XCTAssertEqual(result.job.status, .succeeded)
+        XCTAssertEqual(result.output?.rawJSON, #"{"answer":"ok"}"#)
+        let stored = try XCTUnwrap(try repo.aiJob(id: result.job.id))
+        XCTAssertNotNil(stored.resultJSON)
+    }
+
+    func testOutputGuardIgnoresEmptyRulesAndCleanText() {
+        let standard = AIOutputGuard()
+        XCTAssertFalse(standard.containsSensitiveContent(""))
+        XCTAssertFalse(standard.containsSensitiveContent("오늘 한 일 요약"))
+
+        let noRules = AIOutputGuard(markers: [], blockedSubstrings: [])
+        XCTAssertFalse(noRules.containsSensitiveContent("일반 텍스트"))
+
+        let emptyRules = AIOutputGuard(markers: [""], blockedSubstrings: [""])
+        XCTAssertFalse(emptyRules.containsSensitiveContent("일반 텍스트"))
+
+        // 대소문자 무시 비교
+        XCTAssertTrue(standard.containsSensitiveContent("AUTH.JSON"))
+        XCTAssertTrue(standard.containsSensitiveContent("bearer abc"))
+    }
 }
 
 // MARK: - 테스트용 가짜 AIProvider (네트워크·프로세스·Secret 없음)
