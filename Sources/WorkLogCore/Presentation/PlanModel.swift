@@ -30,7 +30,10 @@ import Observation
             checkedIds.formIntersection(Set(candidates.map(\.id)))
             labels = Dictionary(uniqueKeysWithValues: items.map { ($0.id, labels[$0.id] ?? $0.label ?? "") })
             errorMessage = nil
-        } catch { errorMessage = "계획을 불러오지 못했습니다. 다시 시도하세요." }
+        } catch {
+            plan = nil; items = []; tasks = []; checkedIds = []; labels = [:]
+            errorMessage = "계획을 불러오지 못했습니다. 다시 시도하세요."
+        }
     }
     public func selectWeek(_ date: WorkDate) { weekStart = date; checkedIds = []; labels = [:]; load() }
     public func generateCandidates() { perform { _ = try environment.plans.generateCandidates(weekStart: weekStart) } }

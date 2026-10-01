@@ -31,10 +31,12 @@ import WorkLogCore
     private var capturePanel: CapturePanelController?
     private var searchPanel: NSPanel?
     private var observers: [NSObjectProtocol] = []
+    var openMainWindow: (() -> Void)?
 
     func start() async {
         guard !isRestoring else { return }
         guard !didStart else { return }; didStart = true
+        clearRegistrations()
         do {
             let paths = AppPaths.standard()
             let settings = try SettingsStore(fileURL: paths.settingsFile).load()
@@ -60,9 +62,6 @@ import WorkLogCore
             settingsModel = SettingsModel(environment: env)
             backups = BackupModel(environment: env)
             installProtectionTimer()
-            if settings.defaultCaptureKind == .secret {
-                notice = "Secret 입력은 준비 중입니다. 현재 빠른 입력은 일반 메모로 열립니다."
-            }
             let launch = env.onLaunch()
             if launch.backupError != nil { notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다." }
             refresh()
@@ -75,11 +74,23 @@ import WorkLogCore
             do { try await env.runStartupCatchUp() }
             catch { notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다." }
         } catch {
+            clearRegistrations()
             startupError = "WorkLog 저장소를 열지 못했습니다. 저장소 권한과 설정 파일을 확인하고 다시 시도하세요."
         }
     }
 
     func retryStart() async { didStart = false; startupError = nil; await start() }
+    func dismissNotice() { notice = nil }
+    private func clearRegistrations() {
+        protectionTimer?.invalidate(); protectionTimer = nil
+        hotkeys = nil
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+            DistributedNotificationCenter.default().removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        observers = []
+    }
     func refresh() {
         day?.load()
         do { tasks = try environment?.repo.tasks() ?? [] }
@@ -94,6 +105,17 @@ import WorkLogCore
     func openMemo(_ id: String) { selectedMemoId = id; memoDetail?.load(id: id) }
     func showCapture() {
         guard let capture, let environment else { return }
+        if capture.requiresSecretEditor {
+            capturePanel?.closeForSecretEntry()
+            selectedTaskId = nil; selectedMemoId = nil
+            secrets?.requestNewEntry()
+            route = .secrets
+            if let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeMain }) {
+                window.makeKeyAndOrderFront(nil)
+            } else { openMainWindow?() }
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         capture.reloadCandidates()
         if capture.text.isEmpty && capture.selectedProjectIds.isEmpty && capture.selectedTagIds.isEmpty {
             capture.resetDefaults()

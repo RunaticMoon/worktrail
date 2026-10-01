@@ -34,6 +34,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
 
 struct AppRootView: View {
     @Bindable var controller: AppController
+    @Environment(\.openWindow) private var openWindow
     var body: some View {
         Group {
             if let error = controller.startupError {
@@ -57,7 +58,13 @@ struct AppRootView: View {
                     }.navigationTitle("WorkLog")
                 } detail: {
                     VStack(spacing: 0) {
-                        if let notice = controller.notice { InlineNotice(message: notice).padding(12) }
+                        if let notice = controller.notice {
+                            HStack(alignment: .top) {
+                                InlineNotice(message: notice)
+                                Button { controller.dismissNotice() } label: { Image(systemName: "xmark") }
+                                    .accessibilityLabel("안내 닫기").help("안내 닫기")
+                            }.padding(12)
+                        }
                         destination(environment)
                     }
                     .toolbar {
@@ -79,6 +86,9 @@ struct AppRootView: View {
                     }
                 }
             } else { ProgressView("WorkLog 여는 중…") }
+        }.onAppear {
+            let action = openWindow
+            controller.openMainWindow = { action(id: "main") }
         }
     }
     @ViewBuilder private func destination(_ environment: AppEnvironment) -> some View {
@@ -108,12 +118,12 @@ struct AppRootView: View {
         case .plans:
             if let plan = controller.plan { PlanScreen(model: plan, calendar: environment.calendar) }
         case .secrets:
-            if let secrets = controller.secrets { SecretsScreen(model: secrets) }
+            if let secrets = controller.secrets { SecretsScreen(model: secrets, calendar: environment.calendar) }
         case .settings:
             if let settings = controller.settingsModel { SettingsScreen(model: settings, onSave: { controller.saveSettings() }) }
         case .backups:
             if let backups = controller.backups {
-                BackupScreen(model: backups, onRestore: { backup, include in
+                BackupScreen(model: backups, calendar: environment.calendar, onRestore: { backup, include in
                     Task { await controller.restoreBackup(backup, includeVault: include) }
                 })
             }

@@ -108,6 +108,44 @@ final class ReportsPlanPresentationTests: XCTestCase {
         model.selectWeek(env.calendar.adding(days: 7, to: monday))
         XCTAssertTrue(model.checkedIds.isEmpty); XCTAssertTrue(model.items.isEmpty)
     }
+    @MainActor func testPlanLoadFailureClearsPreviouslyLoadedWeek() throws {
+        let env = try environment()
+        _ = try env.tasks.createTask(title: "기존 계획", workDate: prior)
+        let model = PlanModel(environment: env)
+        model.generateCandidates()
+        let item = try XCTUnwrap(model.candidates.first)
+        model.check(item.id, selected: true)
+        model.labels[item.id] = "저장하지 않은 표시 문구"
+        XCTAssertNotNil(model.plan)
+        XCTAssertFalse(model.tasks.isEmpty)
+        env.repo.db.close()
+        model.weekStart = env.calendar.adding(days: 7, to: monday)
+        model.load()
+        XCTAssertNil(model.plan)
+        XCTAssertTrue(model.items.isEmpty)
+        XCTAssertTrue(model.tasks.isEmpty)
+        XCTAssertTrue(model.checkedIds.isEmpty)
+        XCTAssertTrue(model.labels.isEmpty)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertFalse(model.isLoading)
+    }
+    @MainActor func testReportNavigationClearsEvaluationProposal() async throws {
+        let env = try environment()
+        let model = ReportsModel(environment: env)
+        model.family = .performance
+        model.evaluationStart = prior; model.evaluationEnd = monday
+        model.proposeEvaluation(); XCTAssertNotNil(model.proposal)
+        model.family = .submission; model.loadSelection()
+        XCTAssertNil(model.proposal)
+        await model.generate()
+        let reportId = try XCTUnwrap(model.report?.id)
+        model.proposeEvaluation(); XCTAssertNotNil(model.proposal)
+        model.selectReport(reportId)
+        XCTAssertNil(model.proposal)
+        model.proposeEvaluation(); XCTAssertNotNil(model.proposal)
+        model.selectVersion(try XCTUnwrap(model.version?.id))
+        XCTAssertNil(model.proposal)
+    }
     @MainActor func testAIOnlyRunsOnExplicitGenerationWithUseAIEnabled() async throws {
         let provider = MockAIProvider(); let env = try environment(provider: provider)
         let model = ReportsModel(environment: env)

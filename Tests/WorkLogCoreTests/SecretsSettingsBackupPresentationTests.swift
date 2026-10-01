@@ -231,6 +231,47 @@ final class SecretsSettingsBackupPresentationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(model.errors.count, 3)
         model.reset(); XCTAssertFalse(model.hasChanges)
     }
+    @MainActor func testDefaultCaptureKindSavesAndReloadsForAllSupportedKinds() throws {
+        let env = try environment()
+        let model = SettingsModel(environment: env)
+        XCTAssertEqual(model.defaultCaptureKind, .memo)
+        for kind in [CaptureKind.task, .secret, .memo] {
+            model.defaultCaptureKind = kind
+            XCTAssertTrue(model.hasChanges)
+            XCTAssertTrue(model.save())
+            XCTAssertEqual(env.settings.defaultCaptureKind, kind)
+            XCTAssertEqual(try env.settingsStore.load().defaultCaptureKind, kind)
+            let reloaded = SettingsModel(environment: env)
+            XCTAssertEqual(reloaded.defaultCaptureKind, kind)
+            XCTAssertFalse(reloaded.hasChanges)
+            model.defaultCaptureKind = kind == .memo ? .task : .memo
+            model.reset()
+            XCTAssertEqual(model.defaultCaptureKind, kind)
+        }
+    }
+    @MainActor func testSecretNewEntryRequestWaitsForAuthenticationAndPreservesEncryptedDraft() async throws {
+        let env = try environment()
+        let model = SecretsModel(environment: env)
+        model.requestNewEntry()
+        XCTAssertTrue(model.requestsNewEntry)
+        XCTAssertTrue(model.isLocked)
+        XCTAssertTrue(model.rows.isEmpty)
+        await model.unlock()
+        XCTAssertFalse(model.isLocked)
+        XCTAssertFalse(model.hasRecoverableDraft)
+        model.requestsNewEntry = false; model.beginNew()
+        XCTAssertNil(model.selectedId)
+        model.addRow(); model.rows[0].key = "fake-key"; model.rows[0].value = "fake-new-secret-canary"
+        model.lock(); model.requestNewEntry()
+        XCTAssertTrue(model.isLocked)
+        XCTAssertTrue(model.rows.isEmpty)
+        await model.unlock()
+        XCTAssertTrue(model.requestsNewEntry)
+        XCTAssertTrue(model.hasRecoverableDraft)
+        model.recoverDraft()
+        XCTAssertEqual(model.rows.first?.value, "fake-new-secret-canary")
+        XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-new-secret-canary")).isEmpty)
+    }
 
     @MainActor func testHotkeyAliasesAndRegistrationFailureKeepSavedSettings() throws {
         let env = try environment()

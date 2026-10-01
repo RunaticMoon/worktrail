@@ -68,6 +68,90 @@ final class PresentationTests: XCTestCase {
         day.move(days: -10); day.showToday(); XCTAssertEqual(day.selectedDate, today)
     }
 
+    @MainActor func testAutocompletePreservesTrailingProseAndChoosesLongestExistingName() throws {
+        let env = try environment()
+        _ = try env.repo.createProject(name: "공통")
+        let project = try env.repo.createProject(name: "공통 인프라")
+        let tag = try env.repo.findOrCreateTag(name: "회귀 검증")
+        let model = CaptureModel(environment: env)
+        model.text = "메모 @공통 인프라 그리고 계속"
+        XCTAssertEqual(model.candidates.map(\.id), [project.id])
+        model.select(try XCTUnwrap(model.candidates.first))
+        XCTAssertEqual(model.text, "메모 공통 인프라 그리고 계속")
+        XCTAssertEqual(model.selectedProjectIds, [project.id])
+        model.text = "메모 #회귀 검증 그리고 계속"
+        model.select(try XCTUnwrap(model.candidates.first))
+        XCTAssertEqual(model.text, "메모 회귀 검증 그리고 계속")
+        XCTAssertEqual(model.selectedTagIds, [tag.id])
+    }
+
+    @MainActor func testAutocompleteUsesCaretInsideTextAndPreservesOtherLines() throws {
+        let env = try environment()
+        let project = try env.repo.createProject(name: "공통 인프라")
+        let model = CaptureModel(environment: env)
+        model.text = "🙂 메모 @공통 인 그리고 계속\n다음 줄 #다른 토큰"
+        let prefix = "🙂 메모 @공통 인"
+        model.selectionRange = NSRange(location: prefix.utf16.count, length: 0)
+        XCTAssertEqual(model.candidates.map(\.id), [project.id])
+        model.select(try XCTUnwrap(model.candidates.first))
+        XCTAssertEqual(model.text, "🙂 메모 공통 인프라 그리고 계속\n다음 줄 #다른 토큰")
+        XCTAssertEqual(model.selectionRange?.location, "🙂 메모 공통 인프라".utf16.count)
+    }
+
+    @MainActor func testAutocompleteOnlyOffersCreationWithoutExistingNamePrefix() throws {
+        let env = try environment()
+        _ = try env.repo.createProject(name: "공통 인프라")
+        _ = try env.repo.findOrCreateTag(name: "회귀 검증")
+        let model = CaptureModel(environment: env)
+        for query in ["@공통 인", "#회귀 검"] {
+            model.text = query
+            XCTAssertFalse(model.candidates.isEmpty)
+            XCTAssertFalse(model.candidates.contains(where: \.isNew))
+        }
+        for query in ["@새 프로젝트", "@공통 신규", "#새 태그"] {
+            model.text = query
+            XCTAssertEqual(model.candidates.count, 1)
+            XCTAssertTrue(try XCTUnwrap(model.candidates.first).isNew)
+            XCTAssertEqual(model.candidates.first?.name, String(query.dropFirst()))
+        }
+    }
+
+    @MainActor func testNewNameAtCaretPreservesFollowingText() throws {
+        let model = CaptureModel(environment: try environment())
+        model.text = "메모 @새 프로젝트 그리고 계속"
+        model.selectionRange = NSRange(location: "메모 @새 프로젝트".utf16.count, length: 0)
+        model.select(try XCTUnwrap(model.candidates.first))
+        XCTAssertEqual(model.text, "메모 새 프로젝트 그리고 계속")
+        XCTAssertEqual(model.projects.map(\.name), ["새 프로젝트"])
+    }
+
+    @MainActor func testSecretDefaultBlocksOrdinaryCaptureEvenWithAnExistingDraft() throws {
+        let env = try environment()
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.text = "기존 일반 초안"
+        var settings = env.settings; settings.defaultCaptureKind = .secret
+        try env.updateSettings(settings)
+        model.resetDefaults()
+        XCTAssertTrue(model.requiresSecretEditor)
+        XCTAssertEqual(model.kind, .task)
+        XCTAssertFalse(model.submit())
+        XCTAssertEqual(model.text, "기존 일반 초안")
+        XCTAssertNil(model.lastSavedId)
+        XCTAssertTrue(try env.repo.tasks().isEmpty)
+        XCTAssertTrue(try env.search.search(SearchQuery(text: "기존 일반 초안")).isEmpty)
+        let fresh = CaptureModel(environment: env)
+        fresh.text = "fake-secret-canary"
+        XCTAssertTrue(fresh.requiresSecretEditor)
+        XCTAssertFalse(fresh.submit())
+        XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-secret-canary")).isEmpty)
+        settings.defaultCaptureKind = .memo; try env.updateSettings(settings)
+        model.resetDefaults()
+        XCTAssertFalse(model.requiresSecretEditor)
+        XCTAssertEqual(model.kind, .memo)
+        XCTAssertTrue(model.submit())
+    }
+
     @MainActor func testInvalidCaptureRetainsDraftAndActivityRequiresTarget() async throws {
         let env = try environment(); let model = CaptureModel(environment: env)
         XCTAssertFalse(model.submit()); XCTAssertNotNil(model.errorMessage)

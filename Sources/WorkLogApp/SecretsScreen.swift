@@ -5,6 +5,7 @@ import WorkLogCore
 
 struct SecretsScreen: View {
     @Bindable var model: SecretsModel
+    let calendar: WorkCalendar
     @State private var showsTrash = false
     @State private var purgeId: String?
     @State private var confirmsVersion = false
@@ -13,6 +14,8 @@ struct SecretsScreen: View {
     @State private var pendingNew = false
     @State private var confirmsLeaving = false
     @FocusState private var titleFocused: Bool
+    private enum CellFocus: Hashable { case key(String), value(String) }
+    @FocusState private var cellFocused: CellFocus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -48,7 +51,10 @@ struct SecretsScreen: View {
                 }
             }
         }.padding(16).navigationTitle("Secret")
-        .onAppear { model.tick(); model.searchTitles() }
+        .onAppear { model.tick(); model.searchTitles(); handleNewEntryRequest() }
+        .onChange(of: model.requestsNewEntry) { _, _ in handleNewEntryRequest() }
+        .onChange(of: model.isLocked) { _, _ in handleNewEntryRequest() }
+        .onChange(of: model.hasRecoverableDraft) { _, _ in handleNewEntryRequest() }
         .onDisappear { model.showsValues = false }
         .alert("현재 보관함에서 영구 삭제할까요?", isPresented: Binding(
             get: { purgeId != nil }, set: { if !$0 { purgeId = nil } })) {
@@ -132,7 +138,7 @@ struct SecretsScreen: View {
                         Spacer()
                         Toggle("값 표시", isOn: $model.showsValues).toggleStyle(.checkbox)
                     }
-                    Text("행의 복사 버튼으로 값을 복사하세요. key·값의 앞뒤 공백은 저장 시 제거합니다.")
+                    Text("Tab 셀 이동 · ⌘Return 저장. 행의 복사 버튼으로 값을 복사하세요. key·값의 앞뒤 공백은 저장 시 제거합니다.")
                         .font(.callout).foregroundStyle(.secondary)
                     if model.rows.isEmpty { Text("‘행 추가’ 또는 붙여넣기로 값을 입력하세요.").foregroundStyle(.secondary) }
                     LazyVStack(alignment: .leading, spacing: 8) {
@@ -141,11 +147,17 @@ struct SecretsScreen: View {
                                 HStack(alignment: .top, spacing: 8) {
                                     TextField("key", text: $row.key).frame(minWidth: 90, idealWidth: 140, maxWidth: 180)
                                         .accessibilityLabel("행 \(row.order + 1) key")
+                                        .focused($cellFocused, equals: .key(row.id))
+                                        .onKeyPress(.tab, phases: .down) { moveCell(from: .key(row.id), backwards: $0.modifiers.contains(.shift)) }
                                     if model.showsValues {
                                         TextField("값", text: $row.value, axis: .vertical).lineLimit(1...6)
                                             .accessibilityLabel("행 \(row.order + 1) 값")
+                                            .focused($cellFocused, equals: .value(row.id))
+                                            .onKeyPress(.tab, phases: .down) { moveCell(from: .value(row.id), backwards: $0.modifiers.contains(.shift)) }
                                     } else {
                                         SecureField("값", text: $row.value).accessibilityLabel("행 \(row.order + 1) 가려진 값")
+                                            .focused($cellFocused, equals: .value(row.id))
+                                            .onKeyPress(.tab, phases: .down) { moveCell(from: .value(row.id), backwards: $0.modifiers.contains(.shift)) }
                                     }
                                     Button("복사") { model.copyRow(row) }
                                     Button { model.removeRow(row.id) } label: { Image(systemName: "minus.circle") }
@@ -199,7 +211,7 @@ struct SecretsScreen: View {
                         }.padding(.top, 8)
                     }
                     HStack {
-                        Button("저장") { model.save() }.keyboardShortcut("s", modifiers: .command)
+                        Button("저장") { model.save() }.keyboardShortcut(.return, modifiers: .command)
                         if model.selectedId != nil {
                             Button("휴지통으로 이동…", role: .destructive) { confirmsTrash = true }
                         }
@@ -209,7 +221,7 @@ struct SecretsScreen: View {
                         DisclosureGroup("이전 버전 (\(model.revisions.count))") {
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(model.revisions, id: \.id) { revision in
-                                    Button("버전 \(revision.version) · \(revision.createdAt.formatted(date: .numeric, time: .shortened))") {
+                                    Button("버전 \(revision.version) · \(revision.createdAt.formatted(Date.FormatStyle(date: .numeric, time: .shortened, timeZone: calendar.timeZone)))") {
                                         model.selectRevision(revision)
                                     }
                                 }
@@ -230,6 +242,20 @@ struct SecretsScreen: View {
                     .disabled(model.hasRecoverableDraft)
             }
         }
+    }
+    private func handleNewEntryRequest() {
+        guard model.requestsNewEntry, !model.isLocked, !model.hasRecoverableDraft else { return }
+        model.requestsNewEntry = false
+        showsTrash = false
+        navigate(to: nil)
+    }
+    private func moveCell(from cell: CellFocus, backwards: Bool) -> KeyPress.Result {
+        let cells = model.rows.flatMap { [CellFocus.key($0.id), .value($0.id)] }
+        guard let index = cells.firstIndex(of: cell) else { return .ignored }
+        let next = index + (backwards ? -1 : 1)
+        guard cells.indices.contains(next) else { return .ignored }
+        cellFocused = cells[next]
+        return .handled
     }
     private func navigate(to item: SecretMetadata?) {
         pendingItem = item; pendingNew = item == nil
