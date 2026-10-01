@@ -28,6 +28,11 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
     private var onLine: (@Sendable (String) -> Void)?
     private var onClose: (@Sendable (TransportCloseReason) -> Void)?
     private var didClose = false
+    // 종료 알림은 stdout EOF와 프로세스 종료가 모두 관찰된 뒤에 보낸다(응답 직후 종료하는 경우의 경쟁 방지).
+    private var stdoutEOF = false
+    private var exitStatus: Int32?
+    /// 프로세스 종료 후 stdout EOF를 기다리는 최대 시간(자손 프로세스가 파이프를 붙잡는 경우 대비).
+    private let eofGraceAfterExit: TimeInterval = 1.0
 
     public init(executableURL: URL,
                 arguments: [String],
@@ -67,9 +72,7 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
             self?.consumeStderr(handle.availableData)
         }
         process.terminationHandler = { [weak self] proc in
-            // 종료 전에 출력된 stdout 줄을 모두 전달한 뒤 종료를 알린다(응답 직후 종료하는 경우의 경쟁 방지).
-            self?.drainStdoutAfterExit()
-            self?.emitClose(.exited(proc.terminationStatus))
+            self?.processDidExit(proc.terminationStatus)
         }
 
         try process.run()
@@ -106,7 +109,7 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
 
     private func consumeStdout(_ data: Data) {
         guard !data.isEmpty else {
-            flushStdoutBuffer()
+            stdoutDidReachEOF()
             return
         }
         guard let text = String(data: data, encoding: .utf8) else { return }
@@ -126,14 +129,32 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
         for line in lines { handler?(line) }
     }
 
-    private func drainStdoutAfterExit() {
-        let reader = stdoutPipe.fileHandleForReading
-        reader.readabilityHandler = nil
-        // readabilityHandler가 이미 읽어 처리 중인 블록이 버퍼에 반영되도록 잠금을 한 번 거친다.
-        lock.lock(); lock.unlock()
-        let rest = (try? reader.readToEnd()) ?? nil
-        if let rest, !rest.isEmpty { consumeStdout(rest) }
+    /// stdout EOF: 남은 버퍼를 전달하고, 프로세스가 이미 종료됐으면 종료를 알린다.
+    /// readabilityHandler 안에서 호출되므로 이 시점까지 읽은 모든 줄은 이미 전달된 상태다.
+    private func stdoutDidReachEOF() {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
         flushStdoutBuffer()
+        lock.lock()
+        stdoutEOF = true
+        let status = exitStatus
+        lock.unlock()
+        if let status { emitClose(.exited(status)) }
+    }
+
+    private func processDidExit(_ status: Int32) {
+        lock.lock()
+        exitStatus = status
+        let eof = stdoutEOF
+        lock.unlock()
+        if eof {
+            emitClose(.exited(status))
+            return
+        }
+        // 자손 프로세스가 stdout을 계속 열어 두면 EOF가 오지 않으므로 유예 후 강제로 알린다.
+        DispatchQueue.global().asyncAfter(deadline: .now() + eofGraceAfterExit) { [weak self] in
+            self?.flushStdoutBuffer()
+            self?.emitClose(.exited(status))
+        }
     }
 
     private func flushStdoutBuffer() {
