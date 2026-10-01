@@ -176,6 +176,20 @@ public final class BackupService: @unchecked Sendable {
         try Self.verifyBackup(backup)
     }
 
+    /// 디렉터리 이름으로 백업을 검증한다.
+    ///
+    /// 이름이 안전하지 않거나(`/`·`..` 포함, 숨김/`.tmp-` 접두사) `backupRoot/<이름>` 디렉터리가
+    /// 없으면 `false`를 돌려준다(호출자가 not-found를 안내한다). 디렉터리가 있으면 manifest를 읽어
+    /// 형식·해시·integrity를 검증하고, 손상은 그대로 던진다(누락과 구분).
+    @discardableResult
+    public func verify(directoryNamed name: String) throws -> Bool {
+        guard let directory = Self.existingBackupDirectory(named: name, root: paths.backupRoot) else {
+            return false
+        }
+        try Self.verifyBackup(at: directory)
+        return true
+    }
+
     // MARK: - 내부: 스테이징
 
     /// 스냅샷 대상. live DB는 Online Backup API로, 닫힌 파일은 바이트 복사로 처리한다.
@@ -327,9 +341,24 @@ public final class BackupService: @unchecked Sendable {
 
     // MARK: - 내부: 검증
 
+    /// 이름으로 기존 백업 디렉터리를 찾는다. 안전하지 않은 이름·`backupRoot` 밖·디렉터리 아님은 nil.
+    static func existingBackupDirectory(named name: String, root: URL) -> URL? {
+        guard !name.isEmpty, !name.contains("/"), !name.contains(".."),
+              !name.hasPrefix(".") else { return nil }
+        let directory = root.appendingPathComponent(name, isDirectory: true)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDir),
+              isDir.boolValue else { return nil }
+        return directory
+    }
+
     static func verifyBackup(_ backup: BackupInfo) throws {
+        try verifyBackup(at: backup.directory)
+    }
+
+    static func verifyBackup(at directory: URL) throws {
         let fm = FileManager.default
-        let manifestURL = backup.directory.appendingPathComponent(manifestFileName)
+        let manifestURL = directory.appendingPathComponent(manifestFileName)
         guard fm.fileExists(atPath: manifestURL.path),
               let data = fm.contents(atPath: manifestURL.path) else {
             throw BackupFailure.manifestMissing
@@ -355,7 +384,7 @@ public final class BackupService: @unchecked Sendable {
         }
 
         for entry in manifest.files {
-            let url = backup.directory.appendingPathComponent(entry.name)
+            let url = directory.appendingPathComponent(entry.name)
             guard let bytes = fm.contents(atPath: url.path),
                   bytes.count == entry.size,
                   sha256Hex(bytes) == entry.sha256 else {
@@ -363,7 +392,7 @@ public final class BackupService: @unchecked Sendable {
             }
         }
         for entry in manifest.files where entry.name.hasSuffix(".sqlite") {
-            let url = backup.directory.appendingPathComponent(entry.name)
+            let url = directory.appendingPathComponent(entry.name)
             do {
                 let db = try SQLiteDatabase(path: url.path, readOnly: true)
                 defer { db.close() }
@@ -380,7 +409,7 @@ public final class BackupService: @unchecked Sendable {
         // vault.sqlite가 있으면 실제 vault_meta.key_version이 manifest와 같은지 대조한다.
         // 손상·누락 시에도 값이나 Secret 내용 없이 manifestInvalid로만 알린다.
         if manifest.files.contains(where: { $0.name == vaultFileName }) {
-            let url = backup.directory.appendingPathComponent(vaultFileName)
+            let url = directory.appendingPathComponent(vaultFileName)
             do {
                 let db = try SQLiteDatabase(path: url.path, readOnly: true)
                 defer { db.close() }

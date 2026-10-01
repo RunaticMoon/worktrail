@@ -291,7 +291,10 @@ public enum WorkLogCLI {
                                                                   mode: .userRequested, useAI: false)
             let body = try latestContent(env, reportId: result.report.id)
             let range = result.facts.range
-            let header = "[제출용 주간보고] 기간 \(range.start.iso) ~ \(range.endExclusive.iso)"
+            var header = "[제출용 주간보고] 실적 기간 \(inclusiveText(range))"
+            if let plan = result.facts.planRange {
+                header += " · 계획 기간 \(inclusiveText(plan))"
+            }
             return ok(header + "\n" + body + "\n")
         } catch {
             return domainError(error)
@@ -314,7 +317,7 @@ public enum WorkLogCLI {
                                                                    mode: .userRequested, useAI: false)
             let body = try latestContent(env, reportId: result.report.id)
             let range = result.facts.range
-            let header = "[상세 성과 리포트] \(type.rawValue) 기간 \(range.start.iso) ~ \(range.endExclusive.iso)"
+            let header = "[상세 성과 리포트] \(type.rawValue) 기간 \(inclusiveText(range))"
             return ok(header + "\n" + body + "\n")
         } catch {
             return domainError(error)
@@ -390,11 +393,10 @@ public enum WorkLogCLI {
             return usageError("backup verify에는 디렉터리 이름이 필요합니다.")
         }
         do {
-            let infos = try env.backup.listBackups()
-            guard let info = infos.first(where: { $0.directory.lastPathComponent == name }) else {
+            let found = try env.backup.verify(directoryNamed: name)
+            guard found else {
                 return CLIResult(exitCode: 1, stdout: "", stderr: "백업을 찾을 수 없습니다: \(name)\n")
             }
-            try env.backup.verify(info)
             return ok("verify ok \(name)\n")
         } catch {
             return CLIResult(exitCode: 1, stdout: "", stderr: describe(error) + "\n")
@@ -470,6 +472,12 @@ public enum WorkLogCLI {
     }
 
     // MARK: - 결과 헬퍼
+
+    /// 배타 종료일 구간 [start, endExclusive)을 사람이 읽는 포함 종료일(마지막 업무일)로 바꾼다.
+    private static func inclusiveText(_ range: DateRange) -> String {
+        let lastDay = WorkCalendar().adding(days: -1, to: range.endExclusive)
+        return "\(range.start.iso) ~ \(lastDay.iso)"
+    }
 
     private static func ok(_ stdout: String) -> CLIResult {
         CLIResult(exitCode: 0, stdout: stdout, stderr: "")
