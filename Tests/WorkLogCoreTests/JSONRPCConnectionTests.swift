@@ -330,4 +330,19 @@ final class JSONRPCConnectionTests: XCTestCase {
         XCTAssertEqual(lines.value, ["{\"text\":\"한글\"}"])
         transport.close()
     }
+
+    // 15. stderr 청크가 멀티바이트 문자 중간에서 잘려도 줄 수를 정확히 센다(내용은 저장하지 않음)
+    func testStderrSplitMultibyteCharacterCountsLines() async throws {
+        // '한' = ED 95 9C. '한'의 첫 바이트까지 stderr로 출력하고 0.3초 후 나머지+"\n"을 출력한 뒤
+        // 한 줄을 더 출력한다 → 줄 수 2.
+        let script = "printf '\\355' 1>&2; sleep 0.3; printf '\\225\\234\\n' 1>&2; "
+            + "printf 'second\\n' 1>&2"
+        let transport = ProcessLineTransport(executableURL: URL(fileURLWithPath: "/bin/sh"),
+                                             arguments: ["-c", script])
+        try transport.start(onLine: { _ in }, onClose: { _ in })
+
+        try await waitUntil { transport.stderrLineCount == 2 }
+        XCTAssertEqual(transport.stderrLineCount, 2)
+        transport.close()
+    }
 }

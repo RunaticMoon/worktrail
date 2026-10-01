@@ -23,9 +23,10 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
 
     private let lock = NSLock()
     private var _stderrLineCount = 0
-    // stdout은 바이트 버퍼로 모은다. 멀티바이트 문자가 chunk 경계에서 잘려도 줄 단위로만 디코딩한다.
+    // stdout·stderr 모두 바이트 버퍼로 모은다. 멀티바이트 문자가 chunk 경계에서 잘려도
+    // 줄바꿈(0x0A) 바이트로만 줄을 세므로 줄 수를 놓치지 않는다(stderr 내용은 저장하지 않음).
     private var stdoutBuffer = Data()
-    private var stderrBuffer = ""
+    private var stderrBuffer = Data()
     private var onLine: (@Sendable (String) -> Void)?
     private var onClose: (@Sendable (TransportCloseReason) -> Void)?
     private var didClose = false
@@ -173,13 +174,12 @@ public final class ProcessLineTransport: LineTransport, @unchecked Sendable {
 
     private func consumeStderr(_ data: Data) {
         guard !data.isEmpty else { return }
-        guard let text = String(data: data, encoding: .utf8) else { return }
 
         lock.lock()
-        stderrBuffer += text
+        stderrBuffer.append(data)
         var count = 0
-        while let index = stderrBuffer.firstIndex(of: "\n") {
-            stderrBuffer = String(stderrBuffer[stderrBuffer.index(after: index)...])
+        while let index = stderrBuffer.firstIndex(of: 0x0A) {
+            stderrBuffer.removeSubrange(stderrBuffer.startIndex...index)
             count += 1
         }
         _stderrLineCount += count

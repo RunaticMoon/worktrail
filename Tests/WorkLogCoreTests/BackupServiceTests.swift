@@ -678,4 +678,37 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertFalse(leftovers.contains { $0.contains(".restore-") }, "temp 파일이 남았다: \(leftovers)")
         XCTAssertFalse(leftovers.contains { $0.contains(".stash-") }, "stash 파일이 남았다: \(leftovers)")
     }
+
+    // MARK: - BACK-T13: root 밖을 가리키는 심볼릭 링크는 이름 검증에서 거부
+
+    func testVerifyByNameRejectsSymlinkOutsideBackupRoot() throws {
+        let root = try makeRoot()
+        let paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(),
+                                    clock: clock, ids: SequentialIDGenerator(prefix: "src"))
+        defer { stores.close() }
+
+        let backupService = makeService(paths, stores, clock: clock)
+        let info = try backupService.createBackup(reason: .manual)
+        let name = info.directory.lastPathComponent
+        XCTAssertTrue(try backupService.verify(directoryNamed: name),
+                      "정상 백업 이름은 통과해야 한다")
+
+        // root 밖 임시 디렉터리에 그 백업을 복사한다.
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let outsideBackup = outside.appendingPathComponent("copied-backup", isDirectory: true)
+        try FileManager.default.copyItem(at: info.directory, to: outsideBackup)
+
+        // backupRoot 안에 그 바깥 디렉터리를 가리키는 심볼릭 링크를 만든다.
+        let link = paths.backupRoot.appendingPathComponent("evil-link", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outsideBackup)
+
+        XCTAssertFalse(try backupService.verify(directoryNamed: "evil-link"),
+                       "root 밖을 가리키는 심볼릭 링크는 거부해야 한다")
+        // 정상 백업 이름은 여전히 통과한다(정규 경로가 /private 등으로 바뀌는 플랫폼 차이 흡수 확인).
+        XCTAssertTrue(try backupService.verify(directoryNamed: name),
+                      "심볼릭 링크를 추가한 뒤에도 정상 백업 이름은 통과해야 한다")
+    }
 }
