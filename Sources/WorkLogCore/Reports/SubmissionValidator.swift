@@ -22,6 +22,7 @@ public enum SubmissionValidator {
         let confirmedPlanTaskIds = Set(facts.confirmedPlans.map(\.taskId))
         let sourceIds = facts.sourceIds
         let knownURLs = Set(facts.sources.flatMap(\.sourceUrls))
+        let sourceById = Dictionary(facts.sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         let allItems = draft.groups.flatMap(\.items)
 
@@ -103,6 +104,33 @@ public enum SubmissionValidator {
                         severity: .error, code: "unknown_url",
                         message: "근거에 없는 URL입니다: \(url)", itemId: itemId))
                 }
+
+                // REP-T09(성과 리포트와 동일 규칙): 근거로 확인되지 않은 수치 → warning.
+                let citedTexts = item.evidenceIds.compactMap { sourceById[$0]?.text }.map(normalized)
+                for token in uniqueMatches(numberPattern, in: item.text) {
+                    let needle = normalized(token)
+                    if !citedTexts.contains(where: { $0.contains(needle) }) {
+                        findings.append(ValidationFinding(
+                            severity: .warning, code: "unverified_number",
+                            message: "근거에서 확인되지 않은 수치입니다(사용자 검토 필요): \(token)",
+                            itemId: itemId))
+                    }
+                }
+
+                // 본문을 가져오지 않은 링크의 내용을 주장 → warning.
+                let hasUnfetchedLink = item.evidenceIds
+                    .compactMap { sourceById[$0] }
+                    .contains { !$0.sourceUrls.isEmpty && !$0.urlBodyFetched }
+                if hasUnfetchedLink {
+                    let lower = item.text.lowercased()
+                    let phrases = ["코드 변경을 확인", "diff", "pr 내용", "변경 내용을 검토", "링크 내용"]
+                    if phrases.contains(where: { lower.contains($0) }) {
+                        findings.append(ValidationFinding(
+                            severity: .warning, code: "unfetched_link_claim",
+                            message: "본문을 가져오지 않은 링크의 내용을 주장하고 있습니다.",
+                            itemId: itemId))
+                    }
+                }
             }
         }
 
@@ -158,5 +186,29 @@ public enum SubmissionValidator {
             if !url.isEmpty { urls.append(url) }
         }
         return urls
+    }
+
+    // MARK: - 수치·링크 검사 유틸 (PerformanceValidator와 같은 규칙·정규식)
+
+    /// 수치 표현: 숫자 + 단위.
+    private static let numberPattern = "[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|ms)"
+
+    /// 패턴 매치를 중복 없이 등장 순서대로 반환한다.
+    private static func uniqueMatches(_ pattern: String, in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        var seen = Set<String>()
+        var result: [String] = []
+        for match in regex.matches(in: text, range: range) {
+            let token = ns.substring(with: match.range)
+            if seen.insert(token).inserted { result.append(token) }
+        }
+        return result
+    }
+
+    /// 공백을 무시한 비교용 정규화.
+    private static func normalized(_ text: String) -> String {
+        String(text.filter { !$0.isWhitespace })
     }
 }

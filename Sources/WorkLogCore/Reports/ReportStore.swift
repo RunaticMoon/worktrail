@@ -212,7 +212,8 @@ public final class ReportStore {
             throw WorkLogError.invalidTransition("superseded 버전은 편집할 수 없습니다: \(versionId)")
         case .confirmed:
             // 확정본은 불변. 같은 스냅샷·템플릿·생성기로 새 edited 버전을 만든다.
-            return try db.transaction {
+            // 콜백은 transaction 밖에서 호출한다(롤백된 상태를 알리지 않음).
+            let (saved, newVersionId) = try db.transaction { () -> (ReportVersion, String) in
                 let versions = try repo.reportVersions(reportId: current.reportId)
                 let nextVersion = (versions.map(\.version).max() ?? 0) + 1
                 let versionId = ids.make()
@@ -225,11 +226,13 @@ public final class ReportStore {
                 edited.createdAt = clock.now()
                 edited.confirmedAt = nil
                 try repo.insertReportVersion(edited)
-                guard let saved = try repo.reportVersion(id: versionId) else {
+                guard let inserted = try repo.reportVersion(id: versionId) else {
                     throw WorkLogError.storage("report_version \(versionId) 삽입 후 조회 실패")
                 }
-                return saved
+                return (inserted, versionId)
             }
+            repo.onSourceChanged?("report", newVersionId)
+            return saved
         case .draft, .edited:
             var updated = current
             updated.content = content

@@ -334,4 +334,24 @@ final class ReportStoreTests: XCTestCase {
         XCTAssertTrue(calls.contains { $0.0 == "report" && $0.1 == v2.id })
         XCTAssertTrue(calls.contains { $0.0 == "report" && $0.1 == v1.id }, "대체된 버전도 알린다")
     }
+
+    // MARK: 14 — 확정본 편집(새 edited 버전)도 색인 콜백을 호출한다
+
+    func testEditConfirmedNotifiesSourceChangedForNewVersion() throws {
+        let (store, repo) = try makeStore()
+        let report = try ensureSubmissionReport()
+        var calls: [(String, String)] = []
+        repo.onSourceChanged = { calls.append(($0, $1)) }
+
+        let first = try store.saveGenerated(reportId: report.id, facts: makeFacts(metrics: ReportMetrics(activityCount: 1)),
+                                            draft: makeDraft(content: "확정 내용"), mode: .automatic)
+        guard case .created(let v1) = first else { return XCTFail() }
+        _ = try store.confirm(versionId: v1.id)
+
+        calls.removeAll()
+        let edited = try store.edit(versionId: v1.id, content: "확정 후 편집")
+        XCTAssertNotEqual(edited.id, v1.id)
+        XCTAssertTrue(calls.contains { $0.0 == "report" && $0.1 == edited.id },
+                      "확정본 편집으로 만든 새 버전도 검색 색인에 알린다: \(calls)")
+    }
 }

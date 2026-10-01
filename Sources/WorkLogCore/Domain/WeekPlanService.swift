@@ -167,10 +167,24 @@ public final class WeekPlanService: @unchecked Sendable {
 
     /// 보고서용: 확정 항목만 정규화한다. 각 항목 label이 nil이면 표시용 label을 채운 뒤 normalize
     /// (wholeTask: nil 유지, taskProject: "<프로젝트명> 적용", checklistItem: 체크리스트 text).
+    /// 기존 시그니처 — knownAt 필터 없이 모든 확정 항목을 포함한다.
     public func confirmedFacts(weekStart: WorkDate) throws -> [FactPlanItem] {
+        try confirmedFacts(weekStart: weekStart, knownAt: nil)
+    }
+
+    /// 보고서용: 확정 항목만 정규화한다. knownAt이 주어지면 `confirmedAt > knownAt`인 항목을
+    /// 제외해, 그 시점 이후에 확정한 계획이 과거 스냅샷에 섞이지 않게 한다.
+    /// `confirmedAt`이 기록되지 않은(nil) 항목은 확정 시각을 알 수 없으므로 포함한다.
+    public func confirmedFacts(weekStart: WorkDate, knownAt: Date?) throws -> [FactPlanItem] {
         try requireMonday(weekStart)
         guard let plan = try repo.weekPlan(weekStart: weekStart) else { return [] }
-        let confirmed = try repo.weekPlanItems(planId: plan.id).filter { $0.state == .confirmed }
+        var confirmed = try repo.weekPlanItems(planId: plan.id).filter { $0.state == .confirmed }
+        if let knownAt {
+            confirmed = confirmed.filter { item in
+                guard let confirmedAt = item.confirmedAt else { return true }
+                return confirmedAt <= knownAt
+            }
+        }
 
         var filled: [WeekPlanItem] = []
         filled.reserveCapacity(confirmed.count)
