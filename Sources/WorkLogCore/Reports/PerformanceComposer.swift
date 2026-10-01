@@ -178,7 +178,16 @@ public enum PerformanceComposer {
     }
 
     private static func item(for source: FactSource, task: FactTask) -> PerformanceItem {
-        let projectIds = source.projectIds.isEmpty ? task.projectIds : source.projectIds
+        // 근거에 프로젝트가 지정되지 않았으면 단일 프로젝트 Task만 그 프로젝트로 귀속한다.
+        // 다중 프로젝트 Task의 근거를 모든 프로젝트에 퍼뜨리면 근거 없는 프로젝트별 기여가 된다(REP-T10).
+        let projectIds: [String]
+        if !source.projectIds.isEmpty {
+            projectIds = source.projectIds
+        } else if task.projectIds.count == 1 {
+            projectIds = task.projectIds
+        } else {
+            projectIds = []
+        }
         return PerformanceItem(itemId: "", taskIds: [task.id], projectIds: projectIds,
                                kind: kind(for: source.kind), text: text(for: source),
                                evidenceIds: [source.id])

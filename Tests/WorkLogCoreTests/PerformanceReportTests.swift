@@ -239,6 +239,18 @@ final class PerformanceReportTests: XCTestCase {
         XCTAssertFalse(PerformanceValidator.hasErrors(findings))
     }
 
+    func testMultiProjectEvidenceWithoutProjectIsNotSpreadToAllProjects() {
+        let common = task("t2", "공통", projectIds: ["p1", "p2"], activitySourceIds: ["activity:a9"])
+        let a9 = source("activity:a9", .activity, workDate: date("2026-09-30"), taskId: "t2",
+                        text: "공통 설정 정리")
+        let input = facts(projects: [project("p1", "G"), project("p2", "J")], tasks: [common], sources: [a9])
+
+        let draft = PerformanceComposer.compose(input)
+        let evidenceItem = draft.sections.flatMap(\.items).first { $0.evidenceIds == ["activity:a9"] }
+        XCTAssertEqual(evidenceItem?.projectIds, [])
+        XCTAssertFalse(PerformanceValidator.hasErrors(PerformanceValidator.validate(draft, facts: input)))
+    }
+
     // MARK: - 8. validate 실패
 
     func testValidateSchemaMismatch() {
