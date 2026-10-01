@@ -15,8 +15,8 @@ final class ReportServiceTests: XCTestCase {
             ?? Date(timeIntervalSince1970: 1_790_000_000)
     }
 
-    private func makeRepo(now: Date) throws -> WorkRepository {
-        let repo = try WorkRepository.inMemory(clock: FixedClock(now), ids: SequentialIDGenerator())
+    private func makeRepo(clock: FixedClock) throws -> WorkRepository {
+        let repo = try WorkRepository.inMemory(clock: clock, ids: SequentialIDGenerator())
         try FixtureSeeder.seed(repo, fixture: try FixtureLoader.load())
         return repo
     }
@@ -31,13 +31,14 @@ final class ReportServiceTests: XCTestCase {
         let provider: MockAIProvider
         let stagingRoot: URL
         let service: ReportService
+        let clock: FixedClock
     }
 
     @discardableResult
     private func makeHarness(responses: [AIJobType: String] = [:], useRunner: Bool = true,
-                             now: Date? = nil) throws -> Harness {
-        let now = now ?? fixtureNow()
-        let repo = try makeRepo(now: now)
+                             now: Date? = nil, clock: FixedClock? = nil) throws -> Harness {
+        let clock = clock ?? FixedClock(now ?? fixtureNow())
+        let repo = try makeRepo(clock: clock)
         let periods = Periods()
         let builder = ReportFactsBuilder(repo: repo, periods: periods,
                                          planService: WeekPlanService(repo: repo, periods: periods))
@@ -53,7 +54,7 @@ final class ReportServiceTests: XCTestCase {
                                     evaluationPeriods: evaluationPeriods)
         return Harness(repo: repo, periods: periods, builder: builder, store: store, templates: templates,
                        evaluationPeriods: evaluationPeriods, provider: provider, stagingRoot: stagingRoot,
-                       service: service)
+                       service: service, clock: clock)
     }
 
     private func created(_ result: ReportGenerationResult,
@@ -186,6 +187,53 @@ final class ReportServiceTests: XCTestCase {
         guard case .unchanged = second.outcome else { return XCTFail("unchanged를 기대: \(second.outcome)") }
         XCTAssertTrue(second.aiSkippedUnchanged)
         XCTAssertEqual(h.provider.runCount, runCountAfterFirst, "원본이 같으면 AI를 다시 부르지 않는다")
+    }
+
+    // MARK: - 6b. PERF-05 + 결함1: 시각이 지나도 digest는 안정
+    // (knownAt이 digest에 들어가면 isStale이 항상 true가 되고 자동 생략이 깨진다)
+
+    func testIsStaleIsStableWhenOnlyClockAdvances() async throws {
+        let h = try makeHarness(useRunner: false)
+        let first = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
+                                                           useAI: false)
+        let version = try created(first)
+        XCTAssertFalse(try h.service.isStale(versionId: version.id))
+
+        h.clock.advance(by: 5)
+        XCTAssertFalse(try h.service.isStale(versionId: version.id),
+                       "knownAt만 지나간 것으로는 stale이 되면 안 된다")
+    }
+
+    func testAutomaticModeSkipsUnchangedAIAfterClockAdvances() async throws {
+        let h = try makeHarness()
+
+        let first = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
+                                                           useAI: true)
+        _ = try created(first)
+        let runCountAfterFirst = h.provider.runCount
+        XCTAssertEqual(runCountAfterFirst, 1)
+
+        h.clock.advance(by: 5)
+        let second = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
+                                                            useAI: true)
+        guard case .unchanged = second.outcome else { return XCTFail("unchanged를 기대: \(second.outcome)") }
+        XCTAssertTrue(second.aiSkippedUnchanged)
+        XCTAssertEqual(h.provider.runCount, runCountAfterFirst,
+                       "시각만 지나고 원본이 같으면 AI를 다시 부르지 않는다")
+    }
+
+    func testIsStaleDetectsNewActivityAfterClockAdvance() async throws {
+        let h = try makeHarness(useRunner: false)
+        let first = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
+                                                           useAI: false)
+        let version = try created(first)
+
+        h.clock.advance(by: 5)
+        let taskService = TaskService(repo: h.repo)
+        _ = try taskService.addActivity(taskId: "task-A", body: "추가 활동",
+                                        workDate: WorkDate("2026-10-02")!)
+
+        XCTAssertTrue(try h.service.isStale(versionId: version.id))
     }
 
     // MARK: - 7. REP-T11: 확정 후 자동 재생성

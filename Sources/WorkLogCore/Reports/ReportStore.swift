@@ -226,6 +226,12 @@ public final class ReportStore {
                 edited.createdAt = clock.now()
                 edited.confirmedAt = nil
                 try repo.insertReportVersion(edited)
+                // 확정본 편집으로 만든 새 버전은 근거(report_evidence)를 그대로 잇는다.
+                let evidence = try repo.reportEvidence(versionId: current.id)
+                try repo.insertReportEvidence(evidence.map {
+                    ReportEvidenceRow(reportVersionId: versionId, itemId: $0.itemId, taskId: $0.taskId,
+                                      sourceId: $0.sourceId, sourceRevision: $0.sourceRevision)
+                })
                 guard let inserted = try repo.reportVersion(id: versionId) else {
                     throw WorkLogError.storage("report_version \(versionId) 삽입 후 조회 실패")
                 }
