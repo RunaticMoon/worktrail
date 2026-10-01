@@ -118,7 +118,92 @@ final class SkillBindingTests: XCTestCase {
         XCTAssertNil(ref.contentHash)
     }
 
-    // MARK: - 4. AIJobRunner: 바인딩 해석·재사용·해시 변경 시 새 실행
+    // MARK: - 4. 보호 경로는 읽지 않고 nil (결함 5)
+
+    func testBlockedPathPrefixReturnsNilWithoutReading() throws {
+        let dir = try makeTempDir()
+        let blockedDir = dir.appendingPathComponent("blocked", isDirectory: true)
+        try FileManager.default.createDirectory(at: blockedDir, withIntermediateDirectories: true)
+        let blockedSkill = blockedDir.appendingPathComponent("SKILL.md")
+        try "blocked-content".write(to: blockedSkill, atomically: true, encoding: .utf8)
+
+        // 정상 스킬(차단 prefix 밖).
+        let okDir = dir.appendingPathComponent("ok-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: okDir, withIntermediateDirectories: true)
+        let okSkill = okDir.appendingPathComponent("SKILL.md")
+        try "ok-content".write(to: okSkill, atomically: true, encoding: .utf8)
+
+        // 디렉터리 경계: prefix와 이름이 비슷할 뿐 하위가 아닌 경로는 차단하지 않는다.
+        let siblingDir = dir.appendingPathComponent("blocked-extra", isDirectory: true)
+        try FileManager.default.createDirectory(at: siblingDir, withIntermediateDirectories: true)
+        let siblingSkill = siblingDir.appendingPathComponent("SKILL.md")
+        try "sibling-content".write(to: siblingSkill, atomically: true, encoding: .utf8)
+
+        let resolver = SkillBindingResolver(
+            bindings: [
+                AIJobType.submissionWeekly.rawValue: blockedSkill.path,
+                AIJobType.performanceReport.rawValue: okSkill.path,
+                AIJobType.groundedAnswer.rawValue: siblingSkill.path,
+            ],
+            blockedPathPrefixes: [blockedDir.path])
+
+        XCTAssertNil(resolver.skill(for: .submissionWeekly), "차단 prefix 하위는 읽지 않고 nil")
+        XCTAssertNotNil(resolver.skill(for: .performanceReport)?.contentHash, "prefix 밖 정상 스킬은 해시")
+        XCTAssertNotNil(resolver.skill(for: .groundedAnswer)?.contentHash,
+                        "prefix 경계 밖(blocked-extra)은 차단하지 않는다")
+    }
+
+    func testCodexAuthAndSQLitePathsReturnNilWithoutReading() throws {
+        let dir = try makeTempDir()
+
+        let codexDir = dir.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let authFile = codexDir.appendingPathComponent("auth.json")
+        try #"{"token":"secret"}"#.write(to: authFile, atomically: true, encoding: .utf8)
+
+        let outsideAuthDir = dir.appendingPathComponent("auth-outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outsideAuthDir, withIntermediateDirectories: true)
+        let outsideAuth = outsideAuthDir.appendingPathComponent("auth.json")
+        try #"{"other":1}"#.write(to: outsideAuth, atomically: true, encoding: .utf8)
+
+        let sqliteFile = dir.appendingPathComponent("x.sqlite")
+        try "SQLite format 3\u{0}".write(to: sqliteFile, atomically: true, encoding: .utf8)
+        let walFile = dir.appendingPathComponent("x.sqlite-wal")
+        try "wal".write(to: walFile, atomically: true, encoding: .utf8)
+
+        let resolver = SkillBindingResolver(bindings: [
+            AIJobType.submissionWeekly.rawValue: authFile.path,
+            AIJobType.performanceReport.rawValue: outsideAuth.path,
+            AIJobType.groundedAnswer.rawValue: sqliteFile.path,
+            AIJobType.evidenceQuiz.rawValue: walFile.path,
+        ])
+
+        XCTAssertNil(resolver.skill(for: .submissionWeekly), "`.codex` 구성요소는 차단")
+        XCTAssertNil(resolver.skill(for: .performanceReport), "파일명 auth.json은 위치와 무관하게 차단")
+        XCTAssertNil(resolver.skill(for: .groundedAnswer), "sqlite 확장자는 차단")
+        XCTAssertNil(resolver.skill(for: .evidenceQuiz), "sqlite-wal 확장자는 차단")
+    }
+
+    func testSymlinkToBlockedPathReturnsNil() throws {
+        let dir = try makeTempDir()
+        let codexDir = dir.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let authFile = codexDir.appendingPathComponent("auth.json")
+        try "secret".write(to: authFile, atomically: true, encoding: .utf8)
+
+        let linkDir = dir.appendingPathComponent("link-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: linkDir, withIntermediateDirectories: true)
+        let link = linkDir.appendingPathComponent("SKILL.md")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: authFile)
+
+        let resolver = SkillBindingResolver(bindings: [
+            AIJobType.submissionWeekly.rawValue: link.path,
+        ])
+        XCTAssertNil(resolver.skill(for: .submissionWeekly),
+                     "차단 경로를 가리키는 심볼릭 링크는 해석 후에도 nil")
+    }
+
+    // MARK: - 5. AIJobRunner: 바인딩 해석·재사용·해시 변경 시 새 실행
 
     func testRunnerUsesResolvedSkillAndReusesUntilHashChanges() async throws {
         let dir = try makeTempDir()
@@ -168,7 +253,7 @@ final class SkillBindingTests: XCTestCase {
         XCTAssertNil(result.skill)
     }
 
-    // MARK: - 5. AppEnvironment: updateSettings 반영
+    // MARK: - 6. AppEnvironment: updateSettings 반영
 
     func testEnvironmentResolverReflectsUpdatedBindings() throws {
         let root = try makeTempDir()
@@ -188,7 +273,7 @@ final class SkillBindingTests: XCTestCase {
         XCTAssertEqual(env.skillResolver.skill(for: .submissionWeekly)?.name, "new-skill")
     }
 
-    // MARK: - 6. ReportService: 버전 skillRef 기록
+    // MARK: - 7. ReportService: 버전 skillRef 기록
 
     func testReportVersionRecordsResolvedSkillOnAISuccess() async throws {
         let probeRepo = try makeRepo(now: fixtureNow())
