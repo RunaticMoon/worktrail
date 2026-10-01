@@ -148,6 +148,42 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertEqual(second.seededTemplates, 0)
     }
 
+    // MARK: - 4b. 예약 작업 → 리포트 생성 연결
+
+    func testScheduledJobsGenerateSeparateSubmissionAndPerformanceReports() async throws {
+        let paths = try makePaths()
+        // 2026-10-05(월) 10:00 KST: 월요일 09:00 제출용 준비와 지난주 성과 작업이 모두 지난 시각.
+        let now = ISO8601DateFormatter().date(from: "2026-10-05T01:00:00Z")!
+        let env = try AppEnvironment.open(makeOptions(paths: paths, clock: FixedClock(now)))
+        _ = env.onLaunch()
+        XCTAssertNil(env.aiRunner)
+
+        let task = try env.tasks.createTask(title: "포맷터 도입",
+                                            workDate: WorkDate(year: 2026, month: 9, day: 30))
+        _ = try env.tasks.addActivity(taskId: task.id, body: "전체 코드 포맷 적용",
+                                      workDate: WorkDate(year: 2026, month: 10, day: 1))
+
+        let processed = try await env.runScheduledReports(since: WorkDate(year: 2026, month: 9, day: 28))
+        XCTAssertFalse(processed.isEmpty)
+        XCTAssertTrue(processed.allSatisfy { $0.state == .succeeded },
+                      "\(processed.map { "\($0.type.rawValue) \($0.state.rawValue) \($0.lastError ?? "")" })")
+        XCTAssertTrue(processed.contains { $0.type == .mondayReview })
+        XCTAssertTrue(processed.contains { $0.type == .weeklyPerformance })
+
+        let submission = try XCTUnwrap(env.repo.report(family: .submission, periodType: .weekly,
+                                                       periodKey: "2026-10-05"))
+        let performance = try XCTUnwrap(env.repo.reports(family: .performance)
+            .first { $0.periodType == .weekly })
+        XCTAssertNotEqual(submission.id, performance.id)
+        XCTAssertFalse(try env.repo.reportVersions(reportId: submission.id).isEmpty)
+        XCTAssertFalse(try env.repo.reportVersions(reportId: performance.id).isEmpty)
+        XCTAssertTrue(try env.repo.reports(family: .submission).allSatisfy { $0.family == .submission })
+
+        // 다시 실행해도 이미 성공한 작업은 재실행하지 않는다.
+        let again = try await env.runScheduledReports(since: WorkDate(year: 2026, month: 9, day: 28))
+        XCTAssertTrue(again.isEmpty)
+    }
+
     // MARK: - 5. updateSettings 반영·지속·검증
 
     func testUpdateSettingsAppliesAndPersists() throws {

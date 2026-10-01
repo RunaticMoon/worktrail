@@ -65,6 +65,8 @@ public final class AppEnvironment {
     public let evaluationPeriods: EvaluationPeriodService
     public let factsBuilder: ReportFactsBuilder
     public let reportStore: ReportStore
+    /// 제출용 주간보고·상세 성과 리포트 생성. AI가 꺼져 있으면 결정적 초안만 만든다.
+    public let reports: ReportService
     /// Secret 접근은 반드시 vaultSession을 통해서만 한다. SecretVault 인스턴스는 노출하지 않는다.
     public let vaultSession: VaultSession
     public let clipboard: ClipboardGuard
@@ -79,7 +81,7 @@ public final class AppEnvironment {
                  calendar: WorkCalendar, periods: Periods, repo: WorkRepository, search: SearchIndex,
                  tasks: TaskService, plans: WeekPlanService, dayBox: DayBoxService,
                  templates: TemplateStore, evaluationPeriods: EvaluationPeriodService,
-                 factsBuilder: ReportFactsBuilder, reportStore: ReportStore,
+                 factsBuilder: ReportFactsBuilder, reportStore: ReportStore, reports: ReportService,
                  vaultSession: VaultSession, clipboard: ClipboardGuard, backup: BackupService,
                  aiRunner: AIJobRunner?, memoLinks: MemoLinkSuggestionService?,
                  quiz: EvidenceQuizService?, groundedAnswers: GroundedAnswerService?) {
@@ -97,6 +99,7 @@ public final class AppEnvironment {
         self.evaluationPeriods = evaluationPeriods
         self.factsBuilder = factsBuilder
         self.reportStore = reportStore
+        self.reports = reports
         self.vaultSession = vaultSession
         self.clipboard = clipboard
         self.backup = backup
@@ -166,12 +169,15 @@ public final class AppEnvironment {
                                        maxQuestions: settings.maxQuizQuestions)
             groundedAnswers = GroundedAnswerService(index: search, runner: runner, templates: templates)
         }
+        let reports = ReportService(repo: repo, periods: periods, factsBuilder: factsBuilder,
+                                    store: reportStore, templates: templates, runner: aiRunner,
+                                    evaluationPeriods: evaluationPeriods)
 
         return AppEnvironment(options: options, settings: settings, settingsStore: settingsStore,
                               calendar: calendar, periods: periods, repo: repo, search: search,
                               tasks: tasks, plans: plans, dayBox: dayBox, templates: templates,
                               evaluationPeriods: evaluationPeriods, factsBuilder: factsBuilder,
-                              reportStore: reportStore, vaultSession: vaultSession, clipboard: clipboard,
+                              reportStore: reportStore, reports: reports, vaultSession: vaultSession, clipboard: clipboard,
                               backup: backup, aiRunner: aiRunner, memoLinks: memoLinks, quiz: quiz,
                               groundedAnswers: groundedAnswers)
     }
@@ -217,5 +223,42 @@ public final class AppEnvironment {
     /// 놓친 예약 작업 실행기를 만든다. 핸들러(리포트 연결)는 호출자가 제공한다.
     public func makeScheduler(since: WorkDate) -> SchedulerRunner {
         SchedulerRunner(repo: repo, periods: periods, clock: options.clock, settings: settings, since: since)
+    }
+
+    /// 놓친 예약 작업을 실행하고 리포트 생성에 연결한다(자동 모드: 확정본을 덮어쓰지 않고,
+    /// 원본 변화가 없으면 새 버전을 만들지 않는다). AI는 사용 가능할 때만 쓰고 실패하면 결정적 초안.
+    /// - dailyClose → 전날 Daily 성과 리포트
+    /// - weekly/monthly/quarterlyPerformance → 해당 기간 성과 리포트
+    /// - mondayReview → 그 주 월요일 제출용 주간보고 초안(게시하지 않음)
+    @discardableResult
+    public func runScheduledReports(since: WorkDate, maxAttempts: Int = 3) async throws -> [ScheduledJob] {
+        let reports = self.reports
+        let useAI = aiRunner != nil
+        return try await makeScheduler(since: since).runDue(maxAttempts: maxAttempts) { job in
+            try await Self.handleScheduled(job, reports: reports, useAI: useAI)
+        }
+    }
+
+    static func handleScheduled(_ job: DueJob, reports: ReportService, useAI: Bool) async throws {
+        switch job.type {
+        case .dailyClose:
+            _ = try await reports.generatePerformance(periodType: .daily, containing: job.range.start,
+                                                      mode: .automatic, useAI: useAI)
+        case .weeklyPerformance:
+            _ = try await reports.generatePerformance(periodType: .weekly, containing: job.range.start,
+                                                      mode: .automatic, useAI: useAI)
+        case .monthlyPerformance:
+            _ = try await reports.generatePerformance(periodType: .monthly, containing: job.range.start,
+                                                      mode: .automatic, useAI: useAI)
+        case .quarterlyPerformance:
+            _ = try await reports.generatePerformance(periodType: .quarterly, containing: job.range.start,
+                                                      mode: .automatic, useAI: useAI)
+        case .mondayReview:
+            // range = 지난주 [월, 이번 월) → 보고 월요일은 endExclusive.
+            _ = try await reports.generateSubmission(reportDate: job.range.endExclusive,
+                                                     mode: .automatic, useAI: useAI)
+        case .backup:
+            break
+        }
     }
 }
