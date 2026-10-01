@@ -189,8 +189,13 @@ public final class ReportService {
         let jobType: AIJobType = facts.family == .submission ? .submissionWeekly : .performanceReport
         let instructions = substitutePlaceholders(
             try templates.composeInstructions(versionId: version.id), facts: facts)
+        // 실행 시각(generatedAt·knownAt)은 내용이 아니므로 payload에서 고정값으로 둔다.
+        // 그래야 같은 원본의 자동 재시도가 같은 idempotency key를 써서 재시도 한도가 적용된다.
+        var payloadFacts = facts
+        payloadFacts.generatedAt = Date(timeIntervalSince1970: 0)
+        payloadFacts.knownAt = Date(timeIntervalSince1970: 0)
         let payloadJSON = try StableJSON.string(
-            AIPayload(jobType: jobType.rawValue, facts: facts))
+            AIPayload(jobType: jobType.rawValue, facts: payloadFacts))
         let request = AIJobRequest(
             jobType: jobType, periodStart: facts.range.start, periodEndExclusive: facts.range.endExclusive,
             instructions: instructions, payloadJSON: payloadJSON, templateVersionId: version.id,

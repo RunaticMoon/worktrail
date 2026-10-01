@@ -222,6 +222,27 @@ final class ReportServiceTests: XCTestCase {
                        "시각만 지나고 원본이 같으면 AI를 다시 부르지 않는다")
     }
 
+    func testAIPayloadOmitsRunTimestampsAndFailureIsNotAutoRetriedWhenUnchanged() async throws {
+        let h = try makeHarness()
+        h.provider.failure = AIProviderError(.network, "offline")
+
+        let first = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
+                                                           useAI: true)
+        XCTAssertTrue(first.usedFallback)
+        XCTAssertEqual(h.provider.runCount, 1)
+        // 실행 시각은 payload에서 고정값이라 같은 원본이면 같은 idempotency key가 된다.
+        let payload = try XCTUnwrap(h.provider.receivedInputs.last?.payloadJSON)
+        XCTAssertTrue(payload.contains("1970-01-01T00:00:00Z"))
+
+        // 원본 변화가 없으면 자동 모드는 AI를 다시 부르지 않는다(PERF-05). 재시도는 사용자 재생성으로 한다.
+        h.clock.advance(by: 600)
+        let second = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
+                                                            useAI: true)
+        XCTAssertTrue(second.aiSkippedUnchanged)
+        XCTAssertEqual(h.provider.runCount, 1)
+        XCTAssertEqual(try h.repo.db.scalarInt("SELECT COUNT(*) FROM ai_job"), 1)
+    }
+
     func testIsStaleDetectsNewActivityAfterClockAdvance() async throws {
         let h = try makeHarness(useRunner: false)
         let first = try await h.service.generateSubmission(reportDate: reportDate, mode: .automatic,
