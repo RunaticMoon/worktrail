@@ -696,6 +696,9 @@ final class BackupServiceTests: XCTestCase {
         for suffix in ["", "-wal", "-shm"] {
             try? FileManager.default.removeItem(atPath: targetPaths.vaultDatabase.path + suffix)
         }
+        // macOS SQLite처럼 닫힌 뒤에도 -wal/-shm이 남은 상태를 만든다. 롤백은 이것까지 원래대로 돌려야 한다.
+        try Data("wal-left-after-crash".utf8).write(to: URL(fileURLWithPath: targetPaths.workDatabase.path + "-wal"))
+        try Data(count: 32).write(to: URL(fileURLWithPath: targetPaths.workDatabase.path + "-shm"))
         let beforeWork = databaseBytes(targetPaths.workDatabase)
         XCTAssertFalse(beforeWork.isEmpty, "대상 work.sqlite가 있어야 롤백 복구를 확인할 수 있다")
 

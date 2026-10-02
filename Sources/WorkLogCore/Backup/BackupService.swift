@@ -523,16 +523,19 @@ public final class BackupService: @unchecked Sendable {
             var placed: [URL] = []
             var stashed: [(stash: URL, final: URL)] = []
             do {
-                for item in prepared where fm.fileExists(atPath: item.final.path) {
-                    let stash = item.final.deletingLastPathComponent()
-                        .appendingPathComponent("\(item.name).stash-\(token)")
-                    try? fm.removeItem(at: stash)
-                    try fm.moveItem(at: item.final, to: stash)
-                    stashed.append((stash, item.final))
-                }
-                for item in prepared where item.name.hasSuffix(".sqlite") {
-                    try? fm.removeItem(atPath: item.final.path + "-wal")
-                    try? fm.removeItem(atPath: item.final.path + "-shm")
+                // DB의 -wal/-shm도 함께 옮겨 둔다. 지우면 비정상 종료로 -wal에만 남은 기록이 롤백 후 사라지고,
+                // 남겨 두면 새 DB가 옛 WAL과 짝지어진다. (macOS SQLite는 닫힌 뒤에도 -wal/-shm을 남긴다.)
+                for item in prepared {
+                    let suffixes = item.name.hasSuffix(".sqlite") ? ["", "-wal", "-shm"] : [""]
+                    for suffix in suffixes {
+                        let existing = URL(fileURLWithPath: item.final.path + suffix)
+                        guard fm.fileExists(atPath: existing.path) else { continue }
+                        let stash = item.final.deletingLastPathComponent()
+                            .appendingPathComponent("\(item.name)\(suffix).stash-\(token)")
+                        try? fm.removeItem(at: stash)
+                        try fm.moveItem(at: existing, to: stash)
+                        stashed.append((stash, existing))
+                    }
                 }
                 for item in prepared {
                     try beforePlacing?(item.name)
