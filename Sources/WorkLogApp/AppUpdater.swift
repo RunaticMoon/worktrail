@@ -62,10 +62,10 @@ struct UpdateSettingsSection: View {
         Section("앱 업데이트") {
             LabeledContent("현재 버전", value: updater.version)
             Toggle("새 버전 자동 확인", isOn: Binding(
-                get: { updater.automaticallyChecksForUpdates }, set: updater.setAutomaticChecks))
+                get: { updater.automaticallyChecksForUpdates }, set: { updater.setAutomaticChecks($0) }))
                 .disabled(!updater.isConfigured)
             Toggle("업데이트 자동 다운로드", isOn: Binding(
-                get: { updater.automaticallyDownloadsUpdates }, set: updater.setAutomaticDownloads))
+                get: { updater.automaticallyDownloadsUpdates }, set: { updater.setAutomaticDownloads($0) }))
                 .disabled(!updater.isConfigured || !updater.automaticallyChecksForUpdates)
             CheckForUpdatesButton()
             Text(updater.isConfigured

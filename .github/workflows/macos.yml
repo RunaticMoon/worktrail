@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - name: Swift version
         run: swift --version
+      - name: Test release tooling
+        run: python3 -m unittest discover -s distribution/tests -v
       - name: Build all targets (including WorkLogApp)
         run: swift build --build-tests
       - name: Test WorkLogCore

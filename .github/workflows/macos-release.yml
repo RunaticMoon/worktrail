@@ -67,6 +67,8 @@ jobs:
       - name: Build all targets (including WorkLogApp)
         timeout-minutes: 20
         run: swift build --build-tests
+      - name: Test release tooling
+        run: python3 -m unittest discover -s distribution/tests -v
       - name: Test WorkLogCore
         timeout-minutes: 20
         run: swift test
