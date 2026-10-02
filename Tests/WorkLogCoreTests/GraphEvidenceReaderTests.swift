@@ -74,6 +74,16 @@ final class GraphEvidenceReaderTests: XCTestCase {
                    taskId: nil, projectIds: [], text: text)
     }
 
+    @discardableResult
+    private func insertSupplement(id: String, taskId: String, question: String = "보충 질문",
+                                  answer: String? = "보충 답변", applies: DateRange) throws -> EvidenceSupplement {
+        let supplement = EvidenceSupplement(id: id, taskId: taskId, topicKey: "topic-\(id)",
+                                            question: question, answer: answer, outcome: .answered,
+                                            applies: applies, sourceDigest: "digest-\(id)", recordedAt: now)
+        try repo.insertSupplement(supplement)
+        return supplement
+    }
+
     private func assertEndpointsExist(_ nodes: [GraphNode], _ edges: [GraphEdge],
                                       file: StaticString = #filePath, line: UInt = #line) {
         let keys = Set(nodes.map(\.id))
@@ -176,6 +186,62 @@ final class GraphEvidenceReaderTests: XCTestCase {
         let history = try XCTUnwrap(nodes.first { $0.id == historyID })
         XCTAssertNil(history.record)
         XCTAssertEqual(history.title, "스냅샷 원문 텍스트입니다")
+        XCTAssertEqual(edges.first?.to, historyID)
+        assertEndpointsExist(nodes, edges)
+    }
+
+    // MARK: 3b — supplement 근거는 보충 노드로 연결, 삭제·부재 시 historicalSource
+
+    func testSupplementSourceLinksToSupplementNode() throws {
+        let report = try insertReport(id: "rep-1", family: .performance, periodType: .weekly,
+                                      periodKey: "2026-W40", range: week1)
+        try repo.insertTask(WorkTask(id: "t1", title: "업무", createdAt: now))
+        try insertSupplement(id: "s1", taskId: "t1", question: "성과 보충 질문",
+                             answer: "성과 보충 답변", applies: week1)
+        try insertVersion(reportId: report.id, versionId: "v1", family: .performance, range: week1,
+                          version: 1, createdAt: date("2026-09-29T09:00:00+09:00"),
+                          sources: [factSource("supplement:s1", .supplement, text: "Q: 성과 보충 질문\nA: 성과 보충 답변")],
+                          evidence: [("i1", "supplement:s1", 1)])
+
+        let (nodes, edges) = try reader.read(range: nil)
+
+        let supplementID = GraphNodeID(kind: .supplement, id: "s1")
+        let node = try XCTUnwrap(nodes.first { $0.id == supplementID },
+                                 "보충 근거가 supplement 노드로 연결되어야 한다")
+        XCTAssertEqual(node.title, "성과 보충 질문")
+        XCTAssertEqual(node.subtitle, "성과 보충 답변")
+        XCTAssertNil(node.record)
+        XCTAssertEqual(node.date, week1.start)
+        XCTAssertEqual(edges.count, 1)
+        let edge = try XCTUnwrap(edges.first)
+        XCTAssertEqual(edge.kind, .reportEvidence)
+        XCTAssertEqual(edge.from, GraphNodeID(kind: .reportVersion, id: "v1"))
+        XCTAssertEqual(edge.to, supplementID)
+        XCTAssertEqual(edge.evidence?.sourceId, "supplement:s1")
+        assertEndpointsExist(nodes, edges)
+    }
+
+    func testDeletedSupplementBecomesHistoricalSourceNode() throws {
+        let report = try insertReport(id: "rep-1", family: .performance, periodType: .weekly,
+                                      periodKey: "2026-W40", range: week1)
+        try repo.insertTask(WorkTask(id: "t1", title: "업무", createdAt: now))
+        try insertSupplement(id: "s1", taskId: "t1", applies: week1)
+        try insertVersion(reportId: report.id, versionId: "v1", family: .performance, range: week1,
+                          version: 1, createdAt: date("2026-09-29T09:00:00+09:00"),
+                          sources: [factSource("supplement:s1", .supplement, revision: 4,
+                                               text: "스냅샷 보충 원문 텍스트입니다")],
+                          evidence: [("i1", "supplement:s1", 4)])
+        // 삭제된 보충을 재현한다(조회 실패).
+        try repo.db.run("DELETE FROM evidence_supplement WHERE id = ?", ["s1"])
+
+        let (nodes, edges) = try reader.read(range: nil)
+
+        XCTAssertNil(nodes.first { $0.id == GraphNodeID(kind: .supplement, id: "s1") },
+                     "삭제된 보충은 supplement 노드가 되면 안 된다")
+        let historyID = GraphNodeID(kind: .historicalSource, id: "supplement:s1@4")
+        let history = try XCTUnwrap(nodes.first { $0.id == historyID })
+        XCTAssertNil(history.record)
+        XCTAssertEqual(history.title, "스냅샷 보충 원문 텍스트입니다")
         XCTAssertEqual(edges.first?.to, historyID)
         assertEndpointsExist(nodes, edges)
     }

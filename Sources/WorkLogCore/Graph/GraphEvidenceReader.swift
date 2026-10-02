@@ -4,8 +4,8 @@ import Foundation
 ///
 /// - work.sqlite의 일반 테이블만 읽는다. Secret(Vault) 테이블에는 접근하지 않는다.
 /// - 근거의 `source_id`는 `FactSource` 형식(`"memo:<id>"`, `"task:<id>"`,
-///   `"activity:<id>"`, `"report:<versionId>"`)이다. 접두사 `report:`의 접미사는
-///   **리포트 ID가 아니라 리포트 버전 ID**다. 근거: `ReportTypes.swift`.
+///   `"activity:<id>"`, `"supplement:<id>"`, `"report:<versionId>"`)이다. 접두사
+///   `report:`의 접미사는 **리포트 ID가 아니라 리포트 버전 ID**다. 근거: `ReportTypes.swift`.
 /// - 원본이 삭제됐거나 조회 불가면 `historicalSource` 노드로 보존한다.
 /// - 알 수 없는 source 종류는 건너뛴다(throw 하지 않는다).
 /// - 모든 SQL은 저장소의 `?` 바인딩 조회 메서드를 통해서만 수행한다.
@@ -64,7 +64,8 @@ public struct GraphEvidenceReader {
 
     // MARK: - 버전 선택
 
-    /// 기간이 겹치거나 그 기간에 생성된 리포트 버전. 결정적 순서(리포트 start 내림차순, version 오름차순).
+    /// 기간이 겹치거나 그 기간에 생성된 리포트 버전.
+    /// 결정적 순서: 리포트 start 내림차순 → 리포트 id 오름차순 → version 오름차순 → version id 오름차순.
     private func selectedVersions(range: DateRange?) throws -> [(ReportVersion, Report)] {
         var result: [(ReportVersion, Report)] = []
         for report in try repo.reports() {
@@ -72,6 +73,12 @@ public struct GraphEvidenceReader {
                 if let range, !isIncluded(version: version, report: report, range: range) { continue }
                 result.append((version, report))
             }
+        }
+        result.sort { lhs, rhs in
+            if lhs.1.range.start != rhs.1.range.start { return lhs.1.range.start > rhs.1.range.start }
+            if lhs.1.id != rhs.1.id { return lhs.1.id < rhs.1.id }
+            if lhs.0.version != rhs.0.version { return lhs.0.version < rhs.0.version }
+            return lhs.0.id < rhs.0.id
         }
         return result
     }
@@ -115,6 +122,16 @@ public struct GraphEvidenceReader {
                                   GraphNode(id: id, title: Self.title(from: activity.body),
                                             record: RecordReference(kind: .activity, id: activity.id),
                                             date: activity.workDate),
+                                  into: &nodeMap)
+            }
+        case "supplement":
+            // 보충 노드 id·필드는 GraphRecordReader의 supplement 노드와 동일해야 엣지가 붙는다.
+            if let supplement = try repo.supplement(id: parsed.rawId) {
+                let id = GraphNodeID(kind: .supplement, id: supplement.id)
+                return insertNode(id,
+                                  GraphNode(id: id, title: Self.title(from: supplement.question),
+                                            subtitle: supplement.answer, record: nil,
+                                            date: supplement.applies.start),
                                   into: &nodeMap)
             }
         case "report":

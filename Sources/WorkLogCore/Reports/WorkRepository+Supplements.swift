@@ -19,6 +19,11 @@ extension WorkRepository {
         onSourceChanged?("supplement", s.id)
     }
 
+    /// id로 보충 1건 조회. 없으면 nil.
+    public func supplement(id: String) throws -> EvidenceSupplement? {
+        try db.queryOneV("SELECT * FROM evidence_supplement WHERE id = ?", id).map { try supplementRow($0) }
+    }
+
     public func supplements(taskId: String) throws -> [EvidenceSupplement] {
         try db.queryV("""
             SELECT * FROM evidence_supplement WHERE task_id = ?
