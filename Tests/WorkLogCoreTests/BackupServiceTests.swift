@@ -139,6 +139,28 @@ final class BackupServiceTests: XCTestCase {
 
     // MARK: - BACK-T02: 백업 생성·manifest 해시 검증 + daily 변경 감지
 
+    /// 백업 사본은 WAL이 아닌 단일 파일(DELETE 저널)이어야 한다.
+    /// macOS 시스템 SQLite는 읽기 전용 연결로 WAL DB를 열지 못해 검증이 SQLITE_CANTOPEN으로 실패했다(macOS CI).
+    func testBackupDatabaseCopiesUseRollbackJournal() throws {
+        let root = try makeRoot()
+        let paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock,
+                                    ids: SequentialIDGenerator(prefix: "src"))
+        defer { stores.close() }
+        _ = try WorkLogCore.TaskService(repo: stores.repo).createTask(title: "저널 확인", projectNames: [], note: nil)
+
+        let info = try makeService(paths, stores, clock: clock).createBackup(reason: .manual)
+        for name in ["work.sqlite", "vault.sqlite"] {
+            let url = info.directory.appendingPathComponent(name)
+            let header = try XCTUnwrap(fileBytes(url))
+            // SQLite 헤더 18·19바이트: 1 = rollback journal, 2 = WAL
+            XCTAssertEqual(header[18], 1, "\(name) write version")
+            XCTAssertEqual(header[19], 1, "\(name) read version")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path + "-wal"), "\(name)-wal 잔여")
+        }
+    }
+
     func testCreateBackupProducesVerifiedManifest() throws {
         let root = try makeRoot()
         let paths = makePaths(root: root)

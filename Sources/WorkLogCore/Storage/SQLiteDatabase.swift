@@ -240,6 +240,13 @@ public final class SQLiteDatabase: @unchecked Sendable {
         guard step == SQLITE_DONE, fin == SQLITE_OK else {
             throw SQLiteError(code: step == SQLITE_DONE ? fin : step, message: "backup step failed")
         }
+        // 원본이 WAL이면 사본 헤더도 WAL로 남는다. macOS 시스템 SQLite는 -shm을 만들 수 없는
+        // 읽기 전용 연결로 WAL DB를 열지 못하므로(SQLITE_CANTOPEN), 사본은 단일 파일(DELETE 저널)로 둔다.
+        // 복원 후 읽기·쓰기로 열면 init에서 다시 WAL로 바뀐다.
+        let mode = sqlite3_exec(dest, "PRAGMA journal_mode = DELETE", nil, nil, nil)
+        guard mode == SQLITE_OK else {
+            throw SQLiteError(code: mode, message: String(cString: sqlite3_errmsg(dest)))
+        }
     }
 
     /// PRAGMA integrity_check 결과가 "ok"인지.

@@ -168,7 +168,7 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertEqual(second.removedBackups, oldIds)
         let remaining = try env.backup.listBackups()
         XCTAssertEqual(remaining.count, 1)
-        XCTAssertFalse(oldIds.contains(remaining[0].id))
+        XCTAssertFalse(remaining.contains { oldIds.contains($0.id) })
     }
 
     // MARK: - 4b. 예약 작업 → 리포트 생성 연결
