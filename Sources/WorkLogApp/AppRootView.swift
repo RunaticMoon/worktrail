@@ -2,15 +2,16 @@
 import SwiftUI
 import WorkLogCore
 
-/// AE/AF: add destinations here, then implement the route switch in AppRootView.destination.
+/// Main-window destinations, shared with the app controller.
 enum SidebarRoute: String, CaseIterable, Identifiable {
-    case day, tasks, search, reports, plans, secrets, settings, backups
+    case day, tasks, search, graph, reports, plans, secrets, settings, backups
     var id: String { rawValue }
     var title: String {
         switch self {
         case .day: return "오늘 / 하루"
         case .tasks: return "업무"
         case .search: return "검색"
+        case .graph: return "그래프"
         case .reports: return "리포트"
         case .plans: return "계획"
         case .secrets: return "Secret"
@@ -23,6 +24,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         case .day: return "calendar"
         case .tasks: return "checklist"
         case .search: return "magnifyingglass"
+        case .graph: return "point.3.connected.trianglepath.dotted"
         case .reports: return "doc.text"
         case .plans: return "list.bullet.rectangle"
         case .secrets: return "lock"
@@ -46,7 +48,7 @@ struct AppRootView: View {
                 NavigationSplitView {
                     List(selection: $controller.route) {
                         Section("기록") {
-                            ForEach([SidebarRoute.day, .tasks, .search]) { route in
+                            ForEach([SidebarRoute.day, .tasks, .search, .graph]) { route in
                                 Label(route.title, systemImage: route.symbol).tag(route)
                             }
                         }
@@ -67,6 +69,7 @@ struct AppRootView: View {
                         }
                         destination(environment)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .toolbar {
                         Button("빠른 입력", systemImage: "square.and.pencil") { controller.showCapture() }
                         Button("새로고침", systemImage: "arrow.clockwise") { controller.refresh() }
@@ -111,16 +114,23 @@ struct AppRootView: View {
             }.navigationTitle("현재 업무")
         case .search:
             if let search = controller.search { SearchScreen(model: search, environment: environment) }
+        case .graph:
+            if let graph = controller.graph { GraphScreen(model: graph, onOpen: { controller.openGraphNode($0) }) }
         case .reports:
             if let reports = controller.reports, let plan = controller.plan, let quiz = controller.quiz {
                 ReportsScreen(model: reports, plan: plan, quiz: quiz, calendar: environment.calendar)
+                    .task(id: controller.pendingGraphReportVersionId) { controller.completeGraphReportNavigation() }
             }
         case .plans:
             if let plan = controller.plan { PlanScreen(model: plan, calendar: environment.calendar) }
         case .secrets:
             if let secrets = controller.secrets { SecretsScreen(model: secrets, calendar: environment.calendar) }
         case .settings:
-            if let settings = controller.settingsModel { SettingsScreen(model: settings, onSave: { controller.saveSettings() }) }
+            if let settings = controller.settingsModel, let prompts = controller.prompts {
+                SettingsScreen(model: settings, prompts: prompts, onSave: { controller.saveSettings() },
+                    onBeginHotkeyRecording: { controller.beginHotkeyRecording() },
+                    onEndHotkeyRecording: { controller.endHotkeyRecording() })
+            }
         case .backups:
             if let backups = controller.backups {
                 BackupScreen(model: backups, calendar: environment.calendar, onRestore: { backup, include in
