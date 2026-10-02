@@ -32,7 +32,7 @@ import WorkLogCore
     private var hotkeys: GlobalHotkeys?
     private var hotkeyCoordinator: HotkeySettingsCoordinator?
     private var capturePanel: CapturePanelController?
-    private var searchPanel: NSPanel?
+    private var searchPanel: SearchPanelController?
     private var observers: [NSObjectProtocol] = []
     var openMainWindow: (() -> Void)?
 
@@ -149,14 +149,9 @@ import WorkLogCore
     func showSearch() {
         guard let search, let environment else { return }
         if searchPanel == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 620),
-                styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            panel.title = "WorkLog 검색"; panel.isReleasedWhenClosed = false
-            panel.contentView = NSHostingView(rootView: SearchScreen(model: search, environment: environment))
-            panel.center(); searchPanel = panel
+            searchPanel = SearchPanelController(model: search, environment: environment)
         }
-        NSApp.activate(ignoringOtherApps: true)
-        searchPanel?.makeKeyAndOrderFront(nil)
+        searchPanel?.show()
     }
     // AJ: keep idle masking and conditional clipboard clearing active on every route.
     private func installProtectionTimer() {
@@ -201,7 +196,7 @@ import WorkLogCore
         capturePanel?.teardown(); capturePanel = nil
         captureSession?.detach(); graph?.detach(); prompts?.detach()
         secrets?.detach(); settingsModel?.detach(); model.detach()
-        searchPanel?.close(); searchPanel?.contentView = nil; searchPanel = nil
+        searchPanel?.teardown(); searchPanel = nil
         clearRegistrations()
         captureSession = nil; graph = nil; prompts = nil
         day = nil; search = nil; taskDetail = nil; memoDetail = nil

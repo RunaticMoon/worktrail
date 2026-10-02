@@ -8,10 +8,11 @@ import WorkLogCore
     var body: some Scene {
         WindowGroup("WorkLog", id: "main") {
             AppRootView(controller: controller)
-                .frame(minWidth: 720, minHeight: 480)
+                .frame(minWidth: 840, minHeight: 560)
                 .task { await controller.start() }
         }
-        .defaultSize(width: 1120, height: 760)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1180, height: 800)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("빠른 입력") { controller.showCapture() }.keyboardShortcut("n", modifiers: .command)
