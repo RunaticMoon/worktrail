@@ -164,4 +164,36 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertTrue(isDir.boolValue)
         XCTAssertEqual(try permissions(of: nested), 0o700)
     }
+
+    // MARK: 7 — 검색 단축키 기본값 ctrl+opt+d, 저장된 값 보존
+
+    func testSearchHotkeyDefaultIsCtrlOptD() {
+        XCTAssertEqual(AppSettings().searchHotkey, "ctrl+opt+d")
+    }
+
+    func testMissingSearchHotkeyDecodesToCtrlOptD() throws {
+        let (store, file) = try makeStore()
+        try Data(#"{"captureHotkey": "ctrl+opt+space"}"#.utf8).write(to: file)
+
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.searchHotkey, "ctrl+opt+d")
+    }
+
+    func testStoredSearchHotkeyIsPreservedAcrossRoundTrip() throws {
+        let (store, file) = try makeStore()
+
+        for stored in ["ctrl+opt+f", "cmd+shift+l"] {
+            let json = #"{"searchHotkey": ""# + stored + #""}"#
+            try Data(json.utf8).write(to: file)
+
+            let loaded = try store.load()
+            XCTAssertEqual(loaded.searchHotkey, stored, "저장된 \(stored)이 보존돼야 함")
+
+            try store.save(loaded)
+            let raw = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+            XCTAssertTrue(raw.contains(#""searchHotkey":"# + "\"" + stored + "\""),
+                          "재인코딩 후에도 \(stored)이 유지돼야 함: \(raw)")
+            XCTAssertEqual(try store.load().searchHotkey, stored)
+        }
+    }
 }

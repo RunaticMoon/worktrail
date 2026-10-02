@@ -610,7 +610,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var defaultCaptureKind: CaptureKind = .memo
     /// 예: "ctrl+opt+space" — 실제 조합은 제안 기본값이며 설정에서 변경한다.
     public var captureHotkey: String = "ctrl+opt+space"
-    public var searchHotkey: String = "ctrl+opt+f"
+    public var searchHotkey: String = "ctrl+opt+d"
     public var timeZoneIdentifier: String = "Asia/Seoul"
     public var secretIdleLockMinutes: Int = 30
     public var clipboardClearSeconds: Int = 120
@@ -638,7 +638,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
         self.defaultCaptureKind = try decode(.defaultCaptureKind, default: .memo)
         self.captureHotkey = try decode(.captureHotkey, default: "ctrl+opt+space")
-        self.searchHotkey = try decode(.searchHotkey, default: "ctrl+opt+f")
+        self.searchHotkey = try decode(.searchHotkey, default: "ctrl+opt+d")
         self.timeZoneIdentifier = try decode(.timeZoneIdentifier, default: "Asia/Seoul")
         self.secretIdleLockMinutes = try decode(.secretIdleLockMinutes, default: 30)
         self.clipboardClearSeconds = try decode(.clipboardClearSeconds, default: 120)
