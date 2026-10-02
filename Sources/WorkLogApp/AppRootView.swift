@@ -8,13 +8,13 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .day: return "오늘 / 하루"
+        case .day: return "하루 기록"
         case .tasks: return "업무"
         case .search: return "검색"
         case .graph: return "그래프"
         case .reports: return "리포트"
         case .plans: return "계획"
-        case .secrets: return "Secret"
+        case .secrets: return "시크릿"
         case .settings: return "설정"
         case .backups: return "백업"
         }
@@ -37,42 +37,41 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
 struct AppRootView: View {
     @Bindable var controller: AppController
     @Environment(\.openWindow) private var openWindow
+    @State private var sidebarVisible = true
+    @State private var taskQuery = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var selectedRoute: SidebarRoute { controller.route ?? .day }
+
     var body: some View {
         Group {
             if let error = controller.startupError {
-                VStack(spacing: 16) {
+                VStack(spacing: 20) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 32)).foregroundStyle(WorkLogTheme.accent)
                     InlineNotice(message: error)
                     Button("다시 시도") { Task { await controller.retryStart() } }
-                }.padding()
+                        .buttonStyle(WorkLogButtonStyle(prominent: true))
+                }.frame(maxWidth: 420).worklogCard(padding: 28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let environment = controller.environment {
-                NavigationSplitView {
-                    List(selection: $controller.route) {
-                        Section("기록") {
-                            ForEach([SidebarRoute.day, .tasks, .search, .graph]) { route in
-                                Label(route.title, systemImage: route.symbol).tag(route)
-                            }
-                        }
-                        Section("도구") {
-                            ForEach([SidebarRoute.reports, .plans, .secrets, .settings, .backups]) { route in
-                                Label(route.title, systemImage: route.symbol).tag(route)
-                            }
-                        }
-                    }.navigationTitle("WorkLog")
-                } detail: {
+                HStack(spacing: 0) {
+                    if sidebarVisible {
+                        sidebar.frame(width: 216)
+                        Rectangle().fill(WorkLogTheme.border).frame(width: 1)
+                    }
                     VStack(spacing: 0) {
+                        workspaceHeader
+                        Rectangle().fill(WorkLogTheme.border.opacity(0.6)).frame(height: 1)
                         if let notice = controller.notice {
-                            HStack(alignment: .top) {
+                            HStack(alignment: .top, spacing: 10) {
                                 InlineNotice(message: notice)
                                 Button { controller.dismissNotice() } label: { Image(systemName: "xmark") }
                                     .accessibilityLabel("안내 닫기").help("안내 닫기")
-                            }.padding(12)
+                            }.padding(16)
                         }
                         destination(environment)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .toolbar {
-                        Button("빠른 입력", systemImage: "square.and.pencil") { controller.showCapture() }
-                        Button("새로고침", systemImage: "arrow.clockwise") { controller.refresh() }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
                 }
                 .sheet(isPresented: Binding(get: { controller.selectedTaskId != nil },
@@ -88,12 +87,180 @@ struct AppRootView: View {
                         MemoDetailScreen(model: memo, onClose: { controller.selectedMemoId = nil })
                     }
                 }
-            } else { ProgressView("WorkLog 여는 중…") }
-        }.onAppear {
+            } else {
+                VStack(spacing: 16) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 32)).foregroundStyle(WorkLogTheme.accent)
+                    ProgressView("나의 기록을 여는 중…")
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(WorkLogTheme.canvas)
+        .tint(WorkLogTheme.accent)
+        .buttonStyle(WorkLogButtonStyle())
+        .groupBoxStyle(WorkLogGroupBoxStyle())
+        .scrollContentBackground(.hidden)
+        .onAppear {
             let action = openWindow
             controller.openMainWindow = { action(id: "main") }
         }
     }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(WorkLogTheme.accent)
+                    .frame(width: 36, height: 36)
+                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 11))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("WorkLog").font(.system(size: 17, weight: .bold, design: .rounded))
+                    Text("일의 흐름을 기록하세요").font(.system(size: 10)).foregroundStyle(WorkLogTheme.muted)
+                }
+            }.padding(.horizontal, 8).padding(.top, 12)
+
+            Button { controller.showCapture() } label: {
+                HStack {
+                    Image(systemName: "plus")
+                    Text("빠른 입력")
+                    Spacer()
+                    Text("⌘ N").font(.system(size: 10, design: .monospaced)).opacity(0.8)
+                }.padding(.vertical, 2)
+            }.buttonStyle(WorkLogButtonStyle(prominent: true))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    navigationGroup("워크스페이스", routes: [.day, .tasks, .search, .graph])
+                    navigationGroup("정리와 보관", routes: [.reports, .plans, .secrets])
+                    navigationGroup("관리", routes: [.settings, .backups])
+                }
+            }.scrollIndicators(.hidden)
+            HStack(spacing: 8) {
+                Image(systemName: "keyboard").foregroundStyle(WorkLogTheme.accent)
+                Text("기록은 가볍게, 흐름은 선명하게")
+                    .font(.system(size: 10)).foregroundStyle(WorkLogTheme.muted)
+            }.padding(.horizontal, 6)
+        }
+        .padding(16)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(WorkLogTheme.surface)
+    }
+
+    private func navigationGroup(_ title: String, routes: [SidebarRoute]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(WorkLogTheme.muted).padding(.leading, 12).padding(.bottom, 5)
+            ForEach(routes) { route in
+                Button { controller.route = route } label: {
+                    HStack(spacing: 11) {
+                        Image(systemName: route.symbol).font(.system(size: 14, weight: .medium)).frame(width: 20)
+                        Text(route.title).font(.system(size: 12, weight: selectedRoute == route ? .semibold : .medium))
+                        Spacer(minLength: 4)
+                        if route == .tasks, !controller.tasks.isEmpty {
+                            Text("\(controller.tasks.count)").font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(WorkLogTheme.muted)
+                        }
+                        if selectedRoute == route {
+                            RoundedRectangle(cornerRadius: 2).fill(WorkLogTheme.accent).frame(width: 3, height: 14)
+                        }
+                    }
+                    .foregroundStyle(selectedRoute == route ? WorkLogTheme.accent : WorkLogTheme.text)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(selectedRoute == route ? WorkLogTheme.accentSoft : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 10))
+                    .contentShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedRoute == route ? .isSelected : [])
+            }
+        }
+    }
+
+    private var workspaceHeader: some View {
+        HStack(spacing: 14) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { sidebarVisible.toggle() }
+            } label: { Image(systemName: "sidebar.left") }
+                .help(sidebarVisible ? "사이드바 숨기기" : "사이드바 보기")
+                .accessibilityLabel(sidebarVisible ? "사이드바 숨기기" : "사이드바 보기")
+            HStack(spacing: 8) {
+                Text("워크스페이스").foregroundStyle(WorkLogTheme.muted)
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(WorkLogTheme.muted)
+                Text(selectedRoute.title).fontWeight(.semibold)
+            }.font(.system(size: 12))
+            Spacer(minLength: 8)
+            Button { controller.showSearch() } label: {
+                HStack(spacing: 8) { Image(systemName: "magnifyingglass"); Text("검색"); Keycap("⌘ F") }
+            }.help("검색 패널 열기")
+            Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                .help("새로고침").accessibilityLabel("새로고침")
+        }
+        .padding(.horizontal, 22).padding(.vertical, 16)
+        .background(WorkLogTheme.canvas)
+    }
+
+    private var taskList: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("지금 하고 있는 일").font(.system(size: 25, weight: .bold))
+                    Text("업무의 현재 상태와 진행 내용을 한곳에서 확인하세요.")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                }
+                Spacer()
+                Text("\(controller.tasks.count)건").font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(WorkLogTheme.accent).padding(10)
+                    .background(WorkLogTheme.accentSoft, in: Capsule())
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(WorkLogTheme.muted)
+                TextField("업무 이름으로 찾기", text: $taskQuery).textFieldStyle(.plain)
+                    .accessibilityLabel("업무 이름으로 찾기")
+                if !taskQuery.isEmpty {
+                    Button { taskQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("업무 검색어 지우기")
+                }
+            }.worklogCard(padding: 14)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if controller.tasks.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            EmptyMessage(title: "첫 업무를 기록해 보세요", detail: "빠른 입력의 업무 탭에서 할 일과 진행 내용을 남길 수 있어요.")
+                            Button("빠른 입력") { controller.showCapture() }
+                                .buttonStyle(WorkLogButtonStyle(prominent: true))
+                        }.frame(maxWidth: .infinity, alignment: .leading).worklogCard(padding: 24)
+                    } else if filteredTasks.isEmpty {
+                        EmptyMessage(title: "일치하는 업무가 없습니다", detail: "다른 검색어로 다시 찾아보세요.")
+                            .frame(maxWidth: .infinity, alignment: .leading).worklogCard()
+                    }
+                    ForEach(filteredTasks) { task in
+                        Button { controller.openTask(task.id) } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: task.cachedStatus == .completed ? "checkmark.circle.fill" : "circle.dashed")
+                                    .font(.system(size: 20)).foregroundStyle(WorkLogTheme.accent)
+                                Text(task.title).font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(WorkLogTheme.text).multilineTextAlignment(.leading)
+                                Spacer()
+                                Text(task.cachedStatus?.koreanLabel ?? "상태 없음")
+                                    .font(.system(size: 11, weight: .medium)).foregroundStyle(WorkLogTheme.accent)
+                                    .padding(.horizontal, 9).padding(.vertical, 5)
+                                    .background(WorkLogTheme.accentSoft, in: Capsule())
+                                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(WorkLogTheme.muted)
+                            }.frame(maxWidth: .infinity, alignment: .leading).worklogCard(padding: 18)
+                                .contentShape(RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius))
+                        }.buttonStyle(.plain).accessibilityHint("업무 상세 열기")
+                    }
+                }
+            }
+        }.padding(24)
+    }
+
+    private var filteredTasks: [WorkTask] {
+        let query = taskQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? controller.tasks : controller.tasks.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    }
+
     @ViewBuilder private func destination(_ environment: AppEnvironment) -> some View {
         switch controller.route ?? .day {
         case .day:
@@ -104,14 +271,7 @@ struct AppRootView: View {
                     })
             }
         case .tasks:
-            List {
-                if controller.tasks.isEmpty { EmptyMessage(title: "아직 업무가 없습니다", detail: "빠른 입력에서 업무를 등록하세요.") }
-                ForEach(controller.tasks) { task in
-                    Button { controller.openTask(task.id) } label: {
-                        HStack { Text(task.title); Spacer(); Text(task.cachedStatus?.koreanLabel ?? "상태 없음").foregroundStyle(.secondary) }
-                    }.buttonStyle(.plain).padding(.vertical, 4)
-                }
-            }.navigationTitle("현재 업무")
+            taskList
         case .search:
             if let search = controller.search { SearchScreen(model: search, environment: environment) }
         case .graph:
@@ -155,9 +315,12 @@ struct WorkDatePicker: View {
 struct InlineNotice: View {
     let message: String
     var body: some View {
-        Label(message, systemImage: "exclamationmark.circle")
-            .font(.callout).fixedSize(horizontal: false, vertical: true)
+        Label(message, systemImage: "info.circle.fill")
+            .font(.callout).foregroundStyle(WorkLogTheme.text)
+            .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -165,10 +328,15 @@ struct EmptyMessage: View {
     let title: String
     let detail: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.headline)
-            Text(detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }.padding(16)
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: "tray")
+                .font(.system(size: 20, weight: .light)).foregroundStyle(WorkLogTheme.accent)
+                .frame(width: 40, height: 40)
+                .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+            Text(title).font(.system(size: 14, weight: .semibold))
+            Text(detail).font(.callout).foregroundStyle(WorkLogTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }.padding(.vertical, 12)
     }
 }
 #endif
