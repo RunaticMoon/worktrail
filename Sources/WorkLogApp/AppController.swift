@@ -25,7 +25,6 @@ import WorkLogCore
     var route: SidebarRoute? = .day
     var selectedTaskId: String?
     var selectedMemoId: String?
-    private(set) var pendingGraphReportVersionId: String?
     private(set) var tasks: [WorkTask] = []
     private(set) var startupError: String?
     private(set) var notice: String?
@@ -128,35 +127,16 @@ import WorkLogCore
                 if let activity = try environment?.repo.activity(id: node.id.id) { openTask(activity.taskId) }
             } catch { notice = "진행기록의 업무를 불러오지 못했습니다. 다시 시도하세요." }
         case .reportVersion:
-            guard let environment, let reports else { return }
+            guard let reports else { return }
             guard !reports.isGenerating, !reports.hasChanges else {
                 notice = "리포트 작업을 마치거나 본문 변경을 저장한 뒤 다른 버전을 여세요."
                 return
             }
-            do {
-                guard let version = try environment.repo.reportVersion(id: node.id.id),
-                      let report = try environment.repo.report(id: version.reportId) else { return }
-                reports.family = report.family
-                reports.load()
-                reports.selectReport(report.id)
-                reports.selectVersion(version.id)
-                pendingGraphReportVersionId = version.id
-                route = .reports
-            } catch { notice = "리포트 버전을 불러오지 못했습니다. 다시 시도하세요." }
+            reports.requestVersionSelection(node.id.id)
+            route = .reports
         case .project, .tag, .supplement, .historicalSource:
             break
         }
-    }
-    /// ReportsScreen loads the period's latest version on appearance; restore the requested version once afterwards.
-    func completeGraphReportNavigation() {
-        guard route == .reports, let id = pendingGraphReportVersionId,
-              let environment, let reports else { return }
-        defer { pendingGraphReportVersionId = nil }
-        do {
-            guard let version = try environment.repo.reportVersion(id: id) else { return }
-            reports.selectReport(version.reportId)
-            reports.selectVersion(version.id)
-        } catch { notice = "리포트 버전을 불러오지 못했습니다. 다시 시도하세요." }
     }
     func showCapture() {
         guard let captureSession, let secrets, let environment else { return }
@@ -218,7 +198,6 @@ import WorkLogCore
         weak var previousPlan = plan
         weak var previousQuiz = quiz
         selectedTaskId = nil; selectedMemoId = nil
-        pendingGraphReportVersionId = nil
         capturePanel?.teardown(); capturePanel = nil
         captureSession?.detach(); graph?.detach(); prompts?.detach()
         secrets?.detach(); settingsModel?.detach(); model.detach()

@@ -119,7 +119,6 @@ struct AppRootView: View {
         case .reports:
             if let reports = controller.reports, let plan = controller.plan, let quiz = controller.quiz {
                 ReportsScreen(model: reports, plan: plan, quiz: quiz, calendar: environment.calendar)
-                    .task(id: controller.pendingGraphReportVersionId) { controller.completeGraphReportNavigation() }
             }
         case .plans:
             if let plan = controller.plan { PlanScreen(model: plan, calendar: environment.calendar) }

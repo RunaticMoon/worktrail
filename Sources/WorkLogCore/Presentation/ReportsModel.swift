@@ -36,6 +36,7 @@ import Observation
     public var hasChanges: Bool { canEdit && content != version?.content }
     @ObservationIgnored private let environment: AppEnvironment
     @ObservationIgnored private var results: [String: ReportGenerationResult] = [:]
+    @ObservationIgnored private var pendingVersionId: String?
 
     public init(environment: AppEnvironment) {
         self.environment = environment
@@ -55,31 +56,46 @@ import Observation
             errorMessage = nil
         } catch { errorMessage = "리포트 목록을 불러오지 못했습니다. 다시 불러오세요." }
     }
+    /// Defer exact-version navigation until the destination loads its selection.
+    public func requestVersionSelection(_ id: String) {
+        guard !isGenerating, !hasChanges else { return }
+        pendingVersionId = id
+    }
     /// Read-only navigation never calls AI or generates a report.
     public func loadSelection() {
         guard !isGenerating, !hasChanges else { return }
         reportDate = environment.periods.weekStart(containing: reportDate)
         load()
+        guard errorMessage == nil else { return }
+        if let id = pendingVersionId {
+            pendingVersionId = nil
+            do {
+                guard let requested = try environment.repo.reportVersion(id: id),
+                      let selected = try environment.repo.report(id: requested.reportId) else {
+                    errorMessage = "요청한 리포트 버전을 찾을 수 없습니다. 그래프를 새로고침하세요."
+                    return
+                }
+                try showReport(selected, versionId: requested.id)
+            } catch { errorMessage = "리포트 버전을 불러오지 못했습니다. 다시 선택하세요." }
+            return
+        }
         let match = visibleReports.first {
             if family == .submission { return $0.periodKey == reportDate.iso }
             if let evaluationPeriodId { return $0.evaluationPeriodId == evaluationPeriodId }
             return $0.periodType == periodType && $0.periodKey == environment.periods.periodKey(periodType, containing: performanceDate)
         }
-        clearPreview()
-        if let match { selectReport(match.id) }
+        if let match {
+            // Period/family changes made by navigation can trigger additional view reloads.
+            // Keep the exact version while those controls still identify the same report.
+            let selectedVersionId = report?.id == match.id ? version?.id : nil
+            do { try showReport(match, versionId: selectedVersionId) }
+            catch { errorMessage = "리포트 버전을 불러오지 못했습니다. 다시 선택하세요." }
+        } else { clearPreview() }
     }
     public func selectReport(_ id: String) {
         guard !isGenerating, !hasChanges, let selected = visibleReports.first(where: { $0.id == id }) else { return }
         do {
-            let rows = try environment.repo.reportVersions(reportId: id)
-            clearPreview(); report = selected; versions = rows
-            if selected.family == .submission { reportDate = selected.planRange?.start ?? reportDate }
-            else {
-                performanceDate = selected.range.start
-                evaluationPeriodId = selected.evaluationPeriodId
-                if selected.periodType != .yearly { periodType = selected.periodType }
-            }
-            if let latest = rows.last(where: { $0.state != .superseded }) { try showVersion(latest) }
+            try showReport(selected)
             errorMessage = nil
         } catch { errorMessage = "리포트 버전을 불러오지 못했습니다. 다시 선택하세요." }
     }
@@ -147,6 +163,20 @@ import Observation
             let (period, _) = try environment.evaluationPeriods.create(start: proposal.range.start, endInclusive: evaluationEnd)
             self.proposal = nil; evaluationPeriodId = period.id; loadSelection()
         } catch { errorMessage = "평가 기간을 저장하지 못했습니다. 날짜를 확인하고 다시 제안하세요." }
+    }
+    private func showReport(_ selected: Report, versionId: String? = nil) throws {
+        let rows = try environment.repo.reportVersions(reportId: selected.id)
+        clearPreview(); family = selected.family; report = selected; versions = rows
+        if selected.family == .submission { reportDate = selected.planRange?.start ?? reportDate }
+        else {
+            performanceDate = selected.range.start
+            evaluationPeriodId = selected.evaluationPeriodId
+            if selected.periodType != .yearly { periodType = selected.periodType }
+        }
+        let requested = versionId.flatMap { id in rows.first { $0.id == id } }
+        if let selectedVersion = requested ?? rows.last(where: { $0.state != .superseded }) {
+            try showVersion(selectedVersion)
+        }
     }
     private func refreshVersion(_ saved: ReportVersion) throws {
         versions = try environment.repo.reportVersions(reportId: saved.reportId)

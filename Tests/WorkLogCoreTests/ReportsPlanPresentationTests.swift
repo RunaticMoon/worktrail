@@ -71,6 +71,119 @@ final class ReportsPlanPresentationTests: XCTestCase {
         XCTAssertEqual(model.content, "아직 저장하지 않은 문장")
         model.discardEdits(); XCTAssertFalse(model.hasChanges)
     }
+    @MainActor func testRequestedHistoricalVersionSurvivesAppearanceAndControlReloadsWithoutGeneration() async throws {
+        let provider = MockAIProvider(); let env = try environment(provider: provider)
+        let task = try env.tasks.createTask(title: "버전별 수행 근거", initialStatus: .inProgress, workDate: prior)
+        _ = try env.tasks.addActivity(taskId: task.id, body: "첫 버전의 수행 근거", workDate: prior)
+        let writer = ReportsModel(environment: env); writer.useAI = false
+        await writer.generate()
+        let historical = try XCTUnwrap(writer.version)
+        _ = try env.tasks.addActivity(taskId: task.id, body: "다음 버전에 추가한 근거", workDate: prior)
+        await writer.generate()
+        XCTAssertNotEqual(writer.version?.id, historical.id)
+        let versionsBefore = try env.repo.reportVersions(reportId: historical.reportId)
+        let evidence = try env.repo.reportEvidence(versionId: historical.id)
+        XCTAssertFalse(evidence.isEmpty)
+        XCTAssertGreaterThan(writer.evidence.count, evidence.count)
+
+        let model = ReportsModel(environment: env)
+        model.reportDate = env.calendar.adding(days: 14, to: monday)
+        model.requestVersionSelection(historical.id)
+        model.loadSelection() // ReportsScreen.onAppear
+        XCTAssertEqual(model.report?.id, historical.reportId)
+        XCTAssertEqual(model.version?.id, historical.id)
+        XCTAssertEqual(model.version?.state, .superseded)
+        XCTAssertEqual(model.content, historical.content)
+        XCTAssertEqual(model.reportDate, monday)
+        model.loadSelection() // ReportsScreen.onChange after the navigation updates its controls
+        XCTAssertEqual(model.version?.id, historical.id)
+        XCTAssertEqual(model.evidence, evidence)
+        XCTAssertEqual(try env.repo.reportVersions(reportId: historical.reportId).map(\.id), versionsBefore.map(\.id))
+        XCTAssertEqual(provider.runCount, 0)
+        XCTAssertNil(model.errorMessage)
+    }
+    @MainActor func testRequestedPerformanceVersionOverridesPreviousEvaluationAndPeriodSelection() async throws {
+        let env = try environment()
+        let writer = ReportsModel(environment: env)
+        writer.family = .performance; writer.periodType = .monthly; writer.performanceDate = prior
+        await writer.generate(); writer.confirm()
+        let historical = try XCTUnwrap(writer.version)
+        let selectedReport = try XCTUnwrap(writer.report)
+        await writer.generate()
+
+        let model = ReportsModel(environment: env)
+        model.family = .performance; model.periodType = .daily
+        model.evaluationPeriodId = "previous-evaluation"
+        model.requestVersionSelection(historical.id)
+        model.loadSelection(); model.loadSelection()
+        XCTAssertEqual(model.family, .performance)
+        XCTAssertEqual(model.periodType, .monthly)
+        XCTAssertEqual(model.performanceDate, selectedReport.range.start)
+        XCTAssertNil(model.evaluationPeriodId)
+        XCTAssertEqual(model.version?.id, historical.id)
+        XCTAssertNil(model.errorMessage)
+    }
+    @MainActor func testRequestedEvaluationVersionSurvivesFamilyAndPeriodReloads() async throws {
+        let env = try environment()
+        let writer = ReportsModel(environment: env)
+        writer.family = .performance; writer.evaluationStart = prior; writer.evaluationEnd = monday
+        writer.proposeEvaluation(); writer.createEvaluation()
+        await writer.generate(); writer.confirm()
+        let historical = try XCTUnwrap(writer.version)
+        let periodId = try XCTUnwrap(writer.evaluationPeriodId)
+        await writer.generate()
+
+        let model = ReportsModel(environment: env)
+        model.requestVersionSelection(historical.id)
+        model.loadSelection(); model.loadSelection()
+        XCTAssertEqual(model.family, .performance)
+        XCTAssertEqual(model.evaluationPeriodId, periodId)
+        XCTAssertEqual(model.report?.periodType, .yearly)
+        XCTAssertEqual(model.version?.id, historical.id)
+        XCTAssertNil(model.errorMessage)
+    }
+    @MainActor func testPendingVersionIsConsumedBeforeNavigatingToAnotherPeriod() async throws {
+        let env = try environment(); let writer = ReportsModel(environment: env)
+        await writer.generate(); writer.confirm()
+        let historicalId = try XCTUnwrap(writer.version?.id)
+        await writer.generate()
+        let latestId = try XCTUnwrap(writer.version?.id)
+        let nextMonday = env.calendar.adding(days: 7, to: monday)
+        writer.reportDate = nextMonday; writer.loadSelection(); await writer.generate()
+        let nextWeekId = try XCTUnwrap(writer.version?.id)
+
+        let model = ReportsModel(environment: env)
+        model.requestVersionSelection(historicalId); model.loadSelection()
+        XCTAssertEqual(model.version?.id, historicalId)
+        model.reportDate = nextMonday; model.loadSelection()
+        XCTAssertEqual(model.version?.id, nextWeekId)
+        model.reportDate = monday; model.loadSelection()
+        XCTAssertEqual(model.version?.id, latestId)
+    }
+    @MainActor func testVersionNavigationDoesNotDiscardUnsavedEditsOrLeaveARequestBehind() async throws {
+        let env = try environment(); let model = ReportsModel(environment: env)
+        await model.generate(); model.confirm()
+        let historicalId = try XCTUnwrap(model.version?.id)
+        await model.generate()
+        let latestId = try XCTUnwrap(model.version?.id)
+        model.content = "저장 전 본문"
+        model.requestVersionSelection(historicalId); model.loadSelection()
+        XCTAssertEqual(model.version?.id, latestId)
+        XCTAssertEqual(model.content, "저장 전 본문")
+        model.discardEdits(); model.loadSelection()
+        XCTAssertEqual(model.version?.id, latestId)
+    }
+    @MainActor func testMissingRequestedVersionReportsAnErrorAndConsumesTheRequest() async throws {
+        let env = try environment(); let model = ReportsModel(environment: env)
+        await model.generate()
+        let currentId = try XCTUnwrap(model.version?.id)
+        model.requestVersionSelection("missing-version"); model.loadSelection()
+        XCTAssertEqual(model.version?.id, currentId)
+        XCTAssertNotNil(model.errorMessage)
+        model.loadSelection()
+        XCTAssertEqual(model.version?.id, currentId)
+        XCTAssertNil(model.errorMessage)
+    }
     @MainActor func testPlanCandidatesCheckConfirmAndScopeKeepTaskStateUnchanged() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "공통 계획", workDate: prior, checklist: ["검증 범위"])

@@ -367,21 +367,9 @@ struct GraphScreen: View {
                     .onChange(of: model.selectedNodeID) { _, id in
                         if let id { proxy.scrollTo(id) }
                     }
-                    .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return, .space],
-                                phases: [.down, .repeat]) { press in
-                        guard press.modifiers.isEmpty else { return .ignored }
-                        switch press.key {
-                        case .upArrow, .leftArrow: moveSelection(by: -1)
-                        case .downArrow, .rightArrow: moveSelection(by: 1)
-                        case .space: if press.phase == .down { selectCurrentOrFirst() }
-                        case .return: if press.phase == .down, let node = model.selectedNode { open(node) }
-                        default: return .ignored
-                        }
-                        return .handled
-                    }
                 }
             }
-            Text("↑↓←→ 이동 · Space 선택 · Return 열기")
+            Text(graphFocused ? "그래프: ↑↓←→ 이동 · Space 선택 · Return 열기" : "목록: ↑↓ 이동 · 원문은 ‘열기’ 버튼 사용")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).padding(12)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
