@@ -381,6 +381,39 @@ final class GraphModelTests: XCTestCase {
         XCTAssertEqual(memoIDs(model), ["m0", "m10"], "마지막 reload의 결과만 반영된다")
     }
 
+    // MARK: 10c. loaded 상태에서 재계산 중 기존 그래프 유지
+
+    @MainActor
+    func testReloadKeepsLoadedGraphWhileRecomputing() async throws {
+        let env = try makeEnvironment()
+        let d10 = env.calendar.adding(days: -10, to: today)
+        try seedMemo(env, id: "m0", body: "오늘", date: today)
+        try seedMemo(env, id: "m10", body: "10일 전", date: d10)
+
+        let model = GraphModel(environment: env)
+        model.rangePreset = .week
+        await model.reload().value
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertFalse(model.isRecomputing)
+        XCTAssertEqual(memoIDs(model), ["m0"])
+        let previousPositions = model.positions
+
+        // 범위를 넓혀 재계산을 시작한다. 좌표 계산이 끝나기 전에는 기존 그래프를 그대로 둔다.
+        model.rangePreset = .all
+        let task = model.reload()
+
+        XCTAssertEqual(model.phase, .loaded, "재계산 중에도 phase는 .loaded를 유지한다")
+        XCTAssertTrue(model.isRecomputing)
+        XCTAssertEqual(memoIDs(model), ["m0"], "완료 전에는 이전 스냅샷을 유지한다")
+        XCTAssertEqual(model.positions, previousPositions, "완료 전에는 이전 좌표를 유지한다")
+
+        await task.value
+        XCTAssertFalse(model.isRecomputing)
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(memoIDs(model), ["m0", "m10"], "완료 후 새 스냅샷으로 교체한다")
+        XCTAssertEqual(Set(model.positions.keys), Set(model.snapshot.nodes.map(\.id)))
+    }
+
     // MARK: 11. 라벨·심볼 헬퍼
 
     @MainActor

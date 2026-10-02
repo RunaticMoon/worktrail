@@ -10,6 +10,9 @@ import Observation
 /// - 좌표 계산(`GraphLayout.positions`, `O(iterations × n²)`)은 메인 액터 밖(`Task.detached`)에서
 ///   수행한다. `generation` 카운터로 더 이상 최신이 아닌 계산 결과를 버리고, 메인 액터에서
 ///   현재 세대일 때만 스냅샷·좌표·`phase`를 함께 적용한다.
+/// - 이미 그래프가 있는 상태(`.loaded`/`.empty`)에서 재계산할 때는 `phase`와 기존 스냅샷을
+///   유지해 캔버스가 사라지지 않게 하고, 새 결과가 준비되면 조용히 교체한다. 처음(`.idle`)이거나
+///   실패(`.failed`)했을 때만 `.loading`으로 전환한다.
 @Observable @MainActor public final class GraphModel {
 
     /// 화면 로딩 상태.
@@ -45,6 +48,10 @@ import Observation
     public private(set) var snapshot: GraphSnapshot = .empty
     public private(set) var positions: [GraphNodeID: GraphPoint] = [:]
 
+    /// 좌표 재계산이 진행 중인지. 재계산 중에도 `phase`·`snapshot`(기존 그래프)은 유지된다.
+    /// 화면 표시(예: 진행 인디케이터)에 쓸 수 있으며, 화면 연결은 이번 범위가 아니다.
+    public private(set) var isRecomputing = false
+
     /// 변경 시 뷰가 `reload()`를 호출해야 한다(자동 호출 아님).
     public var rangePreset: RangePreset = .month
 
@@ -73,6 +80,8 @@ import Observation
     @ObservationIgnored private var service: GraphService?
     /// `reload()`마다 증가한다. 느린(미래의 비동기) 계산 결과를 버리기 위한 카운터.
     @ObservationIgnored private var generation = 0
+    /// 진행 중인 좌표 계산 Task. 새 `reload()`·`detach()` 때 취소해 불필요한 계산을 막는다.
+    @ObservationIgnored private var layoutTask: Task<[GraphNodeID: GraphPoint], Never>?
 
     public init(environment: AppEnvironment) {
         self.environment = environment
@@ -87,6 +96,11 @@ import Observation
     /// 넘긴다. 계산이 끝나면 메인 액터에서 `generation`이 아직 같을 때만
     /// 스냅샷·좌표·`phase`를 적용한다(더 새 `reload()`가 시작됐으면 버린다).
     ///
+    /// 이미 그래프가 있는 상태(`.loaded`/`.empty`)에서는 재계산 중에도 `phase`와
+    /// 기존 스냅샷을 유지해 캔버스가 사라지지 않게 한다. 처음(`.idle`)이거나
+    /// 실패(`.failed`)했을 때만 `.loading`으로 전환한다. 이전 좌표 계산 Task는
+    /// 취소하고, 취소된 계산은 시작 전에 CPU를 쓰지 않고 건너뛴다.
+    ///
     /// 실패하면 원문 오류를 노출하지 않고 고정된 한국어 문구만 남긴다.
     ///
     /// - Returns: 좌표 계산·반영이 끝나는 시점을 기다릴 수 있는 `Task`.
@@ -95,7 +109,18 @@ import Observation
         guard let environment, let service else { return Task {} }
         generation &+= 1
         let current = generation
-        phase = .loading
+
+        // 재계산 중에는 기존 그래프를 유지한다. 처음이거나 실패한 상태에서만 로딩으로 바꾼다.
+        switch phase {
+        case .idle, .failed:
+            phase = .loading
+        case .loading, .loaded, .empty:
+            break
+        }
+        isRecomputing = true
+
+        // 이전 좌표 계산이 남아 있으면 취소한다(이미 시작한 계산은 generation으로도 버려진다).
+        layoutTask?.cancel()
 
         let newSnapshot: GraphSnapshot
         do {
@@ -108,15 +133,19 @@ import Observation
             )
             newSnapshot = try service.snapshot(query: query)
         } catch {
+            isRecomputing = false
             phase = .failed("그래프를 불러오지 못했습니다.")
             return Task {}
         }
 
         // 순수 값 타입(Sendable)만 detached 계산으로 넘긴다.
         let configuration = layoutConfiguration
-        let layout = Task.detached(priority: .userInitiated) {
-            GraphLayout.positions(for: newSnapshot, configuration: configuration)
+        let layout = Task.detached(priority: .userInitiated) { () -> [GraphNodeID: GraphPoint] in
+            // 취소된 계산이면 CPU를 쓰지 않고 빈 결과를 돌려준다(어차피 generation으로 버려진다).
+            if Task.isCancelled { return [:] }
+            return GraphLayout.positions(for: newSnapshot, configuration: configuration)
         }
+        layoutTask = layout
         return Task { @MainActor [weak self] in
             let positions = await layout.value
             guard let self, current == self.generation else { return }
@@ -133,6 +162,7 @@ import Observation
             selectedNodeID = nil
         }
         phase = newSnapshot.nodes.isEmpty ? .empty : .loaded
+        isRecomputing = false
     }
 
     // MARK: - 선택·주변 보기
@@ -202,6 +232,9 @@ import Observation
     /// 진행 중이던 비동기 좌표 계산 결과는 `generation`을 올려 버린다.
     public func detach() {
         generation &+= 1
+        layoutTask?.cancel()
+        layoutTask = nil
+        isRecomputing = false
         environment = nil
         service = nil
     }
