@@ -41,7 +41,7 @@ final class AppEnvironmentTests: XCTestCase {
     private func makeOptions(paths: AppPaths,
                              keyStore: VaultKeyStore = InMemoryVaultKeyStore(),
                              authenticator: DeviceAuthenticator = MockDeviceAuthenticator(),
-                             pasteboard: Pasteboard = InMemoryPasteboard(),
+                             pasteboard: WorkLogCore.Pasteboard = InMemoryPasteboard(),
                              aiProvider: AIProvider? = nil,
                              clock: Clock? = nil,
                              ids: IDGenerator = SequentialIDGenerator()) -> AppEnvironmentOptions {
