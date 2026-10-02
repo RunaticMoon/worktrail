@@ -9,7 +9,7 @@ struct PlanScreen: View {
     @State private var taskId = ""
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 if !embedded {
                     WorkDatePicker(title: "계획 주의 날짜", value: Binding(get: { model.weekStart }, set: { model.selectWeek($0) }), calendar: calendar)
                         .frame(maxWidth: 320)
@@ -45,7 +45,7 @@ struct PlanScreen: View {
                         }
                     }
                 }
-            }.frame(maxWidth: 840, alignment: .leading).padding(embedded ? 8 : 24)
+            }.frame(maxWidth: 840, alignment: .leading).padding(embedded ? 8 : WorkLogTheme.contentInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }.navigationTitle(embedded ? "리포트" : "계획").onAppear { model.load() }
     }

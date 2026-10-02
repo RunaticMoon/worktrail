@@ -29,8 +29,6 @@ jobs:
         run: swift test
       - name: Package unsigned DMG
         timeout-minutes: 15
-        env:
-          WORKLOG_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           scripts/build-dmg.sh
           bash distribution/verify-dmg.sh "release/WorkLog-$(cat VERSION)-arm64.dmg" "$(cat VERSION)"

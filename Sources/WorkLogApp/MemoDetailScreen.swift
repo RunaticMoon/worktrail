@@ -13,7 +13,7 @@ struct MemoDetailScreen: View {
                 Button("닫기", action: onClose).keyboardShortcut(.cancelAction)
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     if let memo = model.memo {
                         Text(memo.workDate.iso).font(.caption).foregroundStyle(.secondary)
                         Text(memo.body).textSelection(.enabled)
@@ -43,7 +43,7 @@ struct MemoDetailScreen: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(20).frame(minWidth: 540, minHeight: 440)
+        }.padding(WorkLogTheme.contentInset).frame(minWidth: 540, minHeight: 440)
     }
     private func label(_ status: MemoTaskLinkStatus) -> String {
         switch status { case .proposed: return "검토 대기"; case .accepted: return "연결 승인"; case .rejected: return "연결 거절"; case .deferred: return "나중에 검토" }

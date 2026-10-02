@@ -11,7 +11,7 @@ struct ReportsScreen: View {
     @State private var copyMessage: String?
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 14) {
                 Picker("리포트 종류", selection: $model.family) {
                     Text("제출용 주간보고").tag(ReportFamily.submission)
                     Text("상세 성과 리포트").tag(ReportFamily.performance)
@@ -40,7 +40,7 @@ struct ReportsScreen: View {
                     }
                     QuizCard(model: quiz, reportDate: model.reportDate)
                 }
-            }.frame(maxWidth: 900, alignment: .leading).padding(24)
+            }.frame(maxWidth: 900, alignment: .leading).padding(WorkLogTheme.contentInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }.navigationTitle("리포트")
             .onAppear { model.loadSelection(); syncPlan() }

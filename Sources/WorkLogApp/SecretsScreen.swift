@@ -48,7 +48,7 @@ import WorkLogCore
                     }
                 }
             }
-        }.padding(16).navigationTitle("Secret")
+        }.padding(12).navigationTitle("Secret")
         .onAppear {
             isActive = true
             model.tick(); _ = model.acquireEditor(.main)
@@ -147,7 +147,7 @@ import WorkLogCore
                     }
                 }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         SecretEditorView(model: model, host: .main, keyboardMode: .cellNavigation,
                             onSave: { model.canEdit(from: .main) && model.save() },
                             titleFocusRequest: titleFocusRequest, onMoveToTrash: { confirmsTrash = true })

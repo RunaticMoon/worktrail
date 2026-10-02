@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Fail-closed release utilities. No credentials are read by local validation."""
 import hashlib
+import base64
 import json
 import re
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
+
+SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
+RELEASES = 'https://github.com/RunaticMoon/worktrail/releases'
+ET.register_namespace('sparkle', SPARKLE)
 
 
 def require(condition, message):
@@ -45,6 +51,56 @@ def verify(tag, directory):
     print('Verified exact release assets')
 
 
+def valid_signature(signature):
+    try:
+        return len(base64.b64decode(signature, validate=True)) == 64
+    except (ValueError, TypeError):
+        return False
+
+
+def appcast(tag, directory, signature):
+    """Create deterministic metadata; sign-update.sh signs the resulting XML feed."""
+    entry = assets(tag, directory)[0]
+    require(valid_signature(signature), 'Invalid Ed25519 archive signature')
+    root = ET.Element('rss', {'version': '2.0'})
+    channel = ET.SubElement(root, 'channel')
+    ET.SubElement(channel, 'title').text = 'WorkLog updates'
+    ET.SubElement(channel, 'link').text = RELEASES
+    ET.SubElement(channel, 'language').text = 'ko'
+    item = ET.SubElement(channel, 'item')
+    ET.SubElement(item, 'title').text = 'WorkLog ' + version(tag)
+    ET.SubElement(item, '{%s}version' % SPARKLE).text = version(tag)
+    ET.SubElement(item, '{%s}shortVersionString' % SPARKLE).text = version(tag)
+    ET.SubElement(item, '{%s}minimumSystemVersion' % SPARKLE).text = '14.0'
+    ET.SubElement(item, 'description').text = 'WorkLog 새 버전입니다. 설치 후 앱을 다시 시작합니다.'
+    ET.SubElement(item, 'enclosure', {
+        'url': RELEASES + '/download/' + tag + '/' + entry['name'],
+        'length': str(entry['size']), 'type': 'application/octet-stream',
+        '{%s}edSignature' % SPARKLE: signature,
+    })
+    ET.indent(root)
+    (Path(directory) / 'appcast.xml').write_bytes(ET.tostring(root, encoding='utf-8', xml_declaration=True) + b'\n')
+
+
+def verify_appcast(tag, directory):
+    entry = assets(tag, directory)[0]
+    root = ET.fromstring((Path(directory) / 'appcast.xml').read_bytes())
+    require(root.tag == 'rss', 'Invalid appcast root')
+    items = root.findall('./channel/item')
+    require(len(items) == 1, 'Expected exactly one update')
+    item = items[0]
+    for key in ('version', 'shortVersionString'):
+        require(item.findtext('{%s}%s' % (SPARKLE, key)) == version(tag), 'Appcast version mismatch')
+    require(item.findtext('{%s}minimumSystemVersion' % SPARKLE) == '14.0', 'Unexpected minimum macOS version')
+    enclosures = item.findall('enclosure')
+    require(len(enclosures) == 1, 'Expected exactly one update archive')
+    enclosure = enclosures[0]
+    require(enclosure.get('url') == RELEASES + '/download/' + tag + '/' + entry['name'], 'Unexpected update URL')
+    require(enclosure.get('length') == str(entry['size']), 'Appcast archive length mismatch')
+    require(valid_signature(enclosure.get('{%s}edSignature' % SPARKLE)), 'Invalid Ed25519 archive signature')
+    print('Verified update feed metadata')
+
+
 def main():
     command, *args = sys.argv[1:]
     if command == 'version':
@@ -53,6 +109,10 @@ def main():
         manifest(*args)
     elif command == 'verify':
         verify(*args)
+    elif command == 'appcast':
+        appcast(*args)
+    elif command == 'verify-appcast':
+        verify_appcast(*args)
     else:
         raise ValueError('Unknown command')
 
@@ -60,5 +120,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, KeyError, OSError) as error:
+    except (ValueError, KeyError, OSError, ET.ParseError) as error:
         sys.exit(str(error))

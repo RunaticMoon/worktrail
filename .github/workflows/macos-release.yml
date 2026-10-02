@@ -1,7 +1,7 @@
 # WorkLog macOS ad-hoc(unsigned) arm64 DMG 릴리즈 워크플로.
 # 수동 실행(workflow_dispatch)만 허용한다. 빌드·검증 job은 읽기 권한만 가지고,
 # GitHub 토큰은 릴리즈를 만드는 publish job의 단일 step에만 주입된다.
-# Apple Developer 계정·서명 인증서·공증은 없으므로 unsigned DMG만 다룬다.
+# 앱은 ad-hoc 서명, 업데이트 DMG와 feed는 별도의 Ed25519 키로 서명한다.
 name: macOS release DMG
 
 on:
@@ -63,6 +63,7 @@ jobs:
           version="$(python3 distribution/release.py version "$RELEASE_TAG" VERSION)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'BUILD_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          test -s distribution/sparkle-public-key.txt
       - name: Build all targets (including WorkLogApp)
         timeout-minutes: 20
         run: swift build --build-tests
@@ -71,8 +72,6 @@ jobs:
         run: swift test
       - name: Package unsigned DMG
         timeout-minutes: 15
-        env:
-          WORKLOG_BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/build-dmg.sh
       - name: Verify unsigned DMG contents
         timeout-minutes: 5
@@ -114,6 +113,14 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: release
           digest-mismatch: error
+      - name: Resolve pinned update tools without signing credentials
+        timeout-minutes: 10
+        run: swift package resolve
+      - name: Sign update archive and feed
+        timeout-minutes: 10
+        env:
+          WORKLOG_SPARKLE_PRIVATE_KEY: ${{ secrets.WORKLOG_SPARKLE_PRIVATE_KEY }}
+        run: bash distribution/sign-update.sh
       - name: Draft, read-back verification and optional promotion
         timeout-minutes: 12
         env:

@@ -35,7 +35,7 @@ struct PromptEditorView: View {
                     }
                     if prompts.hasChanges { Text("저장하지 않은 변경").font(.caption).foregroundStyle(.secondary) }
                 }
-            }.padding(16)
+            }.padding(12)
             Divider()
 
             Form {
@@ -112,7 +112,7 @@ struct PromptEditorView: View {
                 Button("저장") { prompts.save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(prompts.activeVersionNumber == nil || !prompts.hasChanges)
-            }.padding(16)
+            }.padding(12)
         }
         .frame(minWidth: 560, idealWidth: 720, maxWidth: 900,
                minHeight: 420, idealHeight: 640, maxHeight: 800)

@@ -1,6 +1,16 @@
 // swift-tools-version:5.10
 import PackageDescription
 
+var appDependencies: [Target.Dependency] = ["WorkLogCore"]
+var dependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+]
+#if os(macOS)
+// Sparkle contains macOS binary targets; exclude the package entirely on Linux.
+dependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"))
+appDependencies.append(.product(name: "Sparkle", package: "Sparkle"))
+#endif
+
 // WorkLog — 임시 코드명. 표시 이름·bundle id·데이터 경로는 AppIdentity에서 교체한다.
 let package = Package(
     name: "WorkLog",
@@ -10,11 +20,7 @@ let package = Package(
         .executable(name: "WorkLogApp", targets: ["WorkLogApp"]),
         .executable(name: "worklog", targets: ["worklog"]),
     ],
-    dependencies: [
-        // Apple 공식 swift-crypto: Apple 플랫폼에서는 CryptoKit을 그대로 재노출하고
-        // Linux에서는 같은 API를 BoringSSL로 제공한다. 자체 암호 구현을 하지 않기 위함.
-        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
-    ],
+    dependencies: dependencies,
     targets: [
         .systemLibrary(
             name: "CSQLite",
@@ -31,7 +37,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "WorkLogApp",
-            dependencies: ["WorkLogCore"]
+            dependencies: appDependencies,
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"], .when(platforms: [.macOS]))]
         ),
         .executableTarget(
             name: "worklog",
