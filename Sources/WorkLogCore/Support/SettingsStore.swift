@@ -100,13 +100,30 @@ public final class SettingsStore {
 
         let capture = settings.captureHotkey.trimmingCharacters(in: .whitespacesAndNewlines)
         let search = settings.searchHotkey.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var captureBinding: HotkeyBinding?
         if capture.isEmpty {
             problems.append("캡처 단축키(captureHotkey)는 비어 있을 수 없습니다.")
+        } else {
+            do {
+                captureBinding = try HotkeyBinding(parsing: capture)
+            } catch {
+                problems.append("입력 단축키(captureHotkey) 형식 오류: \(error.localizedDescription)")
+            }
         }
+
+        var searchBinding: HotkeyBinding?
         if search.isEmpty {
             problems.append("검색 단축키(searchHotkey)는 비어 있을 수 없습니다.")
+        } else {
+            do {
+                searchBinding = try HotkeyBinding(parsing: search)
+            } catch {
+                problems.append("검색 단축키(searchHotkey) 형식 오류: \(error.localizedDescription)")
+            }
         }
-        if !capture.isEmpty && capture == search {
+
+        if let captureBinding, let searchBinding, captureBinding == searchBinding {
             problems.append("캡처 단축키와 검색 단축키는 서로 달라야 합니다.")
         }
 
