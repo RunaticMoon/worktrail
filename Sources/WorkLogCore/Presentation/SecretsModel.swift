@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 
+/// Which screen is currently allowed to edit the shared Secret editor.
+public enum SecretEditorHost: Sendable, Equatable { case main, capture }
+
 /// Local-only editor. All value access goes through the authenticated session.
 @Observable @MainActor public final class SecretsModel {
     public var query = "" { didSet { searchTitles() } }
@@ -15,6 +18,8 @@ import Observation
     public private(set) var selectedRevisionId: String?
     public private(set) var duplicateRowIds: Set<String> = []
     public private(set) var hasRecoverableDraft = false
+    /// The single screen that may currently mutate the shared editor draft.
+    public private(set) var editorOwner: SecretEditorHost?
     public var requestsNewEntry = false
     public var title = "" { didSet { preserveDraft() } }
     public var groupName = "" { didSet { preserveDraft() } }
@@ -48,6 +53,8 @@ import Observation
     @ObservationIgnored private var recoveredDraft: SecretPayload?
     public var clipboardClearSeconds: Int { environment?.settings.clipboardClearSeconds ?? 120 }
     public var hasUnsavedRows: Bool { rows != originalRows || title != originalTitle || groupName != originalGroup || !preview.isEmpty || !pasteText.isEmpty }
+    /// Whether the current editor draft holds unsaved changes. Used by the capture panel to avoid discarding a draft with `beginNew()`.
+    public var hasUnsavedDraft: Bool { hasUnsavedRows }
 
     public init(environment: AppEnvironment) {
         self.environment = environment
@@ -75,14 +82,19 @@ import Observation
     public func synchronizeLock() {
         let locked = environment?.vaultSession.state != .unlocked
         if isLocked != locked { isLocked = locked }
-        if locked && (selectedId != nil || !rows.isEmpty || !originalRows.isEmpty || !preview.isEmpty ||
-            !pasteText.isEmpty || !revisionRows.isEmpty || !revisions.isEmpty || recoveredDraft != nil ||
-            hasRecoverableDraft || showsValues || !title.isEmpty || !groupName.isEmpty || !trashItems.isEmpty) {
-            conceal()
+        if locked {
+            // Locking always drops editor ownership, even when no plaintext is present.
+            if editorOwner != nil { editorOwner = nil }
+            if selectedId != nil || !rows.isEmpty || !originalRows.isEmpty || !preview.isEmpty ||
+                !pasteText.isEmpty || !revisionRows.isEmpty || !revisions.isEmpty || recoveredDraft != nil ||
+                hasRecoverableDraft || showsValues || !title.isEmpty || !groupName.isEmpty || !trashItems.isEmpty {
+                conceal()
+            }
         }
     }
     private func conceal() {
         suppressDraft = true
+        editorOwner = nil
         rows = []; originalRows = []; preview = []; pasteText = ""
         revisions = []; revisionRows = []; selectedRevisionId = nil
         recoveredDraft = nil; hasRecoverableDraft = false
@@ -113,6 +125,21 @@ import Observation
     }
     public func lock() { environment?.lockSecrets(.manual); synchronizeLock() }
     public func detach() { lock(); environment = nil }
+
+    // MARK: - Editor ownership (shared between the main screen and the capture panel)
+
+    /// Claims the editor for `host`. Succeeds when nobody owns it or the same host owns it.
+    /// Ownership changes never discard drafts, unlock, call `beginNew()`, or toggle `showsValues`.
+    public func acquireEditor(_ host: SecretEditorHost) -> Bool {
+        if let editorOwner, editorOwner != host { return false }
+        editorOwner = host
+        return true
+    }
+    /// Releases the editor only when `host` is the current owner. Other hosts are ignored.
+    public func releaseEditor(_ host: SecretEditorHost) {
+        if editorOwner == host { editorOwner = nil }
+    }
+    public func canEdit(from host: SecretEditorHost) -> Bool { editorOwner == host }
 
     public func beginNew() {
         guard requireUnlocked() != nil else { return }
