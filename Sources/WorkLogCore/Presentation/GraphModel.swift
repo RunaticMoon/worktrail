@@ -7,8 +7,9 @@ import Observation
 /// - 실제 그래프 조회·병합·필터는 `GraphService`, 좌표 계산은 `GraphLayout`이 담당한다.
 ///   이 모델은 화면 상태(로딩·빈·오류·필터·선택·잘림)와 사용자 상호작용만 관리한다.
 /// - Secret(Vault)에는 접근하지 않는다. `AppEnvironment`의 일반 저장소만 쓴다.
-/// - 레이아웃은 250노드 수준에서 동기로 계산해도 충분하다. 다만 오래된 결과를 버릴 수
-///   있도록 `generation` 카운터를 두어, 나중에 계산을 비동기로 옮겨도 안전하게 한다.
+/// - 좌표 계산(`GraphLayout.positions`, `O(iterations × n²)`)은 메인 액터 밖(`Task.detached`)에서
+///   수행한다. `generation` 카운터로 더 이상 최신이 아닌 계산 결과를 버리고, 메인 액터에서
+///   현재 세대일 때만 스냅샷·좌표·`phase`를 함께 적용한다.
 @Observable @MainActor public final class GraphModel {
 
     /// 화면 로딩 상태.
@@ -82,12 +83,21 @@ import Observation
 
     /// 현재 조건으로 스냅샷과 좌표를 다시 계산한다.
     ///
+    /// 스냅샷 조회는 메인 액터에서 동기로 수행하고, 좌표 계산만 `Task.detached`로
+    /// 넘긴다. 계산이 끝나면 메인 액터에서 `generation`이 아직 같을 때만
+    /// 스냅샷·좌표·`phase`를 적용한다(더 새 `reload()`가 시작됐으면 버린다).
+    ///
     /// 실패하면 원문 오류를 노출하지 않고 고정된 한국어 문구만 남긴다.
-    public func reload() {
-        guard let environment, let service else { return }
+    ///
+    /// - Returns: 좌표 계산·반영이 끝나는 시점을 기다릴 수 있는 `Task`.
+    @discardableResult
+    public func reload() -> Task<Void, Never> {
+        guard let environment, let service else { return Task {} }
         generation &+= 1
         let current = generation
         phase = .loading
+
+        let newSnapshot: GraphSnapshot
         do {
             let today = environment.calendar.workDate(of: environment.options.clock.now())
             let query = GraphQuery(
@@ -96,19 +106,27 @@ import Observation
                 focus: focus,
                 nodeLimit: Self.nodeLimit
             )
-            let newSnapshot = try service.snapshot(query: query)
-            // 동기 호출이라 항상 최신이지만, 비동기 전환 시 오래된 결과를 버리는 계약을 지킨다.
-            guard current == generation else { return }
-            apply(newSnapshot)
+            newSnapshot = try service.snapshot(query: query)
         } catch {
-            guard current == generation else { return }
             phase = .failed("그래프를 불러오지 못했습니다.")
+            return Task {}
+        }
+
+        // 순수 값 타입(Sendable)만 detached 계산으로 넘긴다.
+        let configuration = layoutConfiguration
+        let layout = Task.detached(priority: .userInitiated) {
+            GraphLayout.positions(for: newSnapshot, configuration: configuration)
+        }
+        return Task { @MainActor [weak self] in
+            let positions = await layout.value
+            guard let self, current == self.generation else { return }
+            self.apply(newSnapshot, positions: positions)
         }
     }
 
-    private func apply(_ newSnapshot: GraphSnapshot) {
+    private func apply(_ newSnapshot: GraphSnapshot, positions: [GraphNodeID: GraphPoint]) {
         snapshot = newSnapshot
-        positions = GraphLayout.positions(for: newSnapshot, configuration: layoutConfiguration)
+        self.positions = positions
         // 새 스냅샷에 없는 선택은 지운다.
         if let selected = selectedNodeID,
            !newSnapshot.nodes.contains(where: { $0.id == selected }) {
@@ -124,15 +142,17 @@ import Observation
     }
 
     /// 현재 선택을 중심으로 2-hop 주변 보기를 켠다.
-    public func focusOnSelection() {
+    @discardableResult
+    public func focusOnSelection() -> Task<Void, Never> {
         focus = selectedNodeID
-        reload()
+        return reload()
     }
 
     /// 주변 보기를 끄고 전체 범위로 돌아간다.
-    public func clearFocus() {
+    @discardableResult
+    public func clearFocus() -> Task<Void, Never> {
         focus = nil
-        reload()
+        return reload()
     }
 
     public var selectedNode: GraphNode? {
@@ -178,7 +198,10 @@ import Observation
     public var isTruncated: Bool { snapshot.isTruncated }
 
     /// 앱 종료·백업 복원 시 DB를 붙잡지 않도록 참조를 놓는다. 이후 `reload()`는 무해하다.
+    ///
+    /// 진행 중이던 비동기 좌표 계산 결과는 `generation`을 올려 버린다.
     public func detach() {
+        generation &+= 1
         environment = nil
         service = nil
     }

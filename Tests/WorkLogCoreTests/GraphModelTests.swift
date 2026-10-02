@@ -4,7 +4,8 @@ import XCTest
 /// I: 그래프 화면 Presentation 모델(GraphModel).
 ///
 /// - 로딩·빈·오류·필터·선택·잘림 상태.
-/// - 순수 DTO만 `GraphLayout`에 넘기고, 250노드 수준은 동기 계산.
+/// - 순수 DTO만 `GraphLayout`에 넘기고, 좌표 계산은 메인 액터 밖에서 비동기로 수행한다.
+/// - `member`는 `reload()`가 돌려준 `Task`를 `await ...value`로 기다린 뒤 단언한다.
 /// - 오래된 계산 결과 무시를 위한 generation 카운터와 detach를 검증한다.
 final class GraphModelTests: XCTestCase {
 
@@ -99,7 +100,7 @@ final class GraphModelTests: XCTestCase {
 
         let model = GraphModel(environment: env)
         XCTAssertEqual(model.phase, .idle)
-        model.reload()
+        await model.reload().value
 
         XCTAssertEqual(model.phase, .loaded)
         XCTAssertEqual(Set(model.snapshot.nodes.map(\.id)),
@@ -115,7 +116,7 @@ final class GraphModelTests: XCTestCase {
     func testReloadWithoutDataIsEmpty() async throws {
         let env = try makeEnvironment()
         let model = GraphModel(environment: env)
-        model.reload()
+        await model.reload().value
 
         XCTAssertEqual(model.phase, .empty)
         XCTAssertTrue(model.snapshot.nodes.isEmpty)
@@ -140,19 +141,19 @@ final class GraphModelTests: XCTestCase {
         let model = GraphModel(environment: env)
 
         model.rangePreset = .week
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(memoIDs(model), ["m0"])
 
         model.rangePreset = .month
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(memoIDs(model), ["m0", "m10"])
 
         model.rangePreset = .quarter
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(memoIDs(model), ["m0", "m10", "m40"])
 
         model.rangePreset = .all
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(memoIDs(model), ["m0", "m10", "m40", "m100"])
 
         XCTAssertEqual(model.phase, .loaded)
@@ -197,12 +198,12 @@ final class GraphModelTests: XCTestCase {
                        [.memo, .task, .activity, .reportVersion, .project, .tag])
 
         model.visibleKinds = [.memo]
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(model.snapshot.nodes.map(\.id), [node(.memo, "m1")])
         XCTAssertTrue(model.snapshot.edges.isEmpty, "끝점이 빠지면 소속 엣지도 사라진다")
 
         model.visibleKinds = [.memo, .task, .activity]
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(Set(model.snapshot.nodes.map(\.id)),
                        [node(.memo, "m1"), node(.task, "t1"), node(.activity, "a1")])
         XCTAssertEqual(model.snapshot.edges.map(\.kind), [.activityTask])
@@ -219,7 +220,7 @@ final class GraphModelTests: XCTestCase {
 
         let model = GraphModel(environment: env)
         model.rangePreset = .month
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(memoIDs(model), ["m1", "m2"])
 
         model.select(node(.memo, "m2"))
@@ -227,12 +228,12 @@ final class GraphModelTests: XCTestCase {
         XCTAssertEqual(model.selectedNode?.id, node(.memo, "m2"))
 
         // 같은 데이터로 다시 불러오면 선택이 유지된다.
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(model.selectedNodeID, node(.memo, "m2"))
 
         // 범위를 좁혀 m2가 빠지면 선택이 지워진다.
         model.rangePreset = .week
-        model.reload()
+        await model.reload().value
         XCTAssertNil(model.selectedNodeID)
         XCTAssertNil(model.selectedNode)
     }
@@ -252,16 +253,16 @@ final class GraphModelTests: XCTestCase {
         try relate(env, id: "r2", from: "t2", to: "t3", date: today)
 
         let model = GraphModel(environment: env)
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(model.snapshot.nodes.count, 5)
 
         model.select(node(.memo, "m1"))
-        model.focusOnSelection()
+        await model.focusOnSelection().value
         XCTAssertEqual(model.focus, node(.memo, "m1"))
         XCTAssertEqual(Set(model.snapshot.nodes.map(\.id)),
                        [node(.memo, "m1"), node(.task, "t1"), node(.task, "t2")])
 
-        model.clearFocus()
+        await model.clearFocus().value
         XCTAssertNil(model.focus)
         XCTAssertEqual(Set(model.snapshot.nodes.map(\.id)),
                        [node(.memo, "m1"), node(.memo, "m2"),
@@ -280,7 +281,7 @@ final class GraphModelTests: XCTestCase {
         try acceptMemoTask(env, id: "l1", memoId: "m1", taskId: "t1", date: today)
 
         let model = GraphModel(environment: env)
-        model.reload()
+        await model.reload().value
 
         let neighbors = model.neighbors(of: node(.task, "t1"))
         XCTAssertEqual(neighbors.count, 3)
@@ -305,7 +306,7 @@ final class GraphModelTests: XCTestCase {
         try seedTask(env, id: "t1", title: "베타 업무", date: today)
 
         let model = GraphModel(environment: env)
-        model.reload()
+        await model.reload().value
         // kind 순위(memo→task) 뒤 제목을 Swift 문자열 순서로 비교한다(결정적).
         XCTAssertEqual(model.listedNodes.map(\.title), ["베타", "알파", "베타 업무"])
 
@@ -330,7 +331,7 @@ final class GraphModelTests: XCTestCase {
 
         let model = GraphModel(environment: env)
         model.layoutConfiguration = GraphLayoutConfiguration(iterations: 1, width: 100, height: 100)
-        model.reload()
+        await model.reload().value
 
         XCTAssertEqual(model.phase, .loaded)
         XCTAssertTrue(model.isTruncated)
@@ -346,13 +347,38 @@ final class GraphModelTests: XCTestCase {
         try seedMemo(env, id: "m1", body: "메모", date: today)
 
         let model = GraphModel(environment: env)
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(model.phase, .loaded)
 
         model.detach()
-        model.reload()
+        await model.reload().value
         XCTAssertEqual(model.phase, .loaded, "detach 후 reload는 상태를 바꾸지 않는다")
         XCTAssertTrue(model.snapshot.nodes.contains { $0.id == node(.memo, "m1") })
+    }
+
+    // MARK: 10b. 빠른 연속 reload → 마지막 결과만 반영
+
+    @MainActor
+    func testRapidReloadAppliesOnlyLastResult() async throws {
+        let env = try makeEnvironment()
+        let d10 = env.calendar.adding(days: -10, to: today)
+        try seedMemo(env, id: "m0", body: "오늘", date: today)
+        try seedMemo(env, id: "m10", body: "10일 전", date: d10)
+
+        let model = GraphModel(environment: env)
+
+        // 첫 reload(week)의 결과가 나중에 도착해도, 두 번째 reload(all)가
+        // 이미 세대를 올렸으므로 반영되지 않아야 한다.
+        model.rangePreset = .week
+        let first = model.reload()
+        model.rangePreset = .all
+        let second = model.reload()
+
+        await first.value
+        await second.value
+
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(memoIDs(model), ["m0", "m10"], "마지막 reload의 결과만 반영된다")
     }
 
     // MARK: 11. 라벨·심볼 헬퍼
