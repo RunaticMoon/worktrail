@@ -48,13 +48,10 @@ import Observation
     public var submissionPeriods: (previous: DateRange, plan: DateRange) {
         environment.periods.submissionWeek(reportDate: reportDate)
     }
+    /// Reloads the report lists; a user-initiated reload discards a deferred version request.
     public func load() {
-        do {
-            submissionReports = try environment.repo.reports(family: .submission)
-            performanceReports = try environment.repo.reports(family: .performance)
-            evaluationPeriods = try environment.repo.evaluationPeriods()
-            errorMessage = nil
-        } catch { errorMessage = "리포트 목록을 불러오지 못했습니다. 다시 불러오세요." }
+        pendingVersionId = nil
+        reloadLists()
     }
     /// Defer exact-version navigation until the destination loads its selection.
     public func requestVersionSelection(_ id: String) {
@@ -65,7 +62,8 @@ import Observation
     public func loadSelection() {
         guard !isGenerating, !hasChanges else { return }
         reportDate = environment.periods.weekStart(containing: reportDate)
-        load()
+        // Keep the pending request alive until it is consumed below.
+        reloadLists()
         guard errorMessage == nil else { return }
         if let id = pendingVersionId {
             pendingVersionId = nil
@@ -92,15 +90,19 @@ import Observation
             catch { errorMessage = "리포트 버전을 불러오지 못했습니다. 다시 선택하세요." }
         } else { clearPreview() }
     }
+    /// A direct user selection supersedes any deferred version request.
     public func selectReport(_ id: String) {
         guard !isGenerating, !hasChanges, let selected = visibleReports.first(where: { $0.id == id }) else { return }
+        pendingVersionId = nil
         do {
             try showReport(selected)
             errorMessage = nil
         } catch { errorMessage = "리포트 버전을 불러오지 못했습니다. 다시 선택하세요." }
     }
+    /// A direct user selection supersedes any deferred version request.
     public func selectVersion(_ id: String) {
         guard !isGenerating, !hasChanges, let selected = versions.first(where: { $0.id == id }) else { return }
+        pendingVersionId = nil
         do { try showVersion(selected); errorMessage = nil }
         catch { errorMessage = "버전의 근거를 불러오지 못했습니다. 다시 선택하세요." }
     }
@@ -163,6 +165,14 @@ import Observation
             let (period, _) = try environment.evaluationPeriods.create(start: proposal.range.start, endInclusive: evaluationEnd)
             self.proposal = nil; evaluationPeriodId = period.id; loadSelection()
         } catch { errorMessage = "평가 기간을 저장하지 못했습니다. 날짜를 확인하고 다시 제안하세요." }
+    }
+    private func reloadLists() {
+        do {
+            submissionReports = try environment.repo.reports(family: .submission)
+            performanceReports = try environment.repo.reports(family: .performance)
+            evaluationPeriods = try environment.repo.evaluationPeriods()
+            errorMessage = nil
+        } catch { errorMessage = "리포트 목록을 불러오지 못했습니다. 다시 불러오세요." }
     }
     private func showReport(_ selected: Report, versionId: String? = nil) throws {
         let rows = try environment.repo.reportVersions(reportId: selected.id)

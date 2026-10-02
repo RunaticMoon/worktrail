@@ -374,15 +374,20 @@ public enum CaptureTaskAction: Equatable, Sendable {
     ///
     /// 기존 규칙은 첫 줄을 업무명, 나머지를 본문으로 한다. 첫 줄이 공백뿐이면
     /// 첫 번째 비어 있지 않은 줄을 업무명으로 쓰고, 그 이후 줄만 본문으로 남긴다.
+    /// CRLF 입력을 고려해 빈 줄 판정과 업무명 trim에 개행 문자를 포함한다.
     static func splitTaskText(_ text: String) -> (title: String, body: String) {
-        let lines = text.components(separatedBy: "\n")
-        if let first = lines.first, !first.trimmingCharacters(in: .whitespaces).isEmpty {
-            return (first, lines.dropFirst().joined(separator: "\n"))
+        // Swift에서 "\r\n"은 하나의 Character라 "\n"으로 바로 나뉘지 않으므로 먼저 LF로 정규화한다.
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        if let first = lines.first, !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (first.trimmingCharacters(in: .whitespacesAndNewlines),
+                    lines.dropFirst().joined(separator: "\n"))
         }
-        guard let index = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else {
+        guard let index = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             return (text, "")
         }
-        return (lines[index], lines.dropFirst(index + 1).joined(separator: "\n"))
+        return (lines[index].trimmingCharacters(in: .whitespacesAndNewlines),
+                lines.dropFirst(index + 1).joined(separator: "\n"))
     }
 
     /// 이름이 바뀌어도 두 번째 프로젝트가 생기지 않도록 안정 ID에서 현재 이름을 확인한다.

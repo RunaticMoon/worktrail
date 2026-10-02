@@ -184,6 +184,30 @@ final class ReportsPlanPresentationTests: XCTestCase {
         XCTAssertEqual(model.version?.id, currentId)
         XCTAssertNil(model.errorMessage)
     }
+    @MainActor func testExplicitSelectionOrReloadDiscardsPendingVersionRequest() async throws {
+        let env = try environment(); let writer = ReportsModel(environment: env)
+        await writer.generate(); writer.confirm()
+        let historicalId = try XCTUnwrap(writer.version?.id)
+        await writer.generate()
+        let reportId = try XCTUnwrap(writer.report?.id)
+        let latestId = try XCTUnwrap(writer.version?.id)
+
+        let model = ReportsModel(environment: env)
+        model.requestVersionSelection(historicalId)
+        model.load() // 사용자 새로고침
+        model.loadSelection()
+        XCTAssertEqual(model.version?.id, latestId, "load가 보류 버전 요청을 폐기한다")
+
+        model.requestVersionSelection(historicalId)
+        model.selectVersion(latestId)
+        model.loadSelection()
+        XCTAssertEqual(model.version?.id, latestId, "직접 선택한 버전 뒤 보류 요청이 되살아나지 않는다")
+
+        model.requestVersionSelection(historicalId)
+        model.selectReport(reportId)
+        model.loadSelection()
+        XCTAssertEqual(model.version?.id, latestId, "리포트 직접 선택 뒤 보류 요청이 되살아나지 않는다")
+    }
     @MainActor func testPlanCandidatesCheckConfirmAndScopeKeepTaskStateUnchanged() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "공통 계획", workDate: prior, checklist: ["검증 범위"])

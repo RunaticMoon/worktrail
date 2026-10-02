@@ -43,7 +43,7 @@ public enum OrdinaryCaptureRequest: Sendable {
 ///   바깥 트랜잭션 안에서 SAVEPOINT로 중첩된다(`SQLiteDatabase.transaction`).
 /// - `related`가 비어 있으면 원본만 저장한다.
 /// - `related`에서 생성된 레코드 자신과 중복 참조는 제거한다.
-/// - 링크 대상이 없거나 자기 연결이면 원본·FTS(`search_doc`)·링크가 모두 롤백된 뒤 throw한다.
+/// - 링크 대상이 없으면 원본·FTS(`search_doc`)·링크가 모두 롤백된 뒤 throw한다(자기 참조는 위처럼 제거 후 저장).
 /// - Secret(Vault) 데이터는 다루지 않으며 work.sqlite의 일반 기록만 저장한다.
 public final class LinkedCaptureService: @unchecked Sendable {
     private let repo: WorkRepository

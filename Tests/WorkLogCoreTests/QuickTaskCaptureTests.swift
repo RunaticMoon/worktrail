@@ -149,6 +149,20 @@ final class QuickTaskCaptureTests: XCTestCase {
                        "기존 분할 규칙(첫 줄=업무명) 유지")
     }
 
+    @MainActor
+    func testNewTaskWithCRLFTrimsTitleAndSkipsBlankLine() async throws {
+        let env = try environment()
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.text = "\r\n제목\r\n본문"
+
+        XCTAssertTrue(model.submit())
+        let taskId = try XCTUnwrap(model.lastSavedId)
+        XCTAssertEqual(try env.repo.task(id: taskId)?.title, "제목",
+                       "CRLF의 \\r을 공백으로 보고 trim한다")
+        XCTAssertEqual(try env.repo.activities(taskId: taskId).first?.body, "본문")
+    }
+
     // MARK: - 기존 업무 진행기록 + 프로젝트 검증
     @MainActor
     func testExistingTaskActivityValidatesProjectAndLinks() async throws {
