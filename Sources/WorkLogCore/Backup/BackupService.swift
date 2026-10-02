@@ -249,6 +249,14 @@ public final class BackupService: @unchecked Sendable {
                         let dest = tmpDir.appendingPathComponent(name)
                         try? fm.removeItem(at: dest)
                         try fm.copyItem(at: url, to: dest)
+                        if name.hasSuffix(".sqlite") {
+                            // 닫힌 DB에 남은 -wal도 함께 복사해 반영한 뒤 단일 파일로 만든다(-shm은 복사하지 않음).
+                            let wal = URL(fileURLWithPath: url.path + "-wal")
+                            if fm.fileExists(atPath: wal.path) {
+                                try fm.copyItem(at: wal, to: URL(fileURLWithPath: dest.path + "-wal"))
+                            }
+                            try SQLiteDatabase.convertToRollbackJournal(path: dest.path)
+                        }
                     }
                 }
             }

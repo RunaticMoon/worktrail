@@ -249,6 +249,23 @@ public final class SQLiteDatabase: @unchecked Sendable {
         }
     }
 
+    /// 닫힌 DB 파일 사본을 단일 파일(DELETE 저널)로 바꾼다. 같은 경로의 -wal이 있으면 먼저 반영된다.
+    /// 백업 사본은 읽기 전용으로 검증하는데, macOS 시스템 SQLite는 WAL DB를 읽기 전용으로 열지 못한다.
+    public static func convertToRollbackJournal(path: String) throws {
+        var db: OpaquePointer?
+        let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil)
+        guard rc == SQLITE_OK, let db else {
+            let msg = db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
+            sqlite3_close(db)
+            throw SQLiteError(code: rc, message: msg)
+        }
+        defer { sqlite3_close(db) }
+        let mode = sqlite3_exec(db, "PRAGMA journal_mode = DELETE", nil, nil, nil)
+        guard mode == SQLITE_OK else {
+            throw SQLiteError(code: mode, message: String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
     /// PRAGMA integrity_check 결과가 "ok"인지.
     public func integrityCheck() throws -> Bool {
         try query("PRAGMA integrity_check").first?.string("integrity_check") == "ok"

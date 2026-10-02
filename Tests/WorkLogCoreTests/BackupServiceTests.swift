@@ -161,6 +161,28 @@ final class BackupServiceTests: XCTestCase {
         }
     }
 
+    /// 복원 직전 보존 백업(닫힌 파일 복사)도 단일 파일이어야 읽기 전용 검증이 macOS에서 열린다.
+    func testPreRestoreBackupCopiesUseRollbackJournal() throws {
+        let root = try makeRoot()
+        let paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock,
+                                    ids: SequentialIDGenerator(prefix: "src"))
+        _ = try WorkLogCore.TaskService(repo: stores.repo).createTask(title: "보존 백업 확인", projectNames: [], note: nil)
+        stores.close()
+
+        let info = try XCTUnwrap(BackupService.makePreRestoreBackup(target: paths, clock: clock))
+        XCTAssertEqual(info.manifest.reason, .preRestore)
+        for name in ["work.sqlite", "vault.sqlite"] {
+            let url = info.directory.appendingPathComponent(name)
+            let header = try XCTUnwrap(fileBytes(url))
+            XCTAssertEqual(header[18], 1, "\(name) write version")
+            XCTAssertEqual(header[19], 1, "\(name) read version")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path + "-wal"), "\(name)-wal 잔여")
+        }
+        XCTAssertNoThrow(try BackupService.verifyBackup(info))
+    }
+
     func testCreateBackupProducesVerifiedManifest() throws {
         let root = try makeRoot()
         let paths = makePaths(root: root)
