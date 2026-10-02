@@ -5,7 +5,7 @@
 #   --skip-build  .build/app/WorkLog.app 이 이미 있을 때 앱 빌드를 생략한다.
 # 결과:   release/WorkLog-<VERSION>-arm64.dmg
 #
-# 미검증: 이 스크립트는 Linux 개발 서버에서 작성했으며 실제 Mac에서 실행해 보지 않았다.
+# GitHub Actions macos-15(arm64)에서 실행·검증했다. 개인 Mac에서의 실행은 미검증이다.
 # 같은 이름의 기존 DMG만 덮어쓴다(-ov). 다른 DMG는 건드리지 않는다.
 set -euo pipefail
 

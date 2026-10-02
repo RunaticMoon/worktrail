@@ -6,7 +6,7 @@
 #
 # 버전: 저장소 루트 VERSION 파일(한 줄, 예: 0.1.0)이 CFBundleShortVersionString.
 #       환경변수 WORKLOG_BUILD_NUMBER(기본 1, 양의 정수)가 CFBundleVersion.
-# 미검증: 이 스크립트는 Linux 개발 서버에서 작성했으며 실제 Mac에서 실행해 보지 않았다.
+# GitHub Actions macos-15(arm64)에서 실행·검증했다. 개인 Mac에서의 실행은 미검증이다.
 # 로컬 실행용 ad-hoc 서명만 한다. 배포용 Developer ID 서명·공증은 하지 않는다.
 set -euo pipefail
 

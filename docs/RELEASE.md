@@ -62,6 +62,10 @@ scripts/build-dmg.sh && distribution/verify-dmg.sh release/WorkLog-$(cat VERSION
 
 `scripts/build-dmg.sh --skip-build`는 이미 빌드된 앱의 `CFBundleShortVersionString`이 `VERSION`과 다르면 실패한다(이전 버전 앱으로 새 버전 DMG를 만드는 것을 막는다).
 
+## 검증 기록
+
+- 2026-10-02 PR #2 macOS CI(run 36950504216, macos-15 arm64, 커밋 29c099a): `swift test` 472/0, `build-dmg.sh` → `WorkLog-0.1.0-arm64.dmg` 생성, `verify-dmg.sh` 통과(버전·번들 ID·arm64·codesign), `release.py manifest/verify` 통과, artifact `worklog-dmg-<sha>`(약 2.4MB) 업로드.
+
 ## 미검증
 
 - 릴리즈 워크플로(`macos-release.yml`)의 실제 draft/publish 실행
