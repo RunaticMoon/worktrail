@@ -15,8 +15,10 @@
 | `Sources/WorkLogApp` | macOS SwiftUI/AppKit 앱(메뉴 막대, 빠른 입력 패널, 화면) | macOS CI 컴파일 통과 · 실행은 **미검증** |
 | `Sources/worklog` | 개발·시연용 CLI | Linux 실행 확인 |
 | `Tests/WorkLogCoreTests` | XCTest | Linux |
-| `scripts/build-macos-app.sh` | SwiftPM 결과를 `.app` 번들로 묶음(ad-hoc 서명) | **미검증** |
-| `.github/workflows/macos.yml` | macOS 15 러너에서 전체 빌드·테스트 | 아직 실행 안 함(push 전) |
+| `scripts/build-macos-app.sh`, `scripts/build-dmg.sh` | `.app` 번들(ad-hoc 서명)과 `WorkLog-<VERSION>-arm64.dmg` 생성 | macOS CI에서 실행 |
+| `distribution/` | 릴리즈 버전·해시 검사(`release.py`), DMG 검증, Release 업로드 | `release.py`는 Linux 단위 테스트 |
+| `.github/workflows/macos.yml` | macOS 15 러너에서 전체 빌드·테스트·DMG 생성 검증 | PR·push마다 실행 |
+| `.github/workflows/macos-release.yml` | 수동 실행: 태그·버전 검사 후 DMG를 artifact/draft/공개 Release로 | 실제 릴리즈 실행 **미검증** |
 
 데이터는 두 SQLite 파일로 분리한다: `work.sqlite`(일반 기록) / `vault.sqlite`(Secret 암호문만). 암호화 키는 macOS Keychain에만 있고 DB·백업에는 없다.
 
@@ -37,9 +39,12 @@ swift test --filter ReportServiceTests
 macOS 앱 번들(Mac에서만):
 
 ```bash
-scripts/build-macos-app.sh            # → .build/app/WorkLog.app
+scripts/build-macos-app.sh            # → .build/app/WorkLog.app (버전은 VERSION 파일)
 open .build/app/WorkLog.app
+scripts/build-dmg.sh                  # → release/WorkLog-<VERSION>-arm64.dmg
 ```
+
+릴리즈(버전별 DMG를 GitHub Release에 올리기)는 [`docs/RELEASE.md`](docs/RELEASE.md) 참고. 릴리즈 태그 `vX.Y.Z`는 `VERSION`과 같아야 한다.
 
 ## 개발용 CLI (`worklog`)
 
@@ -153,7 +158,7 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 - Keychain 키 저장(`KeychainVaultKeyStore`), Touch ID/암호 인증(`LocalDeviceAuthenticator`), `NSPasteboard` 조건부 삭제(`SystemPasteboard`)
 - 실제 Codex Enterprise 계정 로그인·스킬 조회·턴 실행, 회사 정책 오류 분류(가짜 app-server 프로세스로 프로토콜만 테스트), 승인 거절 응답의 `decision` 필드 값
 - Codex read-only sandbox가 실제로 vault·백업 파일 읽기를 막는지(AI-T07). 앱은 입력에서 해당 경로를 빼고 출력에 흔적이 있으면 저장하지 않을 뿐이다
-- `scripts/build-macos-app.sh`, `.github/workflows/macos.yml`(아직 실행 안 함), 로그인 시 실행
+- 릴리즈 워크플로의 실제 draft/공개 Release 실행, 받은 DMG의 설치·첫 실행(Gatekeeper 승인), 로그인 시 실행
 - 대용량 성능(5만 건 삽입·검색 시간) 측정
 - 체크리스트·프로젝트 연결의 과거 시점(knownAt) 필터: 스키마에 기록 시각 컬럼이 없어 미적용
 - 인수 테스트별 상태는 `docs/acceptance-tests.md` 참고
