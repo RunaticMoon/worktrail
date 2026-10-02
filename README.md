@@ -5,14 +5,14 @@
 - 제품 요구: `docs/mac_worklog_ai_handoff/02_PRODUCT_SPEC.md` (실행 지시: `01_AI_BUILD_PROMPT.md`)
 - 구현 계획: `docs/plan.md` · 기술 결정: `docs/decisions.md` · 인수 테스트 대응표: `docs/acceptance-tests.md`
 
-> **검증 범위 안내** — 이 저장소는 Linux(aarch64, Swift 6.3) 개발 서버에서 작성했다. `WorkLogCore`와 `worklog` CLI는 Linux에서 실제 빌드·테스트했지만, **macOS 앱(SwiftUI/AppKit), Keychain, Touch ID, 전역 단축키, NSPasteboard, 실제 Codex Enterprise 계정 연결은 실행해 보지 않았다(미검증).** 자세한 목록은 아래 [미검증 항목](#미검증-항목).
+> **검증 범위 안내** — 이 저장소는 Linux(aarch64, Swift 6.3) 개발 서버에서 작성했다. `WorkLogCore`와 `worklog` CLI는 Linux에서 실제 빌드·테스트했고, GitHub Actions `macos-15` 러너(run 36946540946)에서 macOS 앱을 포함한 전체 빌드와 WorkLogCore 테스트 472개도 통과했다. 그러나 **macOS 앱(SwiftUI/AppKit) 실행, Keychain, Touch ID, 전역 단축키, NSPasteboard, 실제 Codex Enterprise 계정 연결은 실행해 보지 않았다(미검증).** 자세한 목록은 아래 [미검증 항목](#미검증-항목).
 
 ## 구조
 
 | 경로 | 내용 | 검증 |
 |---|---|---|
 | `Sources/WorkLogCore` | 도메인(Task 이벤트 재생, 계획, 날짜), 저장(SQLite), 검색(FTS5), Secret(AES-GCM, 세션 잠금, 클립보드), 백업·복원, 리포트(제출용/성과), AI 실행기·Codex 어댑터, 스케줄러, 앱 구성 루트(`AppEnvironment`), CLI 로직 | Linux `swift test` |
-| `Sources/WorkLogApp` | macOS SwiftUI/AppKit 앱(메뉴 막대, 빠른 입력 패널, 화면) | **미검증** (macOS CI 워크플로만 준비) |
+| `Sources/WorkLogApp` | macOS SwiftUI/AppKit 앱(메뉴 막대, 빠른 입력 패널, 화면) | macOS CI 컴파일 통과 · 실행은 **미검증** |
 | `Sources/worklog` | 개발·시연용 CLI | Linux 실행 확인 |
 | `Tests/WorkLogCoreTests` | XCTest | Linux |
 | `scripts/build-macos-app.sh` | SwiftPM 결과를 `.app` 번들로 묶음(ad-hoc 서명) | **미검증** |
@@ -127,7 +127,7 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 
 ## 화면 (macOS, 미검증)
 
-`Sources/WorkLogApp`에 SwiftUI/AppKit 코드가 있다. Linux에서는 구문 분석만 했고 macOS에서 컴파일·실행하지 않았다.
+`Sources/WorkLogApp`에 SwiftUI/AppKit 코드가 있다. macOS CI에서 컴파일은 통과했지만 앱을 실행해 화면·키 입력을 확인하지는 않았다.
 
 - 사이드바: 날짜(3열: 타임라인·Task·Memo), 업무, 검색, 리포트(제출용/상세 성과를 상단 선택기로 분리), 이번 주 계획, Secret, 설정, 백업
 - 빠른 입력 패널(`⌃⌥Space` 제안값): Return 줄바꿈 · ⌘Return 저장 · Esc 초안 보존 후 닫기, `@프로젝트`·`#태그` 자동완성, 저장 후 이전 앱으로 복귀
@@ -148,7 +148,7 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 
 실제로 실행하지 못한 것은 통과로 보지 않는다.
 
-- macOS 앱 타깃 컴파일·실행, SwiftUI 화면, 메뉴 막대, 빠른 입력 패널(NSPanel), 이전 앱으로 포커스 복귀
+- macOS 앱 실행(컴파일은 CI 통과), SwiftUI 화면, 메뉴 막대, 빠른 입력 패널(NSPanel), 이전 앱으로 포커스 복귀
 - 전역 단축키 등록·충돌 처리(Carbon)
 - Keychain 키 저장(`KeychainVaultKeyStore`), Touch ID/암호 인증(`LocalDeviceAuthenticator`), `NSPasteboard` 조건부 삭제(`SystemPasteboard`)
 - 실제 Codex Enterprise 계정 로그인·스킬 조회·턴 실행, 회사 정책 오류 분류(가짜 app-server 프로세스로 프로토콜만 테스트), 승인 거절 응답의 `decision` 필드 값

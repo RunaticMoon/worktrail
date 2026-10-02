@@ -6,8 +6,8 @@
 
 ## 실행 환경과 명령
 
-- 환경: Linux, Swift 6.3 툴체인 / aarch64-unknown-linux-gnu. **Linux(aarch64)에서 WorkLogCore와 그 테스트만 실행했다. macOS 앱 타깃(`Sources/WorkLogApp`)은 컴파일·실행하지 않았다.**
-- `Sources/WorkLogApp`에는 SwiftUI/AppKit UI(`WorkLogApp.swift`, `AppController.swift`, `AppRootView.swift`, `CapturePanel.swift`, `GlobalHotkeys.swift`, 화면별 `*Screen.swift`)가 있다. 그러나 이 코드는 `#if os(macOS)` 안에 있어 Linux에서는 `swiftc -frontend -parse -target arm64-apple-macosx14.0`로 **구문 분석만** 했고, 타입 검사·컴파일·실행은 하지 않았다. 따라서 UI·전역 단축키·창 전환·실제 Keychain/Touch ID/NSPasteboard 어댑터가 필요한 항목은 이 환경에서 검증하지 못했다(`.github/workflows/macos.yml`이 macOS 컴파일 검증 수단이며 아직 실행하지 않음).
+- 환경: Linux, Swift 6.3 툴체인 / aarch64-unknown-linux-gnu. **Linux(aarch64)에서 WorkLogCore와 그 테스트를 실행했다.** 이후 macOS CI(문서 끝 "최신 실행")에서 macOS 앱 타깃 컴파일과 WorkLogCore 테스트도 통과했다. **macOS 앱 실행은 하지 않았다.**
+- `Sources/WorkLogApp`에는 SwiftUI/AppKit UI(`WorkLogApp.swift`, `AppController.swift`, `AppRootView.swift`, `CapturePanel.swift`, `GlobalHotkeys.swift`, 화면별 `*Screen.swift`)가 있다. 이 코드는 `#if os(macOS)` 안에 있어 Linux에서는 구문 분석만 했고, `.github/workflows/macos.yml`(macOS 15 러너)에서 **컴파일은 통과**했다. 앱을 실행하지는 않았으므로 UI·전역 단축키·창 전환·실제 Keychain/Touch ID/NSPasteboard 어댑터가 필요한 항목은 검증하지 못했다.
 - 실행 명령과 실제 결과:
 
 ```text
@@ -52,7 +52,7 @@ $ swift test 2>&1 | tail -5
 
 | ID | 요구 | 시나리오(짧게) | 상태 | 근거 테스트(파일:함수) | 비고 |
 |---|---|---|---|---|---|
-| CAP-T01 | CAP-01 | 입력/검색 핫키 각각 실행 → 서로 다른 창/모드 | 미검증(macOS) | (없음) | UI 코드 있음: `WorkLogApp/GlobalHotkeys.swift`(Carbon 등록), `AppController.showCapture/showSearch`(입력 패널·검색 화면 분리). macOS에서 컴파일·실행하지 않아 미검증. 설정 검증은 SettingsStoreTests. |
+| CAP-T01 | CAP-01 | 입력/검색 핫키 각각 실행 → 서로 다른 창/모드 | 미검증(macOS) | (없음) | UI 코드 있음: `WorkLogApp/GlobalHotkeys.swift`(Carbon 등록), `AppController.showCapture/showSearch`(입력 패널·검색 화면 분리). macOS CI 컴파일 통과, 실행하지 않아 미검증. 설정 검증은 SettingsStoreTests. |
 | CAP-T02 | CAP-01 | 새 설치에서 다시 입력창 열기 → 기본 Memo | 부분 | SettingsStoreTests.swift:testEmptyObjectGivesAllDefaults | 기본값 `defaultCaptureKind = .memo`와 설정 디코딩은 검증. 입력 모델 기본 유형 적용은 `CaptureModel.resetDefaults`로 구현. 실제 패널이 Memo로 열리는 macOS 동작은 미검증. |
 | CAP-T03 | CAP-01 | 기본 유형을 Task로 변경 후 재시작 → 유지 | 부분 | SettingsStoreTests.swift:testSaveThenLoadRoundTripAndPermissions / SecretsSettingsBackupPresentationTests.swift:testDefaultCaptureKindSavesAndReloadsForAllSupportedKinds | 설정 화면 모델에서 Memo/Task/Secret 저장·재로드는 검증. 실제 앱 재시작 후 패널 열림은 macOS 미검증. |
 | CAP-T04 | CAP-02 | Memo에서 Enter/⌘Enter/Esc 구분 | 미검증(macOS) | (없음) | UI 코드 있음: `CapturePanel.swift`의 `CaptureNSTextView.keyDown`(Return 줄바꿈·⌘Return 저장, 한글 IME 조합 중 가드)·`KeyboardPanel.cancelOperation`(Esc 초안 보존). macOS에서 실제 키 입력은 미검증. |
@@ -268,7 +268,7 @@ Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단�
 - SEC-T24 — "과거 백업 별개" 안내 문구 macOS UI 미검증.
 - AI-T07 — 실제 Codex 샌드박스의 파일 읽기 격리 미검증(앱 쪽 입력·출력 차단만 검증).
 
-`미검증(macOS)` 4건 — CAP-T01, CAP-T04, CAP-T08, SEC-T17. 해당 UI 코드는 `Sources/WorkLogApp`에 있으나 Linux에서는 구문 분석만 했고 macOS에서 컴파일·실행하지 않았다.
+`미검증(macOS)` 4건 — CAP-T01, CAP-T04, CAP-T08, SEC-T17. 해당 UI 코드는 `Sources/WorkLogApp`에 있고 macOS CI에서 컴파일은 통과했으나 앱을 실행하지 않았다.
 
 `미구현` 1건 — LINK-T02(후속 L1 범위, PR/Jira 한정 링크 수집).
 
@@ -280,16 +280,25 @@ Core 자동 테스트로 덮이는 단계와 UI/수동 시연이 필요한 단�
 
 ---
 
-## 최신 실행 (통합 브랜치 `wlog-45a3/mvp`, 검토 AT 지적 반영 후)
+## 최신 실행
+
+Linux (aarch64, Swift 6.3.3), 통합 브랜치 `wlog-45a3/mvp`:
 
 ```text
 $ swift build --build-tests      # Build complete, warning 0
-$ swift test                     # 2회 실행
-	 Executed 470 tests, with 0 failures (0 unexpected)
-$ swiftc -frontend -parse -target arm64-apple-macosx14.0 Sources/WorkLogApp/*.swift   # exit 0 (구문 분석만)
+$ swift test
+	 Executed 472 tests, with 0 failures (0 unexpected)
 ```
 
-- 독립 검증(AO, 코드 변경 없이 CLI·백업·스케줄 실행 확인)에서 찾은 결함은 모두 수정 후 회귀 테스트로 고정했다: UTF-8 분할 수신 유실(`JSONRPCConnectionTests.testStdoutSplitMultibyteCharacterStillEmitsLine`), DB 파일 0644(`SmokeTests.testNewDatabaseFilesAreCreatedWith0600`), CLI 보고 기간 표시(`CLITests.testReportHeadersUseInclusivePeriod`), 손상 백업 안내(`CLITests.testBackupVerifyDistinguishesCorruptManifest`).
-- 독립 코드 검토(AT) 지적도 수정했다: Secret 초안 복구 직후 새 항목 이동(`SecretsSettingsBackupPresentationTests.testRecoveringDraftConsumesPendingNewEntryRequest`), stderr 분할 수신 줄 수(`JSONRPCConnectionTests.testStderrSplitMultibyteCharacterCountsLines`), 백업 이름 심볼릭 링크 탈출(`BackupServiceTests.testVerifyByNameRejectsSymlinkOutsideBackupRoot`), README·대응표 문구.
-- 워커 한 명이 전체 스위트 1회에서 식별되지 않은 실패 1건을 관측했으나 이후 반복 실행(워커 9회, 지휘자 2회)에서 재현되지 않았다. 원인 미확인.
-- macOS 앱 컴파일·실행, Keychain·Touch ID·전역 단축키·NSPasteboard, 실제 Codex 계정·sandbox는 여전히 미검증이다.
+macOS (GitHub Actions `macos-15`, run 36946540946, 커밋 `f58e2b7`):
+
+```text
+swift build --build-tests        # WorkLogApp 포함 전체 빌드 성공, warning 0
+swift test                       # Executed 472 tests, with 0 failures
+```
+
+- macOS CI에서 처음 드러난 결함을 고쳤다: 테스트의 `Pasteboard` 이름 충돌(ApplicationServices), 백업 사본이 WAL 모드로 남아 macOS SQLite가 읽기 전용 검증에서 열지 못함(`SQLITE_CANTOPEN`), 복원 롤백이 대상의 `-wal`/`-shm`을 지워 되돌리지 못함. 회귀 테스트: `BackupServiceTests.testBackupDatabaseCopiesUseRollbackJournal`, `testPreRestoreBackupCopiesUseRollbackJournal`, `testRestoreRollbackAfterMoveBeforeChmodRemovesPlacedFile`(사이드카 포함).
+- 독립 검증(AO) 결함: UTF-8 분할 수신 유실(`JSONRPCConnectionTests.testStdoutSplitMultibyteCharacterStillEmitsLine`), DB 파일 0644(`SmokeTests.testNewDatabaseFilesAreCreatedWith0600`), CLI 보고 기간 표시(`CLITests.testReportHeadersUseInclusivePeriod`), 손상 백업 안내(`CLITests.testBackupVerifyDistinguishesCorruptManifest`).
+- 독립 코드 검토(AT) 지적: Secret 초안 복구 직후 새 항목 이동(`SecretsSettingsBackupPresentationTests.testRecoveringDraftConsumesPendingNewEntryRequest`), stderr 분할 수신 줄 수(`JSONRPCConnectionTests.testStderrSplitMultibyteCharacterCountsLines`), 백업 이름 심볼릭 링크 탈출(`BackupServiceTests.testVerifyByNameRejectsSymlinkOutsideBackupRoot`).
+- 워커 한 명이 Linux 전체 스위트 1회에서 식별되지 않은 실패 1건을 관측했으나 이후 반복 실행에서 재현되지 않았다. 원인 미확인.
+- macOS 앱 실행, Keychain·Touch ID·전역 단축키·NSPasteboard, 실제 Codex 계정·sandbox는 여전히 미검증이다.
