@@ -125,31 +125,19 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(model.projects.map(\.name), ["새 프로젝트"])
     }
 
-    @MainActor func testSecretDefaultBlocksOrdinaryCaptureEvenWithAnExistingDraft() throws {
+    @MainActor func testSecretDefaultStillAllowsOrdinaryMemoSubmit() async throws {
         let env = try environment()
-        let model = CaptureModel(environment: env)
-        model.kind = .task
-        model.text = "기존 일반 초안"
         var settings = env.settings; settings.defaultCaptureKind = .secret
         try env.updateSettings(settings)
-        model.resetDefaults()
+        let model = CaptureModel(environment: env)
         XCTAssertTrue(model.requiresSecretEditor)
-        XCTAssertEqual(model.kind, .task)
-        XCTAssertFalse(model.submit())
-        XCTAssertEqual(model.text, "기존 일반 초안")
-        XCTAssertNil(model.lastSavedId)
-        XCTAssertTrue(try env.repo.tasks().isEmpty)
-        XCTAssertTrue(try env.search.search(SearchQuery(text: "기존 일반 초안")).isEmpty)
-        let fresh = CaptureModel(environment: env)
-        fresh.text = "fake-secret-canary"
-        XCTAssertTrue(fresh.requiresSecretEditor)
-        XCTAssertFalse(fresh.submit())
-        XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-secret-canary")).isEmpty)
-        settings.defaultCaptureKind = .memo; try env.updateSettings(settings)
-        model.resetDefaults()
-        XCTAssertFalse(model.requiresSecretEditor)
         XCTAssertEqual(model.kind, .memo)
+        model.text = "시크릿 기본값 메모"
         XCTAssertTrue(model.submit())
+        XCTAssertEqual(try env.repo.memo(id: try XCTUnwrap(model.lastSavedId))?.body, "시크릿 기본값 메모")
+        let search = SearchModel(environment: env); search.text = "시크릿 기본값"; search.search()
+        XCTAssertEqual(search.hits.count, 1)
+        XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-secret-canary")).isEmpty)
     }
 
     @MainActor func testInvalidCaptureRetainsDraftAndActivityRequiresTarget() async throws {
