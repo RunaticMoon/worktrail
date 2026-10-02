@@ -49,6 +49,8 @@ jobs:
           [[ "$APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$APPROVED_SHA" = "$GITHUB_SHA"
           test "$(uname -m)" = arm64
+          test -z "${GH_TOKEN:-}"
+          test -z "${GITHUB_TOKEN:-}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 5
         with:

@@ -27,7 +27,7 @@ gh run list --workflow macos-release.yml --limit 3
 | `draft` | 위 + draft Release 생성, DMG·manifest 업로드, 다시 내려받아 바이트 비교 |
 | `publish` | 위 + draft를 공개 Release(latest)로 전환 |
 
-`commit` 입력은 실행 브랜치(main)의 현재 SHA와 정확히 같아야 한다(검토한 커밋만 빌드). 빌드 job은 쓰기 권한이 없고, `GITHUB_TOKEN`은 publish job의 업로드 단계에만 주어진다.
+`commit` 입력은 실행 브랜치(main)의 현재 SHA와 정확히 같아야 한다(검토한 커밋만 빌드). 빌드 job은 쓰기 권한이 없고, `GITHUB_TOKEN`은 publish job의 publisher step(초안 생성·업로드·재다운로드 비교·promote)에만 주어지고, 빌드 job은 토큰이 없음을 단언한다.
 
 ## 빌드 job이 확인하는 것
 
@@ -56,8 +56,11 @@ PR·push CI(`macos.yml`)도 같은 4~6단계를 실행해 DMG를 artifact(7일)�
 ```sh
 python3 -m unittest discover -s distribution/tests -v   # Linux 가능
 bash -n scripts/*.sh distribution/*.sh
+rm -f release/*.dmg release/release-manifest.json   # 이전 버전 DMG가 남아 있으면 manifest가 실패한다
 scripts/build-dmg.sh && distribution/verify-dmg.sh release/WorkLog-$(cat VERSION)-arm64.dmg $(cat VERSION)   # Mac에서만
 ```
+
+`scripts/build-dmg.sh --skip-build`는 이미 빌드된 앱의 `CFBundleShortVersionString`이 `VERSION`과 다르면 실패한다(이전 버전 앱으로 새 버전 DMG를 만드는 것을 막는다).
 
 ## 미검증
 

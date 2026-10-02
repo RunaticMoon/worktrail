@@ -44,6 +44,13 @@ if [[ ! -d "$APP" ]]; then
     exit 1
 fi
 
+# --skip-build 로 이전 버전 앱이 남아 있으면 파일명과 앱 버전이 어긋나므로 거부한다.
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+if [[ "$APP_VERSION" != "$VERSION" ]]; then
+    echo "앱 번들 버전($APP_VERSION)이 VERSION($VERSION)과 다릅니다. --skip-build 없이 다시 실행하세요." >&2
+    exit 1
+fi
+
 RELEASE_DIR="$ROOT/release"
 DMG="$RELEASE_DIR/WorkLog-$VERSION-arm64.dmg"
 STAGING="$(mktemp -d)"

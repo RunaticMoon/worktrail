@@ -22,8 +22,8 @@ def version(tag, version_file=None):
 def assets(tag, directory):
     v = version(tag)
     root = Path(directory)
-    paths = list(root.glob('*.dmg'))
-    require(len(paths) == 1, 'Expected exactly one dmg')
+    paths = sorted(root.glob('*.dmg'))
+    require(len(paths) == 1, 'Expected exactly one dmg in %s, found: %s' % (root, ', '.join(p.name for p in paths) or 'none'))
     path = paths[0]
     require(not path.is_symlink() and path.is_file(), 'Asset must be regular file')
     require(re.fullmatch(r'WorkLog-' + re.escape(v) + r'-arm64\.dmg', path.name), 'Unsafe or wrong-version asset name')

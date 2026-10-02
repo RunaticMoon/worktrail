@@ -3,6 +3,8 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +61,15 @@ class AssetTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.assets('v1.2.3', tmp)
 
+    def test_two_dmg_error_names_stale_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dmg(tmp)
+            write_dmg(tmp, name='WorkLog-1.2.2-arm64.dmg')
+            with self.assertRaises(ValueError) as ctx:
+                release.assets('v1.2.3', tmp)
+            self.assertIn('WorkLog-1.2.2-arm64.dmg', str(ctx.exception))
+            self.assertIn('WorkLog-1.2.3-arm64.dmg', str(ctx.exception))
+
     def test_rejects_wrong_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_dmg(tmp, name='WorkLog-1.2.4-arm64.dmg')
@@ -113,11 +124,42 @@ class ManifestVerifyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.verify('v1.2.3', tmp)
 
+    def test_verify_detects_edited_manifest_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dmg(tmp)
+            release.manifest('v1.2.3', tmp)
+            manifest_path = Path(tmp) / 'release-manifest.json'
+            data = json.loads(manifest_path.read_text())
+            data['assets'][0]['sha256'] = '0' * 64
+            manifest_path.write_text(json.dumps(data))
+            with self.assertRaises(ValueError):
+                release.verify('v1.2.3', tmp)
+
     def test_verify_requires_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_dmg(tmp)
             with self.assertRaises(OSError):
                 release.verify('v1.2.3', tmp)
+
+
+class CommandLineTests(unittest.TestCase):
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(RELEASE_PY), *args], capture_output=True, text=True)
+
+    def test_success_exits_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dmg(tmp)
+            self.assertEqual(self.run_cli('manifest', 'v1.2.3', tmp).returncode, 0)
+            result = self.run_cli('verify', 'v1.2.3', tmp)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn('Verified', result.stdout)
+
+    def test_failure_exits_nonzero_with_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.run_cli('manifest', 'v1.2.3', tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Expected exactly one dmg', result.stderr)
+            self.assertNotEqual(self.run_cli('version', 'v1.2').returncode, 0)
 
 
 if __name__ == '__main__':
