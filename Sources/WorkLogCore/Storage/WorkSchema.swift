@@ -7,7 +7,24 @@ public enum WorkSchema {
         Migration(version: 1, sql: v1),
         Migration(version: 2, sql: SearchSchema.v2),
         Migration(version: 3, sql: v3),
+        Migration(version: 4, sql: v4),
     ]
+
+    /// v4: 일반 기록 간 무방향 수동 관련 연결. Secret 종류 없음. 정규 순서는 RecordReference.canonicalPair와 동일(UTF-8/BINARY).
+    static let v4 = """
+    CREATE TABLE record_link (
+        id TEXT PRIMARY KEY,
+        from_kind TEXT NOT NULL CHECK (from_kind IN ('memo','task','activity','report_version')),
+        from_id TEXT NOT NULL,
+        to_kind TEXT NOT NULL CHECK (to_kind IN ('memo','task','activity','report_version')),
+        to_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL DEFAULT 'related' CHECK (relation_type = 'related'),
+        created_at TEXT NOT NULL,
+        CHECK (from_kind < to_kind OR (from_kind = to_kind AND from_id < to_id)),
+        UNIQUE (from_kind, from_id, to_kind, to_id, relation_type)
+    );
+    CREATE INDEX record_link_to ON record_link(to_kind, to_id);
+    """
 
     /// v3: template_version 불변 보호. 버전 행은 UPDATE·DELETE할 수 없다.
     /// 수정은 새 버전, 팀 변경은 복제이며 기존 행을 고치지 않는다.

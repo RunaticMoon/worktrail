@@ -2,10 +2,25 @@
 import SwiftUI
 import WorkLogCore
 
+@MainActor
 struct SettingsScreen: View {
     @Bindable var model: SettingsModel
+    let prompts: PromptSettingsModel
     let onSave: () -> Void
+    let onBeginHotkeyRecording: () -> Void
+    let onEndHotkeyRecording: () -> Void
     @FocusState private var errorFocused: Bool
+    @State private var promptEditor: PromptEditorSelection?
+
+    init(model: SettingsModel, prompts: PromptSettingsModel, onSave: @escaping () -> Void,
+         onBeginHotkeyRecording: @escaping () -> Void, onEndHotkeyRecording: @escaping () -> Void) {
+        self.model = model
+        self.prompts = prompts
+        self.onSave = onSave
+        self.onBeginHotkeyRecording = onBeginHotkeyRecording
+        self.onEndHotkeyRecording = onEndHotkeyRecording
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
@@ -30,11 +45,25 @@ struct SettingsScreen: View {
                     Text(model.accountMessage).accessibilityLabel("Codex 계정 상태: \(model.accountMessage)")
                 }
                 Section("작업별 스킬") {
-                    Text("스킬 이름 또는 SKILL.md 경로를 입력하세요. 비우면 앱 기본 지침을 사용합니다. 기존 스킬 파일은 수정하지 않습니다.")
+                    Text("스킬 이름 또는 SKILL.md 경로를 입력하세요. 비우면 추가 스킬 없이 이 작업의 프롬프트를 사용합니다. 기존 스킬 파일은 수정하지 않습니다.")
                         .foregroundStyle(.secondary)
                     ForEach(AIJobType.allCases, id: \.rawValue) { type in
-                        TextField(jobTitle(type), text: Binding(get: { model.skillBinding(for: type) },
-                            set: { model.setSkill($0, for: type) }))
+                        VStack(alignment: .leading, spacing: 8) {
+                            LabeledContent(jobTitle(type)) {
+                                HStack {
+                                    TextField("스킬 이름 또는 SKILL.md 경로", text: Binding(
+                                        get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
+                                        .labelsHidden()
+                                        .accessibilityLabel("\(jobTitle(type)) 스킬")
+                                    Button("프롬프트 편집…") { promptEditor = PromptEditorSelection(job: type) }
+                                        .accessibilityLabel("\(jobTitle(type)) 프롬프트 편집")
+                                }
+                            }
+                            if let note = PromptCatalog.usageNote(for: type) {
+                                Text(note).font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
                 Section("전역 단축키") {
@@ -45,10 +74,18 @@ struct SettingsScreen: View {
                     }
                     Text("Secret을 선택하면 입력 단축키로 보관함의 새 항목을 엽니다. 잠금 상태에서는 기기 인증이 필요합니다.")
                         .foregroundStyle(.secondary)
-                    TextField("빠른 입력", text: $model.draft.captureHotkey)
-                    TextField("검색", text: $model.draft.searchHotkey)
-                    Text("예: ctrl+opt+space, ctrl+opt+f. 다른 앱과 충돌하면 기존 단축키를 유지합니다.")
+                    HotkeyRecorder(title: "빠른 입력", binding: try? HotkeyBinding(parsing: model.draft.captureHotkey),
+                                   rawValue: model.draft.captureHotkey,
+                                   onRecord: { model.setHotkey($0, for: .capture) },
+                                   onBeginRecording: onBeginHotkeyRecording, onEndRecording: onEndHotkeyRecording)
+                    HotkeyRecorder(title: "검색", binding: try? HotkeyBinding(parsing: model.draft.searchHotkey),
+                                   rawValue: model.draft.searchHotkey,
+                                   onRecord: { model.setHotkey($0, for: .search) },
+                                   onBeginRecording: onBeginHotkeyRecording, onEndRecording: onEndHotkeyRecording)
+                    Button("기본값으로 되돌리기") { model.restoreDefaultHotkeys() }
+                    Text("칸을 누른 뒤 원하는 조합을 누르세요. 기본값: 빠른 입력 ⌃⌥Space, 검색 ⌃⌥D. 변경은 '설정 저장' 후 적용됩니다.")
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Section("Secret 보호") {
                     TextField("미사용 시 잠금 (분, 1~1440)", value: $model.draft.secretIdleLockMinutes, format: .number)
@@ -72,6 +109,9 @@ struct SettingsScreen: View {
                     .keyboardShortcut("s", modifiers: .command).disabled(!model.hasChanges)
             }.padding(16)
         }.navigationTitle("설정")
+            .sheet(item: $promptEditor) { selection in
+                PromptEditorView(prompts: prompts, job: selection.job)
+            }
     }
     private func jobTitle(_ type: AIJobType) -> String {
         switch type {
@@ -82,6 +122,11 @@ struct SettingsScreen: View {
         case .queryPlan: return "검색 계획"
         case .groundedAnswer: return "기록 기반 답변"
         }
+    }
+
+    private struct PromptEditorSelection: Identifiable {
+        let job: AIJobType
+        var id: String { job.rawValue }
     }
 }
 #endif

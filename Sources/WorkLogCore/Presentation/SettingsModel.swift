@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+/// 설정 화면의 단축키 입력 필드. 작업 T의 `HotkeyAction`과 이름이 충돌하지 않도록 별도 이름을 쓴다.
+public enum SettingsHotkeyField: String, CaseIterable, Sendable {
+    case capture, search
+}
+
 @Observable @MainActor public final class SettingsModel {
     public var draft: AppSettings
     public private(set) var errors: [String] = []
@@ -18,29 +23,46 @@ import Observation
     public func detach() { environment = nil }
     public func reset() { if let environment { draft = environment.settings }; errors = []; message = nil }
     public func validate() -> Bool {
+        // 단축키 검증·정규화 규칙은 HotkeyBinding 한 곳에서만 정의한다.
         errors = SettingsStore.validate(draft)
-        if canonicalHotkey(draft.captureHotkey) == canonicalHotkey(draft.searchHotkey) {
-            if !errors.contains(where: { $0.contains("서로 달라야") }) {
-                errors.append("입력·검색 단축키가 충돌합니다. 기존 단축키를 유지합니다.")
-            }
-        }
         if draft.codexExecutablePath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
             draft.codexExecutablePath = nil
         }
-        return errors.isEmpty
-    }
-    private func canonicalHotkey(_ binding: String) -> String {
-        let parts = binding.lowercased().split(separator: "+").map { part -> String in
-            switch part.trimmingCharacters(in: .whitespaces) {
-            case "command": return "cmd"
-            case "control": return "ctrl"
-            case "option", "alt": return "opt"
-            default: return part.trimmingCharacters(in: .whitespaces)
-            }
+        guard errors.isEmpty else { return false }
+        if let capture = try? HotkeyBinding(parsing: draft.captureHotkey) {
+            draft.captureHotkey = capture.canonicalString
         }
-        guard let key = parts.last else { return "" }
-        return Array(Set(parts.dropLast())).sorted().joined(separator: "+") + "+" + key
+        if let search = try? HotkeyBinding(parsing: draft.searchHotkey) {
+            draft.searchHotkey = search.canonicalString
+        }
+        return true
     }
+
+    /// 레코더가 녹화한 조합을 해당 필드에 정규화 문자열로 설정한다.
+    public func setHotkey(_ binding: HotkeyBinding, for action: SettingsHotkeyField) {
+        switch action {
+        case .capture: draft.captureHotkey = binding.canonicalString
+        case .search: draft.searchHotkey = binding.canonicalString
+        }
+    }
+
+    /// 두 단축키를 AppSettings 기본값(capture "ctrl+opt+space", search "ctrl+opt+d")으로 되돌린다.
+    public func restoreDefaultHotkeys() {
+        let defaults = AppSettings()
+        draft.captureHotkey = defaults.captureHotkey
+        draft.searchHotkey = defaults.searchHotkey
+    }
+
+    /// 표시용 문자열. 파싱에 성공하면 심볼 표시를, 실패하면 원문을 그대로 돌려준다.
+    public func hotkeyDisplay(for action: SettingsHotkeyField) -> String {
+        let raw: String
+        switch action {
+        case .capture: raw = draft.captureHotkey
+        case .search: raw = draft.searchHotkey
+        }
+        return (try? HotkeyBinding(parsing: raw))?.displayString ?? raw
+    }
+
     /// The macOS caller supplies transactional hotkey registration and persistence.
     @discardableResult public func save(apply: ((AppSettings) throws -> Void)? = nil) -> Bool {
         guard let environment, validate() else { message = "설정을 저장하지 못했습니다. 아래 항목을 확인하세요. 기존 설정은 유지됩니다."; return false }
@@ -50,7 +72,14 @@ import Observation
             errors = []; return true
         } catch {
             // Never echo executable paths, account responses or arbitrary persistence errors.
-            errors = ["설정 저장 또는 단축키 등록에 실패했습니다. 기존 설정·단축키를 유지합니다."]
+            // 단축키 조정기(T)의 LocalizedError는 사용자가 고칠 수 있는 원인을 담고 있으므로
+            // 그 설명만 노출하고, 임의 문자열을 담을 수 있는 WorkLogError는 일반 문구로 숨긴다.
+            if let localized = error as? LocalizedError, !(error is WorkLogError),
+               let description = localized.errorDescription {
+                errors = [description]
+            } else {
+                errors = ["설정 저장 또는 단축키 등록에 실패했습니다. 기존 설정·단축키를 유지합니다."]
+            }
             message = nil; return false
         }
     }

@@ -4,10 +4,12 @@ import AppKit
 import Observation
 import WorkLogCore
 
-/// Shared composition point for the main window, menu extra and panels. AE/AF reuse environment.
+/// Shared composition point for the main window, menu extra and panels.
 @Observable @MainActor final class AppController {
     private(set) var environment: AppEnvironment?
-    private(set) var capture: CaptureModel?
+    private(set) var captureSession: CaptureSessionModel?
+    private(set) var graph: GraphModel?
+    private(set) var prompts: PromptSettingsModel?
     private(set) var day: DayViewModel?
     private(set) var search: SearchModel?
     private(set) var taskDetail: TaskDetailModel?
@@ -28,6 +30,7 @@ import WorkLogCore
     private(set) var notice: String?
     private var didStart = false
     private var hotkeys: GlobalHotkeys?
+    private var hotkeyCoordinator: HotkeySettingsCoordinator?
     private var capturePanel: CapturePanelController?
     private var searchPanel: NSPanel?
     private var observers: [NSObjectProtocol] = []
@@ -52,7 +55,10 @@ import WorkLogCore
                 keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier),
                 authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider))
             environment = env
-            capture = CaptureModel(environment: env); day = DayViewModel(environment: env)
+            captureSession = CaptureSessionModel(environment: env)
+            graph = GraphModel(environment: env)
+            prompts = PromptSettingsModel(templates: env.templates)
+            day = DayViewModel(environment: env)
             search = SearchModel(environment: env); taskDetail = TaskDetailModel(environment: env)
             memoDetail = MemoDetailModel(environment: env)
             reports = ReportsModel(environment: env)
@@ -66,10 +72,14 @@ import WorkLogCore
             if launch.backupError != nil { notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다." }
             refresh()
             installLifecycleObservers()
-            let keys = GlobalHotkeys()
-            let failures = keys.register(capture: settings.captureHotkey, search: settings.searchHotkey,
-                onCapture: { [weak self] in self?.showCapture() }, onSearch: { [weak self] in self?.showSearch() })
+            let keys = GlobalHotkeys(handlers: [
+                .capture: { [weak self] in self?.showCapture() },
+                .search: { [weak self] in self?.showSearch() },
+            ])
+            let coordinator = HotkeySettingsCoordinator(registrar: keys)
             hotkeys = keys
+            hotkeyCoordinator = coordinator
+            let failures = coordinator.start(capture: settings.captureHotkey, search: settings.searchHotkey)
             if !failures.isEmpty { notice = failures.joined(separator: "\n") }
             do { try await env.runStartupCatchUp() }
             catch { notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다." }
@@ -83,6 +93,8 @@ import WorkLogCore
     func dismissNotice() { notice = nil }
     private func clearRegistrations() {
         protectionTimer?.invalidate(); protectionTimer = nil
+        hotkeyCoordinator?.shutdown(); hotkeyCoordinator = nil
+        hotkeys?.shutdown()
         hotkeys = nil
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
@@ -97,31 +109,39 @@ import WorkLogCore
         catch { notice = "업무 목록을 불러오지 못했습니다. 다시 시도하세요." }
         if let selectedTaskId { taskDetail?.load(taskId: selectedTaskId, asOf: taskDetail?.asOf) }
         search?.search()
+        if let graph, graph.phase != .idle { graph.reload() }
     }
     func openTask(_ id: String, asOf: WorkDate? = nil) {
         selectedTaskId = id
         taskDetail?.load(taskId: id, asOf: asOf)
     }
     func openMemo(_ id: String) { selectedMemoId = id; memoDetail?.load(id: id) }
+    func openGraphNode(_ node: GraphNode) {
+        switch node.id.kind {
+        case .memo:
+            openMemo(node.id.id)
+        case .task:
+            openTask(node.id.id)
+        case .activity:
+            do {
+                if let activity = try environment?.repo.activity(id: node.id.id) { openTask(activity.taskId) }
+            } catch { notice = "진행기록의 업무를 불러오지 못했습니다. 다시 시도하세요." }
+        case .reportVersion:
+            guard let reports else { return }
+            guard !reports.isGenerating, !reports.hasChanges else {
+                notice = "리포트 작업을 마치거나 본문 변경을 저장한 뒤 다른 버전을 여세요."
+                return
+            }
+            reports.requestVersionSelection(node.id.id)
+            route = .reports
+        case .project, .tag, .supplement, .historicalSource:
+            break
+        }
+    }
     func showCapture() {
-        guard let capture, let environment else { return }
-        if capture.requiresSecretEditor {
-            capturePanel?.closeForSecretEntry()
-            selectedTaskId = nil; selectedMemoId = nil
-            secrets?.requestNewEntry()
-            route = .secrets
-            if let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeMain }) {
-                window.makeKeyAndOrderFront(nil)
-            } else { openMainWindow?() }
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        capture.reloadCandidates()
-        if capture.text.isEmpty && capture.selectedProjectIds.isEmpty && capture.selectedTagIds.isEmpty {
-            capture.resetDefaults()
-        }
+        guard let captureSession, let secrets, let environment else { return }
         if capturePanel == nil {
-            capturePanel = CapturePanelController(model: capture, calendar: environment.calendar,
+            capturePanel = CapturePanelController(session: captureSession, secrets: secrets, calendar: environment.calendar,
                 onSaved: { [weak self] in self?.refresh() })
         }
         capturePanel?.show()
@@ -148,37 +168,18 @@ import WorkLogCore
     }
 
     func saveSettings() {
-        guard let environment, let settingsModel else { return }
+        guard let environment, let settingsModel, let coordinator = hotkeyCoordinator else { return }
         _ = settingsModel.save { [weak self] changed in
-            guard let self else { throw WorkLogError.storage("설정 적용 중단") }
-            let old = environment.settings
-            let needsRegistration = old.captureHotkey != changed.captureHotkey || old.searchHotkey != changed.searchHotkey
-            if needsRegistration {
-                self.hotkeys = nil
-                var candidate: GlobalHotkeys? = GlobalHotkeys()
-                let errors = candidate!.register(capture: changed.captureHotkey, search: changed.searchHotkey,
-                    onCapture: { [weak self] in self?.showCapture() }, onSearch: { [weak self] in self?.showSearch() })
-                if !errors.isEmpty {
-                    candidate = nil
-                    self.restoreHotkeys(old)
-                    throw WorkLogError.validation("단축키 등록 실패")
-                }
-                self.hotkeys = candidate
+            try coordinator.apply(capture: changed.captureHotkey, search: changed.searchHotkey) {
+                try environment.updateSettings(changed)
             }
-            do { try environment.updateSettings(changed) }
-            catch {
-                if needsRegistration { self.hotkeys = nil; self.restoreHotkeys(old) }
-                throw error
-            }
-            self.secrets?.tick()
+            self?.secrets?.tick()
         }
     }
-    private func restoreHotkeys(_ settings: AppSettings) {
-        let keys = GlobalHotkeys()
-        let errors = keys.register(capture: settings.captureHotkey, search: settings.searchHotkey,
-            onCapture: { [weak self] in self?.showCapture() }, onSearch: { [weak self] in self?.showSearch() })
-        hotkeys = keys
-        if !errors.isEmpty { notice = "기존 단축키를 다시 등록하지 못했습니다. 메뉴에서 입력·검색을 열고 설정을 확인하세요." }
+    func beginHotkeyRecording() { hotkeyCoordinator?.beginRecording() }
+    func endHotkeyRecording() {
+        let messages = hotkeyCoordinator?.endRecording() ?? []
+        if !messages.isEmpty { notice = messages.joined(separator: "\n") }
     }
 
     func restoreBackup(_ backup: BackupInfo, includeVault: Bool) async {
@@ -186,7 +187,9 @@ import WorkLogCore
         isRestoring = true
         // Weak lifetime checks ensure SQLite deinit has closed both databases before file replacement.
         weak var previousEnvironment = environment
-        weak var previousCapture = capture
+        weak var previousCapture = captureSession
+        weak var previousGraph = graph
+        weak var previousPrompts = prompts
         weak var previousDay = day
         weak var previousSearch = search
         weak var previousTask = taskDetail
@@ -195,30 +198,21 @@ import WorkLogCore
         weak var previousPlan = plan
         weak var previousQuiz = quiz
         selectedTaskId = nil; selectedMemoId = nil
+        capturePanel?.teardown(); capturePanel = nil
+        captureSession?.detach(); graph?.detach(); prompts?.detach()
         secrets?.detach(); settingsModel?.detach(); model.detach()
-        protectionTimer?.invalidate(); protectionTimer = nil
-        if capturePanel != nil {
-            for window in NSApp.windows where window.contentView is NSHostingView<CaptureScreen> {
-                window.delegate = nil; window.close(); window.contentView = nil
-            }
-        }
-        capturePanel = nil
         searchPanel?.close(); searchPanel?.contentView = nil; searchPanel = nil
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-            DistributedNotificationCenter.default().removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-        }
-        observers = []; hotkeys = nil
-        capture = nil; day = nil; search = nil; taskDetail = nil; memoDetail = nil
+        clearRegistrations()
+        captureSession = nil; graph = nil; prompts = nil
+        day = nil; search = nil; taskDetail = nil; memoDetail = nil
         reports = nil; plan = nil; quiz = nil
         secrets = nil; settingsModel = nil; backups = nil; environment = nil
         startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
         for _ in 0..<30 {
-            if previousEnvironment == nil && previousCapture == nil && previousDay == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil { break }
+            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        guard previousEnvironment == nil && previousCapture == nil && previousDay == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil else {
+        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil else {
             startupError = "저장소 연결을 안전하게 닫지 못해 복원을 중단했습니다. 앱을 다시 열고 시도하세요."
             isRestoring = false
             return

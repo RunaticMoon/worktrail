@@ -302,3 +302,24 @@ swift test                       # Executed 472 tests, with 0 failures
 - 독립 코드 검토(AT) 지적: Secret 초안 복구 직후 새 항목 이동(`SecretsSettingsBackupPresentationTests.testRecoveringDraftConsumesPendingNewEntryRequest`), stderr 분할 수신 줄 수(`JSONRPCConnectionTests.testStderrSplitMultibyteCharacterCountsLines`), 백업 이름 심볼릭 링크 탈출(`BackupServiceTests.testVerifyByNameRejectsSymlinkOutsideBackupRoot`).
 - 워커 한 명이 Linux 전체 스위트 1회에서 식별되지 않은 실패 1건을 관측했으나 이후 반복 실행에서 재현되지 않았다. 원인 미확인.
 - macOS 앱 실행, Keychain·Touch ID·전역 단축키·NSPasteboard, 실제 Codex 계정·sandbox는 여전히 미검증이다.
+
+---
+
+## WTUX-F946 수동 인수 체크리스트 (macOS)
+
+기준 브랜치 `wtux-f946/quick-input-graph-settings`(기준 커밋 `c0db26f`). 아래 항목은 SwiftUI/AppKit·Carbon·Keychain·NSPasteboard·IME가 필요해 Linux에서 실행할 수 없다. 세 탭 입력·그래프·프롬프트 편집·단축키·백업 레이아웃의 Core 로직은 `swift test`의 신규 테스트(`CaptureSessionTests`, `QuickTaskCaptureTests`, `LinkedCaptureServiceTests`, `RecordLinkStoreTests`, `GraphTypesTests`, `GraphMigrationTests`, `GraphRecordReaderTests`, `GraphEvidenceReaderTests`, `GraphServiceTests`, `GraphLayoutTests`, `GraphModelTests`, `PromptCatalogTests`, `PromptSettingsModelTests`, `HotkeyBindingTests`, `HotkeySettingsCoordinatorTests`, `SettingsHotkeyValidationTests`, `SecretEditorOwnershipTests`)로 검증하며, 실제 조작·표시는 아래에서 확인한다. 설계 원문 5장 "macOS에서 별도로 확인해야 하는 사항" 7개와 레코더·그래프 화면을 포함한다.
+
+- [ ] 1. 한글 IME 조합 중 Tab·Shift+Tab·Return·⌘Return·Esc — 조합 중에는 탭 이동·저장·닫기가 실행되지 않고, 조합 확정 뒤에만 동작한다(패널 범위 한정, 메인 Secret 화면은 Tab 셀 이동 유지).
+- [ ] 2. Secret `SecureField`와 일반 `TextField`의 필드 편집기, 인증 창을 거친 뒤 포커스가 원래 필드로 돌아온다.
+- [ ] 3. 외부 앱에서 패널 호출 → 메모·업무·시크릿 세 종류 저장 → 이전 앱으로 복귀. Esc로 닫으면 초안·현재 탭이 보존된다.
+- [ ] 4. Carbon 충돌·반복 등록·녹화 중 등록 해제/복원 — 다른 앱이 점유한 조합은 실패로 안내되고 기존 조합이 복구되며, handler가 누적되지 않는다.
+- [ ] 5. 백업 화면 720×480/기본 크기, notice 유무, 빈 목록/긴 목록, 다른 화면에서 진입 및 재진입 — 진입 시 상단이 잘리지 않고 단일 스크롤로 동작한다.
+- [ ] 6. Canvas 접근성·키보드 선택·확대/이동과 작은 창 표시.
+- [ ] 7. 패널이 열린 상태의 화면 잠금·백업 복원 — 잠금 직후 메인·패널 평문이 모두 사라지고, 복원 후 새 모델이 DB를 붙잡지 않는다.
+- [ ] 8. 단축키 레코더: 한글/영문 입력 상태, 이미 등록된 조합 녹화, Esc·포커스 이탈 복원, 자동 반복 입력 무시, 미지원 키는 저장하지 않음.
+- [ ] 9. 그래프 화면: 빈/대량(250 초과 잘림 안내), 키보드·목록 선택, 원문 이동(활동은 부모 업무 열기), 기간·종류·프로젝트/태그·주변 보기 필터.
+- [ ] 10. 작업별 프롬프트 편집: 오류·취소·기본값 복원, Daily/Periodic 전환, 재시작 후 사용자 버전 유지, `queryPlan` 미사용 안내, 공통 보호 지침 읽기 전용.
+- [ ] 11. 빠른 입력 업무 탭: 검색 → 진행기록 추가/상태 변경(동시 수행 안 함), 완료 시 남은 항목 확인, 실패 시 초안·선택 보존.
+- [ ] 12. 시크릿 탭 소유권: 메인 창 Secret 편집 중에는 패널이 편집을 거부하고, 소유권 전환만으로 초안이 폐기되지 않는다.
+
+> 위 체크리스트는 실제 macOS 실행 결과로만 닫는다. Linux 빌드·테스트 통과를 macOS 조작 통과로 간주하지 않는다.
