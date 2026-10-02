@@ -17,7 +17,7 @@ import WorkLogCore
         self.secrets = secrets
         self.calendar = calendar
         self.onSaved = onSaved
-        panel = KeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 580),
+        panel = KeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 540),
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self
@@ -28,7 +28,7 @@ import WorkLogCore
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        panel.contentMinSize = NSSize(width: 480, height: 480)
+        panel.contentMinSize = NSSize(width: 520, height: 440)
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.onEscape = { [weak self] in self?.dismiss() }
@@ -45,6 +45,7 @@ import WorkLogCore
     func show() {
         guard let session, let secrets else { return }
         session.beginSession()
+        panel.prepareLayout(for: session.tab, opening: !panel.isVisible)
         if !panel.isVisible {
             previousApp = NSWorkspace.shared.frontmostApplication
             let hosting = NSHostingView(rootView: AnyView(CaptureScreen(
@@ -58,7 +59,6 @@ import WorkLogCore
                 onDismiss: { [weak self] in self?.dismiss() })))
             hosting.sizingOptions = []
             panel.contentView = hosting
-            panel.contentMinSize = NSSize(width: 480, height: 480)
             FloatingPanelPositioning.place(panel)
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -119,6 +119,9 @@ import WorkLogCore
     var onOrdinarySave: (() -> Bool)?
     private var focusRequest = 0
     private var forwardingIME = false
+    private var layoutTab: CaptureKind?
+    private var ordinarySize = NSSize(width: 620, height: 540)
+    private var taskSize = NSSize(width: 920, height: 540)
     override var canBecomeKey: Bool { true }
 
     private var hasMarkedText: Bool {
@@ -163,7 +166,57 @@ import WorkLogCore
         onEscape?()
     }
 
+    /// Keep the three task columns readable, and remember each layout's resized size.
+    func prepareLayout(for tab: CaptureKind, opening: Bool = false) {
+        let isTask = tab == .task
+        if let layoutTab, (layoutTab == .task) == isTask, !opening { return }
+        rememberLayoutSize()
+        layoutTab = tab
+        let minimum = NSSize(width: isTask ? 800 : 520, height: 440)
+        let preferred = isTask ? taskSize : ordinarySize
+        var target = NSRect(x: frame.minX, y: frame.maxY - preferred.height,
+                            width: max(preferred.width, minimum.width),
+                            height: max(preferred.height, minimum.height))
+        let targetScreen = opening
+            ? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? screen ?? NSScreen.main
+            : screen ?? NSScreen.main
+        if let visible = targetScreen?.visibleFrame {
+            target.size.width = min(target.width, visible.width)
+            target.size.height = min(target.height, visible.height)
+            target.origin.x = min(max(target.minX, visible.minX), visible.maxX - target.width)
+            target.origin.y = min(max(target.minY, visible.minY), visible.maxY - target.height)
+        }
+        contentMinSize = NSSize(width: min(minimum.width, target.width),
+                                height: min(minimum.height, target.height))
+        setFrame(target, display: isVisible)
+    }
+
+    private func rememberLayoutSize() {
+        guard let layoutTab else { return }
+        // A screen-constrained frame must not replace the user's preferred size.
+        if layoutTab == .task {
+            if frame.width >= 800 { taskSize.width = frame.width }
+            if frame.height >= 440 { taskSize.height = frame.height }
+        } else {
+            if frame.width >= 520 { ordinarySize.width = frame.width }
+            if frame.height >= 440 { ordinarySize.height = frame.height }
+        }
+    }
+
+    func requestDraftFocus() {
+        focusRequest += 1
+        let request = focusRequest
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isVisible, request == self.focusRequest else { return }
+            self.contentView?.layoutSubtreeIfNeeded()
+            if let editor = self.findView(in: self.contentView, matching: { $0 is CaptureNSTextView }) {
+                self.makeFirstResponder(editor)
+            }
+        }
+    }
+
     func requestDefaultFocus(for tab: CaptureKind) {
+        prepareLayout(for: tab)
         focusRequest += 1
         let request = focusRequest
         DispatchQueue.main.async { [weak self] in
@@ -175,8 +228,11 @@ import WorkLogCore
                     self.makeFirstResponder(editor)
                 }
             case .task:
-                if let search = self.findView(in: self.contentView, matching: { $0 is CaptureTaskSearchTextField }) {
+                if let search = self.findView(in: self.contentView, matching: { $0 is CaptureTaskSearchTextField }) as? NSTextField,
+                   search.isEnabled {
                     self.makeFirstResponder(search)
+                } else {
+                    _ = self.focusAccessibleElement(in: self.contentView, label: "완료 확인 취소")
                 }
             case .secret:
                 // SecretEditorView focuses its title on appearance. Its locked/draft
@@ -222,21 +278,21 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
             HStack(spacing: 6) {
                 tab(.memo, title: "메모", symbol: "square.and.pencil")
                 tab(.task, title: "업무", symbol: "checkmark.circle")
                 tab(.secret, title: "시크릿", symbol: "lock")
             }
-            .padding(5)
-            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 13))
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
+            .padding(3)
+            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
 
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 if let draft = session.activeDraft {
                     ViewThatFits(in: .horizontal) {
                         HStack {
@@ -265,7 +321,7 @@ import WorkLogCore
                     InlineNotice(message: error)
                 }
             }
-            .padding(20)
+            .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             if let draft = session.activeDraft {
@@ -277,9 +333,9 @@ import WorkLogCore
         .tint(WorkLogTheme.accent)
         .buttonStyle(WorkLogButtonStyle())
         .background(WorkLogTheme.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(WorkLogTheme.border, lineWidth: 1)
                 .allowsHitTesting(false)
         }
@@ -301,15 +357,15 @@ import WorkLogCore
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 12) {
+        HStack(spacing: 9) {
+            HStack(spacing: 9) {
                 Image(systemName: "bolt.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(WorkLogTheme.accent)
-                    .frame(width: 38, height: 38)
-                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                    .frame(width: 30, height: 30)
+                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("빠른 기록").font(.system(size: 17, weight: .semibold))
+                    Text("빠른 기록").font(.system(size: 15, weight: .medium))
                     Text("WORKLOG").font(.system(size: 9, weight: .bold, design: .rounded))
                         .tracking(2).foregroundStyle(WorkLogTheme.muted)
                 }
@@ -336,15 +392,15 @@ import WorkLogCore
             Label(title, systemImage: symbol)
                 .font(.system(size: 13, weight: selected ? .semibold : .medium))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
+                .padding(.vertical, 6)
                 .foregroundStyle(selected ? WorkLogTheme.accent : WorkLogTheme.muted)
                 .background(selected ? WorkLogTheme.surface : .clear,
-                            in: RoundedRectangle(cornerRadius: 9))
+                            in: RoundedRectangle(cornerRadius: 6))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 9)
+                    RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(selected ? WorkLogTheme.border : .clear)
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 9))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -353,14 +409,21 @@ import WorkLogCore
     }
 
     private func footer(draft: CaptureModel) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             HStack(spacing: 6) {
                 Keycap("⇥")
                 Text("탭 전환")
                 Keycap("⌥⇥").padding(.leading, 7)
                 Text("필드 이동")
-                Keycap("↩").padding(.leading, 7)
-                Text("줄바꿈")
+                if session.tab == .task {
+                    Keycap("↑↓").padding(.leading, 7)
+                    Text("선택")
+                    Keycap("←→")
+                    Text("단계 이동")
+                } else {
+                    Keycap("↩").padding(.leading, 7)
+                    Text("줄바꿈")
+                }
                 Spacer(minLength: 0)
             }
             .font(.system(size: 10))
@@ -379,13 +442,13 @@ import WorkLogCore
                     }
                 }
                 .buttonStyle(WorkLogButtonStyle(prominent: true))
-                .disabled(draft.isSubmitting)
+                .disabled(draft.isSubmitting || draft.pendingCompletion != nil)
                 .accessibilityLabel("저장")
                 .help("저장하고 이전 앱으로 돌아가기 · ⌘Return")
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(WorkLogTheme.surface)
         .overlay(alignment: .top) {
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
@@ -424,160 +487,395 @@ import WorkLogCore
     @Bindable var model: CaptureModel
     let onConfirmCompletion: () -> Void
     @State private var highlighted = "new"
+    @State private var visibleColumn = 0
     @FocusState private var focusedRow: String?
+
     private var keys: [String] { ["new"] + model.filteredTasks.map { "task:\($0.id)" } }
+    private var isLocked: Bool { model.isSubmitting || model.pendingCompletion != nil }
+    private var isNewTask: Bool { model.taskSelection == .newTask }
+    private var selectedTaskKey: String {
+        if case .existing(let id) = model.taskSelection { return "task:\(id)" }
+        return "new"
+    }
+    private var selectedTaskTitle: String {
+        guard case .existing(let id) = model.taskSelection else { return "새 업무" }
+        return model.tasks.first { $0.id == id }?.title ?? "선택한 업무"
+    }
+    private var actionKeys: [String] {
+        isNewTask ? TaskStatus.allCases.map { "initial:\($0.rawValue)" } : ["activity", "status"]
+    }
+    private var selectedActionKey: String {
+        isNewTask ? "initial:\(model.initialStatus.rawValue)" : (model.taskAction == .addActivity ? "activity" : "status")
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 9) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(WorkLogTheme.muted)
-                    CaptureTaskSearchField(text: $model.taskQuery,
-                        isDisabled: model.isSubmitting || model.pendingCompletion != nil,
-                        onMove: { move($0, focusRow: false) }, onSelect: { choose(highlighted) })
-                        .frame(height: 22)
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 0) {
+                        taskColumn
+                            .padding(10)
+                            .frame(width: 218)
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                            .id(0)
+                        columnDivider
+                        actionColumn
+                            .padding(10)
+                            .frame(width: 154)
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                            .id(1)
+                        columnDivider
+                        detailColumn
+                            .padding(10)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .id(2)
+                    }
+                    .frame(width: max(geometry.size.width, 744), height: geometry.size.height)
                 }
-                .padding(11)
-                .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 11))
-                .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(WorkLogTheme.border))
-                VStack(spacing: 0) {
-                    taskRow(key: "new", title: "새 업무 만들기", status: nil).padding(4)
-                    Rectangle().fill(WorkLogTheme.border).frame(height: 1)
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 2) {
-                                ForEach(model.filteredTasks) { task in
-                                    taskRow(key: "task:\(task.id)", title: task.title,
-                                            status: task.cachedStatus?.koreanLabel ?? "상태 없음")
-                                        .id("task:\(task.id)")
-                                }
-                                if model.filteredTasks.isEmpty {
-                                    Text("검색된 업무가 없습니다. 위에서 새 업무를 만드세요.")
-                                        .font(.callout).foregroundStyle(.secondary).padding(8)
-                                }
-                            }.padding(4)
+                .onChange(of: visibleColumn) { _, column in proxy.scrollTo(column, anchor: .center) }
+            }
+        }
+        .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(WorkLogTheme.border, lineWidth: 0.5))
+        .onChange(of: model.taskQuery) { _, _ in
+            highlighted = keys.contains(selectedTaskKey) ? selectedTaskKey : "new"
+        }
+        .onAppear { highlighted = selectedTaskKey }
+        .onChange(of: focusedRow) { _, row in
+            guard let row else { return }
+            if row == "new" || row.hasPrefix("task:") { visibleColumn = 0 }
+            else if row.hasPrefix("target:") || row == "cancelCompletion" { visibleColumn = 2 }
+            else { visibleColumn = 1 }
+        }
+        .onChange(of: model.pendingCompletion != nil) { _, pending in
+            if pending { focusedRow = "cancelCompletion" }
+        }
+    }
+
+    private var columnDivider: some View {
+        Rectangle().fill(WorkLogTheme.border.opacity(0.7)).frame(width: 0.5)
+    }
+
+    private func stepHeader(_ number: String, _ title: String) -> some View {
+        HStack(spacing: 6) {
+            Text(number).font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(WorkLogTheme.accent)
+            Text(title).font(.system(size: 12, weight: .medium))
+        }
+        .padding(.bottom, 3)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var taskColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stepHeader("01", "업무 선택")
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11)).foregroundStyle(WorkLogTheme.muted)
+                CaptureTaskSearchField(text: $model.taskQuery, isDisabled: isLocked,
+                    onMove: { moveTask($0, focusRow: false) },
+                    onSelect: { chooseTask(highlighted, advance: true) })
+                    .frame(height: 20)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 5))
+            if !keys.contains(selectedTaskKey) {
+                Label(selectedTaskTitle, systemImage: "checkmark")
+                    .font(.caption).lineLimit(2).foregroundStyle(WorkLogTheme.accent)
+                    .accessibilityLabel("현재 선택한 업무: \(selectedTaskTitle). 검색 결과 밖에 있습니다.")
+            }
+            taskRow(key: "new", title: "새 업무 만들기", status: nil)
+            Rectangle().fill(WorkLogTheme.border.opacity(0.7)).frame(height: 0.5)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(model.filteredTasks) { task in
+                            taskRow(key: "task:\(task.id)", title: task.title,
+                                    status: task.cachedStatus?.koreanLabel ?? "상태 없음")
+                                .id("task:\(task.id)")
                         }
-                        .frame(height: model.filteredTasks.isEmpty ? 48 : 112)
-                        .onChange(of: highlighted) { _, key in proxy.scrollTo(key) }
+                        if model.filteredTasks.isEmpty {
+                            Text("검색된 업무가 없어요.\n위에서 새 업무를 만드세요.")
+                                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                        }
                     }
                 }
-                .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(WorkLogTheme.border))
-                .disabled(model.isSubmitting || model.pendingCompletion != nil)
-                .accessibilityLabel("업무 선택 목록")
-                switch model.taskSelection {
-                case .newTask:
-                    Picker("등록 상태", selection: $model.initialStatus) {
-                        ForEach(TaskStatus.allCases, id: \.self) { Text($0.koreanLabel).tag($0) }
+                .onChange(of: highlighted) { _, key in proxy.scrollTo(key) }
+            }
+            Text("↑↓ 선택 · → 다음")
+                .font(.system(size: 10)).foregroundStyle(WorkLogTheme.muted)
+        }
+        .disabled(isLocked)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("1단계 업무 선택")
+    }
+
+    private func taskRow(key: String, title: String, status: String?) -> some View {
+        Button { chooseTask(key, advance: true) } label: {
+            browserRow(title: title, subtitle: status,
+                       symbol: key == "new" ? "plus" : "checklist",
+                       selected: selectedTaskKey == key,
+                       highlighted: highlighted == key && selectedTaskKey != key, forward: true)
+        }
+        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
+        .accessibilityLabel(status.map { "\(title), \($0)" } ?? title)
+        .accessibilityValue(selectedTaskKey == key ? "선택됨" : "")
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
+            guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
+                  !isLocked else { return .ignored }
+            if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
+            switch press.key {
+            case .upArrow: moveTask(-1, focusRow: true)
+            case .downArrow: moveTask(1, focusRow: true)
+            case .leftArrow: focusSearch()
+            case .rightArrow, .return: chooseTask(key, advance: true)
+            default: return .ignored
+            }
+            return .handled
+        }
+    }
+
+    private var actionColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stepHeader("02", isNewTask ? "등록 상태" : "동작 선택")
+            ScrollView {
+                VStack(spacing: 3) {
+                    if isNewTask {
+                        ForEach(TaskStatus.allCases, id: \.self) { status in
+                            actionRow(key: "initial:\(status.rawValue)", title: status.koreanLabel,
+                                      symbol: statusSymbol(status))
+                        }
+                    } else {
+                        actionRow(key: "activity", title: "진행기록 추가", symbol: "text.badge.plus")
+                        actionRow(key: "status", title: "상태 변경", symbol: "arrow.triangle.2.circlepath")
                     }
-                    Toggle("프로젝트별 적용 상태 관리", isOn: Binding(
-                        get: { model.projectTrackingMode == .perProject },
-                        set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
-                    CaptureDraftEditor(model: model, label: "첫 줄은 업무명, 다음 줄은 진행 내용입니다.", showsTokens: true)
-                case .existing(let id):
-                    HStack(alignment: .top) {
-                        Text(model.tasks.first { $0.id == id }?.title ?? "선택한 업무")
-                            .font(.headline).fixedSize(horizontal: false, vertical: true)
-                        Spacer()
-                        Button("다른 업무 선택") { focusSearch() }
+                }
+            }
+            Text("← 이전 · → 내용")
+                .font(.system(size: 10)).foregroundStyle(WorkLogTheme.muted)
+        }
+        .disabled(isLocked)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("2단계 \(isNewTask ? "등록 상태" : "동작 선택")")
+    }
+
+    private func actionRow(key: String, title: String, symbol: String) -> some View {
+        Button { chooseAction(key); focusDetail() } label: {
+            browserRow(title: title, symbol: symbol, selected: selectedActionKey == key, forward: true)
+        }
+        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
+        .accessibilityValue(selectedActionKey == key ? "선택됨" : "")
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
+            guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
+                  !isLocked else { return .ignored }
+            if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
+            switch press.key {
+            case .upArrow: moveAction(-1)
+            case .downArrow: moveAction(1)
+            case .leftArrow: focusedRow = keys.contains(selectedTaskKey) ? selectedTaskKey : "new"
+            case .rightArrow, .return: chooseAction(key); focusDetail()
+            default: return .ignored
+            }
+            return .handled
+        }
+    }
+
+    private var detailColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stepHeader("03", model.pendingCompletion != nil ? "완료 확인" : "내용 및 저장")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !isNewTask {
+                        Text(selectedTaskTitle)
+                            .font(.system(size: 12, weight: .medium)).lineLimit(2)
+                            .foregroundStyle(WorkLogTheme.muted)
                     }
-                    .disabled(model.pendingCompletion != nil)
-                    Picker("업무 동작", selection: $model.taskAction) {
-                        Text("진행기록 추가").tag(CaptureTaskAction.addActivity)
-                        Text("상태 변경").tag(CaptureTaskAction.changeStatus)
-                    }.pickerStyle(.segmented).disabled(model.pendingCompletion != nil)
-                    if model.taskAction == .addActivity {
-                        CaptureDraftEditor(model: model, label: "진행기록 내용", showsTokens: false)
+                    if isNewTask {
+                        CaptureDraftEditor(model: model, label: "첫 줄은 업무명, 다음 줄은 진행 내용", showsTokens: true)
+                        Toggle("프로젝트별 상태 관리", isOn: Binding(
+                            get: { model.projectTrackingMode == .perProject },
+                            set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
+                            .font(.caption).controlSize(.small).disabled(model.isSubmitting)
+                    } else if model.taskAction == .addActivity {
+                        CaptureDraftEditor(model: model, label: "진행 내용", showsTokens: false)
                     } else {
                         statusContent
                     }
                 }
-            }.padding(1)
-        }
-        .onChange(of: model.taskQuery) { _, _ in highlighted = "new" }
-        .onAppear {
-            if case .existing(let id) = model.taskSelection { highlighted = "task:\(id)" }
-        }
-    }
-
-    private func taskRow(key: String, title: String, status: String?) -> some View {
-        Button { choose(key) } label: {
-            HStack {
-                Image(systemName: key == "new" ? "plus.circle.fill" : "checklist")
-                    .foregroundStyle(highlighted == key ? WorkLogTheme.accent : WorkLogTheme.muted)
-                    .frame(width: 20)
-                Text(title).lineLimit(2).multilineTextAlignment(.leading)
-                Spacer(minLength: 8)
-                if let status {
-                    Text(status).font(.caption)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .foregroundStyle(WorkLogTheme.muted)
-                        .background(WorkLogTheme.elevated, in: Capsule())
-                }
-                if highlighted == key {
-                    Image(systemName: "checkmark").font(.caption.weight(.semibold))
-                        .foregroundStyle(WorkLogTheme.accent).accessibilityHidden(true)
-                }
+                .padding(1)
             }
-            .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-            .background(highlighted == key ? WorkLogTheme.accentSoft : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 8))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
-        .accessibilityLabel(status.map { "\(title), \($0)" } ?? title)
-        .accessibilityValue(highlighted == key ? "선택됨" : "")
-        .onKeyPress(.upArrow) { move(-1, focusRow: true); return .handled }
-        .onKeyPress(.downArrow) { move(1, focusRow: true); return .handled }
-        .onKeyPress(.return) { choose(key); return .handled }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("3단계 내용 및 저장")
     }
 
     @ViewBuilder private var statusContent: some View {
         if let check = model.pendingCompletion {
             VStack(alignment: .leading, spacing: 8) {
-                Text("남은 항목이 있습니다. 그래도 완료할까요?").font(.headline)
+                Text("남은 항목이 있어요. 그래도 완료할까요?")
+                    .font(.system(size: 12, weight: .medium))
                 ForEach(check.remainingChecklist) { item in
-                    Label(item.text, systemImage: "square").font(.callout)
+                    Label(item.text, systemImage: "square").font(.caption)
                 }
                 ForEach(check.unfinishedProjects.indices, id: \.self) { index in
                     let project = check.unfinishedProjects[index]
                     Text("\(model.projects.first { $0.id == project.projectId }?.name ?? "프로젝트") · \(project.status.koreanLabel)")
-                        .font(.callout)
+                        .font(.caption)
                 }
-                HStack {
-                    Button("취소") { model.cancelCompletion() }
-                    Button("그래도 완료", action: onConfirmCompletion).disabled(model.isSubmitting)
+                HStack(spacing: 6) {
+                    Button("취소") {
+                        model.cancelCompletion()
+                        focusDetail()
+                    }
+                    .focused($focusedRow, equals: "cancelCompletion")
+                    .accessibilityLabel("완료 확인 취소")
+                    Button("그래도 완료", action: onConfirmCompletion)
+                        .buttonStyle(WorkLogButtonStyle(prominent: true))
+                        .disabled(model.isSubmitting)
                 }
             }
         } else {
-            Picker("변경할 상태", selection: $model.statusTarget) {
-                Text("상태 선택").tag(TaskStatus?.none)
-                ForEach(model.availableStatusTargets(), id: \.self) { Text($0.koreanLabel).tag(Optional($0)) }
+            Text("변경할 상태").font(.system(size: 12, weight: .medium))
+            VStack(spacing: 3) {
+                ForEach(model.availableStatusTargets(), id: \.self) { status in
+                    targetStatusRow(status)
+                }
             }
             if model.availableStatusTargets().isEmpty {
-                Text("현재 상태에서 변경할 수 있는 상태가 없습니다.").font(.callout).foregroundStyle(.secondary)
+                Text("현재 상태에서 변경할 수 있는 상태가 없습니다.")
+                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            } else {
+                Text("상태를 고른 뒤 ⌘Return으로 저장하세요.")
+                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
             }
         }
     }
 
-    private func move(_ delta: Int, focusRow: Bool) {
-        let rows = keys
-        let index = rows.firstIndex(of: highlighted) ?? 0
-        highlighted = rows[min(max(index + delta, 0), rows.count - 1)]
-        if focusRow { focusedRow = highlighted }
+    private func targetStatusRow(_ status: TaskStatus) -> some View {
+        Button { model.statusTarget = status } label: {
+            browserRow(title: status.koreanLabel, symbol: statusSymbol(status),
+                       selected: model.statusTarget == status)
+        }
+        .buttonStyle(.plain).focusable().focused($focusedRow, equals: "target:\(status.rawValue)")
+        .disabled(model.isSubmitting)
+        .accessibilityValue(model.statusTarget == status ? "선택됨" : "")
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .return], phases: [.down, .repeat]) { press in
+            guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
+                  !isLocked else { return .ignored }
+            if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
+            switch press.key {
+            case .upArrow: moveTarget(-1, from: status)
+            case .downArrow: moveTarget(1, from: status)
+            case .leftArrow: focusedRow = selectedActionKey
+            case .return: model.statusTarget = status
+            default: return .ignored
+            }
+            return .handled
+        }
     }
 
-    private func choose(_ key: String) {
-        guard !model.isSubmitting, model.pendingCompletion == nil else { return }
+    private func browserRow(title: String, subtitle: String? = nil, symbol: String,
+                            selected: Bool, highlighted: Bool = false, forward: Bool = false) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: symbol).font(.system(size: 12))
+                .foregroundStyle(selected ? WorkLogTheme.accent : WorkLogTheme.muted)
+                .frame(width: 15)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 12, weight: selected ? .medium : .regular))
+                    .lineLimit(2).multilineTextAlignment(.leading)
+                if let subtitle {
+                    Text(subtitle).font(.system(size: 10)).foregroundStyle(WorkLogTheme.muted)
+                }
+            }
+            Spacer(minLength: 2)
+            if forward || selected {
+                Image(systemName: forward ? "chevron.right" : "checkmark")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(selected ? WorkLogTheme.accent : WorkLogTheme.muted.opacity(0.5))
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 7).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? WorkLogTheme.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5)
+            .strokeBorder(highlighted ? WorkLogTheme.accent.opacity(0.5) : .clear, lineWidth: 0.5))
+        .contentShape(Rectangle())
+    }
+
+    private func statusSymbol(_ status: TaskStatus) -> String {
+        switch status {
+        case .planned: return "circle.dashed"
+        case .inProgress: return "circle.lefthalf.filled"
+        case .onHold: return "pause.circle"
+        case .completed: return "checkmark.circle"
+        case .cancelled: return "xmark.circle"
+        }
+    }
+
+    private func moveTask(_ delta: Int, focusRow: Bool) {
+        let rows = keys
+        let index = rows.firstIndex(of: highlighted) ?? 0
+        let key = rows[min(max(index + delta, 0), rows.count - 1)]
+        chooseTask(key, advance: false)
+        if focusRow { focusedRow = key }
+    }
+
+    private func chooseTask(_ key: String, advance: Bool) {
+        guard !isLocked else { return }
         highlighted = key
         if key == "new" { model.taskSelection = .newTask }
         else if let task = model.filteredTasks.first(where: { "task:\($0.id)" == key }) {
             if model.taskSelection != .existing(task.id) { model.statusTarget = nil }
             model.taskSelection = .existing(task.id)
         }
+        if advance { focusedRow = selectedActionKey }
     }
 
-    private func focusSearch() { (NSApp.keyWindow as? KeyboardPanel)?.requestDefaultFocus(for: .task) }
+    private func chooseAction(_ key: String) {
+        guard !isLocked else { return }
+        if isNewTask, let status = TaskStatus.allCases.first(where: { "initial:\($0.rawValue)" == key }) {
+            model.initialStatus = status
+        } else if !isNewTask {
+            model.taskAction = key == "status" ? .changeStatus : .addActivity
+        }
+    }
+
+    private func moveAction(_ delta: Int) {
+        let rows = actionKeys
+        let index = rows.firstIndex(of: focusedRow ?? selectedActionKey) ?? 0
+        let key = rows[min(max(index + delta, 0), rows.count - 1)]
+        chooseAction(key)
+        focusedRow = key
+    }
+
+    private func moveTarget(_ delta: Int, from status: TaskStatus) {
+        let targets = model.availableStatusTargets()
+        guard !targets.isEmpty else { return }
+        let index = targets.firstIndex(of: status) ?? 0
+        let target = targets[min(max(index + delta, 0), targets.count - 1)]
+        model.statusTarget = target
+        focusedRow = "target:\(target.rawValue)"
+    }
+
+    private func focusDetail() {
+        visibleColumn = 2
+        if !isNewTask && model.taskAction == .changeStatus {
+            if let target = model.statusTarget ?? model.availableStatusTargets().first {
+                focusedRow = "target:\(target.rawValue)"
+            }
+        } else {
+            focusedRow = nil
+            (NSApp.keyWindow as? KeyboardPanel)?.requestDraftFocus()
+        }
+    }
+
+    private func focusSearch() {
+        visibleColumn = 0
+        focusedRow = nil
+        (NSApp.keyWindow as? KeyboardPanel)?.requestDefaultFocus(for: .task)
+    }
 }
 
 @MainActor private struct CaptureDraftEditor: View {
@@ -595,23 +893,23 @@ import WorkLogCore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(WorkLogTheme.text)
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(WorkLogTheme.text)
             ZStack(alignment: .topLeading) {
                 CaptureTextEditor(text: $model.text, selectionRange: $model.selectionRange)
                 if model.text.isEmpty {
                     Text(placeholder)
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                         .foregroundStyle(WorkLogTheme.muted.opacity(0.7))
-                        .padding(.horizontal, 17)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 10)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
             }
-            .frame(height: 160)
-            .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(WorkLogTheme.border))
+            .frame(height: model.kind == .task ? 138 : 160)
+            .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 7))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(WorkLogTheme.border))
             if showsTokens {
                 HStack(spacing: 5) {
                     Text("@").fontWeight(.semibold).foregroundStyle(WorkLogTheme.accent)
@@ -656,7 +954,7 @@ import WorkLogCore
             }
             .font(.caption)
             .foregroundStyle(WorkLogTheme.accent)
-            .padding(.horizontal, 9).padding(.vertical, 5)
+            .padding(.horizontal, 7).padding(.vertical, 3)
             .background(WorkLogTheme.accentSoft, in: Capsule())
         }
         .buttonStyle(.plain)
@@ -677,10 +975,10 @@ import WorkLogCore
         field.placeholderString = "업무명 검색"
         field.isBezeled = false
         field.drawsBackground = false
-        field.font = NSFont.systemFont(ofSize: 14)
+        field.font = NSFont.systemFont(ofSize: 12)
         field.delegate = context.coordinator
         field.setAccessibilityLabel("업무 검색")
-        field.setAccessibilityHelp("위아래 화살표로 업무를 고르고 Return으로 선택합니다.")
+        field.setAccessibilityHelp("위아래 화살표로 업무를 고르고 Return으로 동작 선택 단계로 이동합니다.")
         return field
     }
     func updateNSView(_ field: NSTextField, context: Context) {
@@ -703,6 +1001,11 @@ import WorkLogCore
             switch commandSelector {
             case #selector(NSResponder.moveUp(_:)): parent.onMove(-1)
             case #selector(NSResponder.moveDown(_:)): parent.onMove(1)
+            case #selector(NSResponder.moveRight(_:)):
+                // Inside a query, preserve ordinary caret movement. At the end, enter the next column.
+                let selection = textView.selectedRange()
+                guard selection.length == 0, selection.location == (textView.string as NSString).length else { return false }
+                if NSApp.currentEvent?.isARepeat != true { parent.onSelect() }
             case #selector(NSResponder.insertNewline(_:)):
                 if NSApp.currentEvent?.isARepeat != true { parent.onSelect() }
             default: return false
@@ -723,13 +1026,13 @@ import WorkLogCore
         let editor = CaptureNSTextView()
         editor.isRichText = false
         editor.isAutomaticQuoteSubstitutionEnabled = false
-        editor.font = NSFont.systemFont(ofSize: 14)
+        editor.font = NSFont.systemFont(ofSize: 13)
         editor.textColor = .labelColor
         editor.drawsBackground = false
-        editor.textContainerInset = NSSize(width: 12, height: 14)
+        editor.textContainerInset = NSSize(width: 8, height: 10)
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
-        editor.minSize = NSSize(width: 0, height: 140)
+        editor.minSize = NSSize(width: 0, height: 120)
         editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         editor.autoresizingMask = [.width]
         editor.textContainer?.widthTracksTextView = true

@@ -41,7 +41,7 @@ import WorkLogCore
             if !model.canEdit(from: host) {
                 Text("다른 화면에서 편집 중입니다").foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 TextField("제목 (비우면 임시 제목)", text: $model.title)
                     .accessibilityLabel("Secret 제목").focused($titleFocused)
                 TextField("그룹 (선택 사항)", text: $model.groupName).accessibilityLabel("그룹 (선택 사항)")

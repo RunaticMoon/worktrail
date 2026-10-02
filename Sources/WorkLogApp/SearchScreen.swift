@@ -58,7 +58,7 @@ struct SearchScreen: View {
                 }
             }
         }
-        .padding(20)
+        .padding(WorkLogTheme.contentInset)
         .background(WorkLogTheme.canvas)
         .tint(WorkLogTheme.accent)
         .navigationTitle("검색")
@@ -91,7 +91,7 @@ struct SearchScreen: View {
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(focused ? WorkLogTheme.accent : WorkLogTheme.muted)
             TextField("기록을 찾거나, 업무에 대해 질문하세요", text: $model.text)
-                .font(.system(size: 17))
+                .font(.system(size: 15))
                 .textFieldStyle(.plain)
                 .focused($focused)
                 .accessibilityLabel("원문 검색 또는 AI 질문")
@@ -111,7 +111,7 @@ struct SearchScreen: View {
             Keycap("↵")
                 .accessibilityHidden(true)
         }
-        .padding(16)
+        .padding(12)
         .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius))
         .overlay {
             RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius)
@@ -184,7 +184,7 @@ struct SearchScreen: View {
                         .onChange(of: useDates) { _, _ in applyDates() }
                     if useDates, let start = filterStart, let end = filterEnd {
                         ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 16) {
+                            HStack(spacing: 12) {
                                 dateFilters(start: start, end: end)
                             }
                             VStack(alignment: .leading, spacing: 10) {
@@ -286,15 +286,15 @@ struct SearchScreen: View {
                     .foregroundStyle(WorkLogTheme.muted)
                     .padding(.top, 3)
             }
-            .padding(14)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(hoveredResult == hit ? WorkLogTheme.accentSoft : WorkLogTheme.surface,
-                        in: RoundedRectangle(cornerRadius: 12))
+                        in: RoundedRectangle(cornerRadius: 8))
             .overlay {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(hoveredResult == hit ? WorkLogTheme.accent.opacity(0.25) : WorkLogTheme.border, lineWidth: 1)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .onHover { hoveredResult = $0 ? hit : (hoveredResult == hit ? nil : hoveredResult) }
@@ -302,7 +302,7 @@ struct SearchScreen: View {
     }
 
     private func answerView(_ answer: GroundedAnswer) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").foregroundStyle(WorkLogTheme.accent)
                 Text("기록 기반 답변").font(.headline)
@@ -410,13 +410,13 @@ private struct SourceRecordSheet: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 Image(systemName: "doc.text")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(WorkLogTheme.accent)
                     .frame(width: 44, height: 44)
-                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("저장된 원문").font(.title3).fontWeight(.semibold)
                     Text("\(sourceTitle) · \(workDate?.iso ?? "날짜 없음")")
@@ -447,14 +447,14 @@ private struct SourceRecordSheet: View {
                         .lineSpacing(5)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
-                        .padding(18)
+                        .padding(10)
                     }
                     .worklogCard(padding: 0)
                     .onAppear { proxy.scrollTo("match", anchor: .top) }
                 }
             }
         }
-        .padding(24)
+        .padding(WorkLogTheme.contentInset)
         .frame(minWidth: 540, minHeight: 400)
         .background(WorkLogTheme.canvas)
     }

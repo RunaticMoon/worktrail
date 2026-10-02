@@ -4,7 +4,9 @@ import SwiftUI
 
 /// Shared surfaces stay opaque and follow the system appearance, including panels.
 enum WorkLogTheme {
-    static let cornerRadius: CGFloat = 16
+    static let cornerRadius: CGFloat = 10
+    static let contentInset: CGFloat = 16
+    static let cardInset: CGFloat = 12
     static let accent = adaptive(light: 0x5753CF, dark: 0xABA7FF)
     static let accentSoft = adaptive(light: 0xECEBFC, dark: 0x302E4B)
     static let canvas = adaptive(light: 0xF5F5F8, dark: 0x19191F)
@@ -25,12 +27,12 @@ enum WorkLogTheme {
 }
 
 extension View {
-    func worklogCard(padding: CGFloat = 16) -> some View {
+    func worklogCard(padding: CGFloat = WorkLogTheme.cardInset) -> some View {
         self.padding(padding)
             .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius))
             .overlay {
                 RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius)
-                    .strokeBorder(WorkLogTheme.border.opacity(0.65), lineWidth: 1)
+                    .strokeBorder(WorkLogTheme.border.opacity(0.65), lineWidth: 0.5)
                     .allowsHitTesting(false)
             }
     }
@@ -44,15 +46,15 @@ struct WorkLogButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, 10).padding(.vertical, 5)
             .foregroundStyle(foreground(role: configuration.role))
-            .background(background(pressed: configuration.isPressed, role: configuration.role), in: RoundedRectangle(cornerRadius: 9))
+            .background(background(pressed: configuration.isPressed, role: configuration.role), in: RoundedRectangle(cornerRadius: 6))
             .overlay {
-                RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(prominent ? Color.clear : WorkLogTheme.border.opacity(0.8), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(prominent ? Color.clear : WorkLogTheme.border.opacity(0.7), lineWidth: 0.5)
             }
             .opacity(isEnabled ? 1 : 0.45)
-            .contentShape(RoundedRectangle(cornerRadius: 9))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
             .onHover { isHovering = $0 }
     }
 
@@ -78,7 +80,7 @@ struct Keycap: View {
         Text(label)
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .foregroundStyle(WorkLogTheme.muted)
-            .padding(.horizontal, 5).padding(.vertical, 3)
+            .padding(.horizontal, 4).padding(.vertical, 2)
             .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 4))
             .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(WorkLogTheme.border, lineWidth: 0.5) }
             .fixedSize()
@@ -87,12 +89,29 @@ struct Keycap: View {
 
 struct WorkLogGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             configuration.label.font(.system(size: 13, weight: .semibold))
             configuration.content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .worklogCard()
+    }
+}
+
+struct WorkLogAppIcon: View {
+    private static let artwork: NSImage? = Bundle.main.url(forResource: "WorkLog", withExtension: "icns")
+        .flatMap { NSImage(contentsOf: $0) }
+
+    var body: some View {
+        Group {
+            if let artwork = Self.artwork {
+                Image(nsImage: artwork).resizable().scaledToFit()
+            } else {
+                Image(systemName: "book.closed.fill").resizable().scaledToFit()
+                    .foregroundStyle(WorkLogTheme.accent)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 #endif

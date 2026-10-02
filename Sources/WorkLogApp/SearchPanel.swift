@@ -117,8 +117,8 @@ import WorkLogCore
                 .accessibilityLabel("검색 패널 닫기")
                 .help("닫고 이전 앱으로 돌아가기 (Esc)")
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(WorkLogTheme.surface)
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
             SearchScreen(model: model, environment: environment)

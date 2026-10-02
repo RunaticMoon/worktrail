@@ -9,7 +9,7 @@ struct BackupScreen: View {
     let onRestore: (BackupInfo, Bool) -> Void
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Button("지금 백업", systemImage: "externaldrive.badge.plus") { Task { await model.create() } }.disabled(model.isBusy)
                     Button("백업 폴더 열기", systemImage: "folder") {
@@ -49,14 +49,14 @@ struct BackupScreen: View {
                         .padding(.vertical, 8)
                     }
                 }
-            }.padding(16)
+            }.padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("백업")
         .onAppear { model.load() }
         .sheet(isPresented: Binding(get: { model.pendingRestore != nil }, set: { if !$0 { model.cancelRestore() } })) {
             if let backup = model.pendingRestore {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     Text("이 복원 지점으로 되돌릴까요?").font(.title2)
                     Text(timestamp(backup.manifest.createdAt))
                     Text("현재 기록·설정을 이 백업으로 교체합니다. 복원 직전 현재 데이터를 별도 백업으로 보존하고, 모든 저장소 연결을 닫은 후 복원합니다.")
@@ -72,7 +72,7 @@ struct BackupScreen: View {
                             model.cancelRestore(); onRestore(backup, include)
                         }
                     }
-                }.padding(24).frame(minWidth: 440, idealWidth: 520)
+                }.padding(WorkLogTheme.contentInset).frame(minWidth: 440, idealWidth: 520)
             }
         }
     }

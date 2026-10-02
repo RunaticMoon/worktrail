@@ -136,7 +136,7 @@ struct GraphScreen: View {
                 Label(message, systemImage: "exclamationmark.triangle")
                     .multilineTextAlignment(.center)
                 Button("다시 시도") { reloadAndFit() }
-            }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.padding(WorkLogTheme.contentInset).frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded:
             GeometryReader { geometry in
                 if geometry.size.width >= 660 {
@@ -158,7 +158,7 @@ struct GraphScreen: View {
         VStack(spacing: 12) {
             Image(systemName: symbol).font(.largeTitle).foregroundStyle(.secondary).accessibilityHidden(true)
             Text(message).multilineTextAlignment(.center)
-        }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.padding(WorkLogTheme.contentInset).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Graph interaction

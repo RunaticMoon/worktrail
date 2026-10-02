@@ -95,6 +95,7 @@ struct SettingsScreen: View {
                     Text("Secret의 key와 값은 저장 시 앞뒤 공백·탭·개행을 제거합니다. 내부 문자열은 그대로 보존합니다.")
                         .foregroundStyle(.secondary)
                 }
+                UpdateSettingsSection()
                 Section("백업·알림") {
                     TextField("백업 보관 (일, 1~3650)", value: $model.draft.backupRetentionDays, format: .number)
                     TextField("월요일 검토 알림 (HH:mm)", text: $model.draft.mondayReminderTime)
@@ -107,7 +108,7 @@ struct SettingsScreen: View {
                 Spacer()
                 Button("설정 저장") { onSave(); errorFocused = !model.errors.isEmpty }
                     .keyboardShortcut("s", modifiers: .command).disabled(!model.hasChanges)
-            }.padding(16)
+            }.padding(12)
         }.navigationTitle("설정")
             .sheet(item: $promptEditor) { selection in
                 PromptEditorView(prompts: prompts, job: selection.job)

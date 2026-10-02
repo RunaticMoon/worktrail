@@ -15,7 +15,7 @@ struct TaskDetailScreen: View {
             if let error = model.errorMessage { InlineNotice(message: error) }
             if let detail = model.detail {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("상태: \(detail.status?.koreanLabel ?? "상태 없음")")
                         Text("시작일: \(detail.firstStartedOn?.iso ?? "기록 없음")")
                         if let due = detail.task.dueOn { Text("마감일: \(due.iso)") }
@@ -111,7 +111,7 @@ struct TaskDetailScreen: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else { EmptyMessage(title: "업무를 선택하세요", detail: "업무 목록에서 상세 내용을 열 수 있습니다.") }
-        }.padding(20)
+        }.padding(WorkLogTheme.contentInset)
             .alert("남은 범위를 확인하세요", isPresented: Binding(get: { model.completionCheck != nil },
                 set: { if !$0 { model.cancelCompletion() } })) {
                 Button("돌아가기", role: .cancel) { model.cancelCompletion() }
