@@ -311,6 +311,29 @@ final class HotkeySettingsCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testApplyAfterFailedEndRecordingReRegistersAction() async throws {
+        let (coordinator, registrar) = makeStarted()
+        coordinator.beginRecording()
+        registrar.failingActions = [.search]
+
+        let messages = coordinator.endRecording()
+
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertTrue(messages[0].contains("검색"))
+        XCTAssertFalse(coordinator.isRecording)
+        XCTAssertNil(coordinator.active[.search], "재등록 실패한 action은 active에서 빠져야 합니다.")
+        XCTAssertNil(registrar.registered[.search])
+
+        // registrar가 정상화된 뒤 같은 값으로 apply하면 실패했던 action이 다시 등록돼야 한다.
+        registrar.failingActions = []
+
+        try coordinator.apply(capture: captureText, search: searchText) {}
+
+        XCTAssertEqual(registrar.registered[.search], try binding(searchText), "동일 값 적용 시 재등록을 시도해야 합니다.")
+        XCTAssertEqual(coordinator.active[.search], try binding(searchText))
+    }
+
+    @MainActor
     func testApplyDuringRecordingEndsRecordingAndApplies() async throws {
         let (coordinator, registrar) = makeStarted()
         coordinator.beginRecording()

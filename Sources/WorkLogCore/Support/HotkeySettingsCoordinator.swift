@@ -166,7 +166,8 @@ public enum HotkeyApplyError: Error, Equatable, LocalizedError {
     }
 
     /// 녹화 종료: 일시 해제한 `active`를 다시 등록한다. begin 없이 호출하면 no-op이다.
-    /// 재등록에 실패한 action의 한국어 메시지를 반환한다.
+    /// 재등록에 실패한 action은 `active`에서 제거해(더 이상 등록돼 있지 않으므로) 다음 `apply`가
+    /// 값이 같더라도 재등록을 시도하게 한다. 실패한 action의 한국어 메시지를 반환한다.
     @discardableResult
     public func endRecording() -> [String] {
         guard isRecording else { return [] }
@@ -177,6 +178,7 @@ public enum HotkeyApplyError: Error, Equatable, LocalizedError {
             do {
                 try registrar.register(binding, for: action)
             } catch {
+                active[action] = nil
                 messages.append("\(action.title) 단축키를 다시 등록하지 못했습니다. 다른 조합으로 설정하세요.")
             }
         }
