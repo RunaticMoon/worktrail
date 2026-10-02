@@ -249,72 +249,19 @@ final class SecretsSettingsBackupPresentationTests: XCTestCase {
             XCTAssertEqual(model.defaultCaptureKind, kind)
         }
     }
-    @MainActor func testSecretNewEntryRequestWaitsForAuthenticationAndPreservesEncryptedDraft() async throws {
+    @MainActor func testDiscardingDraftClearsRecoverableDraftWithoutEchoingSecret() async throws {
         let env = try environment()
         let model = SecretsModel(environment: env)
-        model.requestNewEntry()
-        XCTAssertTrue(model.requestsNewEntry)
-        XCTAssertTrue(model.isLocked)
-        XCTAssertTrue(model.rows.isEmpty)
-        await model.unlock()
-        XCTAssertFalse(model.isLocked)
-        XCTAssertFalse(model.hasRecoverableDraft)
-        model.requestsNewEntry = false; model.beginNew()
-        XCTAssertNil(model.selectedId)
-        model.addRow(); model.rows[0].key = "fake-key"; model.rows[0].value = "fake-new-secret-canary"
-        model.lock(); model.requestNewEntry()
-        XCTAssertTrue(model.isLocked)
-        XCTAssertTrue(model.rows.isEmpty)
-        await model.unlock()
-        XCTAssertTrue(model.requestsNewEntry)
-        XCTAssertTrue(model.hasRecoverableDraft)
-        model.recoverDraft()
-        XCTAssertEqual(model.rows.first?.value, "fake-new-secret-canary")
-        XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-new-secret-canary")).isEmpty)
-    }
-
-    @MainActor func testRecoveringDraftConsumesPendingNewEntryRequest() async throws {
-        let env = try environment()
-        let model = SecretsModel(environment: env)
-        model.requestNewEntry()
-        XCTAssertTrue(model.requestsNewEntry)
-        XCTAssertTrue(model.isLocked)
         await model.unlock()
         XCTAssertFalse(model.hasRecoverableDraft)
-        model.requestsNewEntry = false; model.beginNew()
-        XCTAssertNil(model.selectedId)
-        model.addRow(); model.rows[0].key = "fake-key"; model.rows[0].value = "fake-recover-canary"
-        model.lock(); model.requestNewEntry()
-        XCTAssertTrue(model.isLocked)
-        XCTAssertTrue(model.rows.isEmpty)
-        await model.unlock()
-        XCTAssertTrue(model.requestsNewEntry)
-        XCTAssertTrue(model.hasRecoverableDraft)
-        model.recoverDraft()
-        XCTAssertFalse(model.requestsNewEntry)
-        XCTAssertFalse(model.hasRecoverableDraft)
-        XCTAssertEqual(model.rows.first?.value, "fake-recover-canary")
-        XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-recover-canary")).isEmpty)
-    }
-
-    @MainActor func testDiscardingDraftKeepsPendingNewEntryRequest() async throws {
-        let env = try environment()
-        let model = SecretsModel(environment: env)
-        model.requestNewEntry()
-        XCTAssertTrue(model.requestsNewEntry)
-        XCTAssertTrue(model.isLocked)
-        await model.unlock()
-        XCTAssertFalse(model.hasRecoverableDraft)
-        model.requestsNewEntry = false; model.beginNew()
+        model.beginNew()
         XCTAssertNil(model.selectedId)
         model.addRow(); model.rows[0].key = "fake-key"; model.rows[0].value = "fake-discard-canary"
-        model.lock(); model.requestNewEntry()
+        model.lock()
         XCTAssertTrue(model.isLocked)
         await model.unlock()
-        XCTAssertTrue(model.requestsNewEntry)
         XCTAssertTrue(model.hasRecoverableDraft)
         model.discardDraft()
-        XCTAssertTrue(model.requestsNewEntry)
         XCTAssertFalse(model.hasRecoverableDraft)
         XCTAssertTrue(try env.search.search(SearchQuery(text: "fake-discard-canary")).isEmpty)
     }

@@ -20,7 +20,6 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
     public private(set) var hasRecoverableDraft = false
     /// The single screen that may currently mutate the shared editor draft.
     public private(set) var editorOwner: SecretEditorHost?
-    public var requestsNewEntry = false
     public var title = "" { didSet { preserveDraft() } }
     public var groupName = "" { didSet { preserveDraft() } }
     public var showsValues = false
@@ -146,8 +145,6 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
         replaceEditor(id: nil, title: "", group: "", items: [])
         message = nil
     }
-    /// The screen handles authentication and any existing encrypted draft before navigation.
-    public func requestNewEntry() { synchronizeLock(); requestsNewEntry = true }
     public func open(_ item: SecretMetadata) {
         guard let environment = requireUnlocked() else { return }
         do {
@@ -191,8 +188,6 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
                 replaceEditor(id: nil, title: "복구한 초안", group: "", items: [])
                 suppressDraft = true; rows = recoveredDraft.items
             }
-            // Choosing to recover the draft satisfies a pending new-entry request; the screen must not navigate away.
-            requestsNewEntry = false
             self.recoveredDraft = nil; hasRecoverableDraft = false
             suppressDraft = false
             message = "암호화 초안을 복구했습니다. 제목·그룹·행을 확인하고 저장하세요. 원래 항목이 변경되었으면 새 항목으로 보존합니다."

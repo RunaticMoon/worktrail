@@ -52,14 +52,11 @@ import WorkLogCore
         .onAppear {
             isActive = true
             model.tick(); _ = model.acquireEditor(.main)
-            model.searchTitles(); handleNewEntryRequest()
+            model.searchTitles()
         }
-        .onChange(of: model.requestsNewEntry) { _, _ in handleNewEntryRequest() }
         .onChange(of: model.isLocked) { _, locked in
             if isActive && !locked { _ = model.acquireEditor(.main) }
-            handleNewEntryRequest()
         }
-        .onChange(of: model.hasRecoverableDraft) { _, _ in handleNewEntryRequest() }
         .onDisappear {
             isActive = false
             if model.canEdit(from: .main) { model.showsValues = false }
@@ -146,7 +143,7 @@ import WorkLogCore
             VStack(alignment: .leading, spacing: 8) {
                 if !model.canEdit(from: .main) {
                     Button("다시 시도") {
-                        if model.acquireEditor(.main) { handleNewEntryRequest() }
+                        _ = model.acquireEditor(.main)
                     }
                 }
                 ScrollView {
@@ -181,12 +178,6 @@ import WorkLogCore
                 }
             }
         }
-    }
-    private func handleNewEntryRequest() {
-        guard isActive, model.canEdit(from: .main), model.requestsNewEntry, !model.isLocked, !model.hasRecoverableDraft else { return }
-        model.requestsNewEntry = false
-        showsTrash = false
-        navigate(to: nil)
     }
     private func navigate(to item: SecretMetadata?) {
         guard isActive, model.canEdit(from: .main), !model.isLocked, !model.hasRecoverableDraft else { return }
