@@ -1,0 +1,122 @@
+# WorkLog macOS ad-hoc(unsigned) arm64 DMG 릴리즈 워크플로.
+# 수동 실행(workflow_dispatch)만 허용한다. 빌드·검증 job은 읽기 권한만 가지고,
+# GitHub 토큰은 릴리즈를 만드는 publish job의 단일 step에만 주입된다.
+# Apple Developer 계정·서명 인증서·공증은 없으므로 unsigned DMG만 다룬다.
+name: macOS release DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Reviewed main commit SHA (40 lowercase hex), exactly the dispatch SHA'
+        type: string
+        required: true
+      tag:
+        description: 'Release tag vMAJOR.MINOR.PATCH matching VERSION'
+        type: string
+        required: true
+      publish:
+        description: 'artifact-only = build/verify only; draft = create draft release; publish = draft then promote'
+        type: choice
+        options:
+          - artifact-only
+          - draft
+          - publish
+        default: artifact-only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'RunaticMoon/worktrail' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 40
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Require reviewed exact source and Apple Silicon runner
+        timeout-minutes: 1
+        env:
+          APPROVED_SHA: ${{ inputs.commit }}
+        run: |
+          [[ "$APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$APPROVED_SHA" = "$GITHUB_SHA"
+          test "$(uname -m)" = arm64
+          test -z "${GH_TOKEN:-}"
+          test -z "${GITHUB_TOKEN:-}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Version gate and resolve build version
+        id: version
+        timeout-minutes: 3
+        run: |
+          version="$(python3 distribution/release.py version "$RELEASE_TAG" VERSION)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'BUILD_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+      - name: Build all targets (including WorkLogApp)
+        timeout-minutes: 20
+        run: swift build --build-tests
+      - name: Test WorkLogCore
+        timeout-minutes: 20
+        run: swift test
+      - name: Package unsigned DMG
+        timeout-minutes: 15
+        env:
+          WORKLOG_BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/build-dmg.sh
+      - name: Verify unsigned DMG contents
+        timeout-minutes: 5
+        run: bash distribution/verify-dmg.sh "release/WorkLog-${BUILD_VERSION}-arm64.dmg" "$BUILD_VERSION"
+      - name: Generate and verify release manifest
+        timeout-minutes: 3
+        run: |
+          python3 distribution/release.py manifest "$RELEASE_TAG" release
+          python3 distribution/release.py verify "$RELEASE_TAG" release
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: artifact
+        timeout-minutes: 10
+        with:
+          name: worklog-macos-arm64-${{ github.sha }}
+          path: |
+            release/*.dmg
+            release/release-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: inputs.publish != 'artifact-only' && github.repository == 'RunaticMoon/worktrail' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        timeout-minutes: 10
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release
+          digest-mismatch: error
+      - name: Draft, read-back verification and optional promotion
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTE: ${{ inputs.publish == 'publish' }}
+        run: bash distribution/publish-release.sh

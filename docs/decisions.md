@@ -25,3 +25,4 @@
 | T21 | 결정적 초안(AI 미사용)은 `template_version_id`를 기록하지 않음 | 프롬프트 템플릿은 AI 지시문이며 결정적 초안은 코드 컴포저(`generator: deterministic`)가 만든다. AI 초안 버전에만 템플릿 버전·스킬 해시를 기록 |
 | T22 | AI 출력 줄은 바이트 단위로 모아 줄바꿈에서만 UTF-8 해석 | 파이프 수신 단위가 한글 등 멀티바이트 문자 중간에서 잘려도 응답이 사라지지 않게 하기 위함(독립 검증 AO 재현 결함) |
 | T23 | 백업 DB 사본은 DELETE 저널(단일 파일)로 저장하고, 복원 시 대상의 `-wal`/`-shm`은 DB와 함께 옮겨 두었다가 실패하면 되돌림 | macOS 시스템 SQLite는 읽기 전용 연결로 WAL DB를 열지 못하고(macOS CI에서 확인), 닫힌 뒤에도 `-wal`/`-shm`을 남긴다. 복원된 DB는 앱이 읽기·쓰기로 열 때 다시 WAL이 된다 |
+| T24 | 릴리즈는 `VERSION` 파일을 버전 원본으로, 수동 `macos-release.yml`이 태그 `v<VERSION>` 검사 후 ad-hoc 서명 `WorkLog-<VERSION>-arm64.dmg`와 SHA-256 manifest를 만들어 draft 업로드·재다운로드 비교·선택적 공개 | 사용자 요청(pr-context-explorer 참고). Apple Developer 계정이 없어 서명·공증 없이 배포하며 첫 실행 승인이 필요함을 문서·릴리즈 노트에 명시. arm64 전용(macos-15 러너) |
