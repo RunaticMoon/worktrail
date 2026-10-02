@@ -8,28 +8,29 @@ struct BackupScreen: View {
     let calendar: WorkCalendar
     let onRestore: (BackupInfo, Bool) -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Button("지금 백업", systemImage: "externaldrive.badge.plus") { Task { await model.create() } }.disabled(model.isBusy)
-                Button("백업 폴더 열기", systemImage: "folder") {
-                    if let folder = model.folder, !NSWorkspace.shared.open(folder) {
-                        model.recordFailure(BackupFailure.ioFailed("folder"))
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Button("지금 백업", systemImage: "externaldrive.badge.plus") { Task { await model.create() } }.disabled(model.isBusy)
+                    Button("백업 폴더 열기", systemImage: "folder") {
+                        if let folder = model.folder, !NSWorkspace.shared.open(folder) {
+                            model.recordFailure(BackupFailure.ioFailed("folder"))
+                        }
                     }
+                    Spacer()
+                    Button("목록 새로고침", systemImage: "arrow.clockwise") { model.load() }.disabled(model.isBusy)
+                    if model.isBusy { ProgressView().controlSize(.small) }
                 }
-                Spacer()
-                Button("목록 새로고침", systemImage: "arrow.clockwise") { model.load() }.disabled(model.isBusy)
-                if model.isBusy { ProgressView().controlSize(.small) }
-            }
-            Text(BackupManifest.standardNote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let at = model.status.lastSuccessAt { Text("마지막 성공: \(timestamp(at))") }
-            if let at = model.status.lastFailureAt { Text("마지막 실패: \(timestamp(at))").foregroundStyle(.red) }
-            if let message = model.message { InlineNotice(message: message) }
-            if model.backups.isEmpty {
-                EmptyMessage(title: "아직 복원 지점이 없습니다", detail: "‘지금 백업’으로 현재 기록과 암호화된 Secret을 보존하세요.")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                List {
+                Text(BackupManifest.standardNote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let at = model.status.lastSuccessAt { Text("마지막 성공: \(timestamp(at))") }
+                if let at = model.status.lastFailureAt { Text("마지막 실패: \(timestamp(at))").foregroundStyle(.red) }
+                if let message = model.message { InlineNotice(message: message) }
+                if model.backups.isEmpty {
+                    EmptyMessage(title: "아직 복원 지점이 없습니다", detail: "‘지금 백업’으로 현재 기록과 암호화된 Secret을 보존하세요.")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
                     ForEach(model.backups, id: \.id) { backup in
+                        Divider()
                         VStack(alignment: .leading, spacing: 8) {
                             Text(timestamp(backup.manifest.createdAt)).font(.headline)
                             HStack {
@@ -43,11 +44,15 @@ struct BackupScreen: View {
                                     Label("검증 통과", systemImage: "checkmark.shield").foregroundStyle(.secondary)
                                 }
                             }.disabled(model.isBusy)
-                        }.padding(.vertical, 8)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
                     }
                 }
-            }
-        }.padding(16).navigationTitle("백업")
+            }.padding(16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .navigationTitle("백업")
         .onAppear { model.load() }
         .sheet(isPresented: Binding(get: { model.pendingRestore != nil }, set: { if !$0 { model.cancelRestore() } })) {
             if let backup = model.pendingRestore {
