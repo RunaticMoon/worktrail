@@ -72,7 +72,7 @@ public final class RecordLinkStore {
     /// 정규 순서쌍의 링크를 지운다. 없는 링크·자기 연결은 아무 것도 하지 않는다.
     public func remove(between first: RecordReference, and second: RecordReference) throws {
         guard let (a, b) = RecordReference.canonicalPair(first, second) else { return }
-        try repo.db.transaction {
+        _ = try repo.db.transaction {
             try repo.db.run("""
                 DELETE FROM record_link
                 WHERE from_kind = ? AND from_id = ? AND to_kind = ? AND to_id = ?
@@ -117,11 +117,18 @@ public final class RecordLinkStore {
         guard capped > 0 else { return [] }
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 제외 대상은 Swift 필터에서 걸러진다. 종류별 SQL LIMIT를 그 종류의 제외 수만큼
+        // 늘려, 최근 후보가 제외로 소진돼도 오래된 후보로 limit을 채울 수 있게 한다.
+        var excludedByKind: [RecordReferenceKind: Int] = [:]
+        for reference in excluding {
+            excludedByKind[reference.kind, default: 0] += 1
+        }
         var entries: [CandidateEntry] = []
-        entries += try memoEntries(query: trimmed, limit: capped)
-        entries += try taskEntries(query: trimmed, limit: capped)
-        entries += try activityEntries(query: trimmed, limit: capped)
-        entries += try reportVersionEntries(query: trimmed, limit: capped)
+        entries += try memoEntries(query: trimmed, limit: capped + (excludedByKind[.memo] ?? 0))
+        entries += try taskEntries(query: trimmed, limit: capped + (excludedByKind[.task] ?? 0))
+        entries += try activityEntries(query: trimmed, limit: capped + (excludedByKind[.activity] ?? 0))
+        entries += try reportVersionEntries(query: trimmed,
+                                            limit: capped + (excludedByKind[.reportVersion] ?? 0))
 
         return entries
             .filter { !excluding.contains($0.reference) }

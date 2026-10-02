@@ -246,6 +246,26 @@ final class RecordLinkStoreTests: XCTestCase {
         XCTAssertEqual(limited.map(\.reference.id), ["m3", "m2"])
     }
 
+    func testCandidatesFillLimitWhenRecentExcluded() throws {
+        let repo = try makeRepo()
+        let store = makeStore(repo)
+        let friday = WorkDate("2026-10-09")!
+        try seedMemo(repo, id: "m1", body: "월", date: monday)
+        try seedMemo(repo, id: "m2", body: "화", date: tuesday)
+        try seedMemo(repo, id: "m3", body: "수", date: wednesday)
+        try seedMemo(repo, id: "m4", body: "목", date: thursday)
+        try seedMemo(repo, id: "m5", body: "금", date: friday)
+
+        // 최근 3개를 제외해도 오래된 후보가 limit까지 채워져야 한다.
+        let excluded: Set<RecordReference> = [
+            RecordReference(kind: .memo, id: "m5"),
+            RecordReference(kind: .memo, id: "m4"),
+            RecordReference(kind: .memo, id: "m3"),
+        ]
+        let candidates = try store.candidates(query: "", excluding: excluded, limit: 2)
+        XCTAssertEqual(candidates.map(\.reference.id), ["m2", "m1"])
+    }
+
     func testCandidatesSearchFindsTitleAndBody() throws {
         let repo = try makeRepo()
         let store = makeStore(repo)
