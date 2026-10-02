@@ -242,4 +242,30 @@ final class CaptureSessionTests: XCTestCase {
         XCTAssertEqual(try env.repo.memo(id: id)?.body, "task 기본값에서도 메모")
         XCTAssertEqual(try env.repo.tasks().count, 0, "메모 탭 제출이 업무를 만들지 않는다")
     }
+
+    // MARK: - detach
+
+    @MainActor
+    func testDetachReleasesEnvironmentAndLaterCallsAreHarmless() async throws {
+        var env: AppEnvironment? = try environment()
+        weak var weakEnvironment: AppEnvironment?
+        weakEnvironment = env
+        let model = CaptureSessionModel(environment: try XCTUnwrap(env))
+        model.beginSession()
+        model.memoDraft.text = "초안"
+
+        model.detach()
+        env = nil
+        XCTAssertNil(weakEnvironment, "detach가 environment 참조를 놓는다")
+
+        // 이후 호출은 무해해야 한다.
+        model.beginSession()
+        model.select(.task)
+        XCTAssertEqual(model.tab, .task)
+        model.memoDraft.text = "detach 후 초안"
+        XCTAssertFalse(model.submitOrdinary(), "저장소가 없으면 일반 제출은 무해하게 실패한다")
+        model.memoDraft.resetDefaults()
+        model.memoDraft.reloadCandidates()
+        XCTAssertNil(model.memoDraft.errorMessage)
+    }
 }

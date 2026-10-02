@@ -20,7 +20,7 @@ import Observation
     /// 업무 탭 전용 일반 초안. `kind == .task` 고정.
     public let taskDraft: CaptureModel
 
-    @ObservationIgnored private let environment: AppEnvironment
+    @ObservationIgnored private var environment: AppEnvironment?
     /// `markSessionCompleted()` 이후 다음 `beginSession()`이 새 세션으로 시작해야 함을 표시한다.
     @ObservationIgnored private var pendingNewSession = true
 
@@ -91,13 +91,20 @@ import Observation
         pendingNewSession = true
     }
 
-    /// 두 초안 정리용. 현재 `CaptureModel`에 해제할 관찰·연결 소유권이 없어 no-op이다.
-    public func detach() {}
+    /// 두 초안과 저장소 참조를 놓는다. 백업 복원 등에서 DB를 붙잡지 않게 한다.
+    ///
+    /// `memoDraft`/`taskDraft` 자체는 계약상 `public let`이라 유지하지만, 각 초안이
+    /// 보유한 `AppEnvironment`·서비스 참조는 `detach()`로 즉시 놓는다. 이후 메서드 호출은 무해하다.
+    public func detach() {
+        memoDraft.detach()
+        taskDraft.detach()
+        environment = nil
+    }
 
     // MARK: - 내부
 
     private func startNewSession() {
-        tab = environment.settings.defaultCaptureKind
+        if let environment { tab = environment.settings.defaultCaptureKind }
         memoDraft.resetDefaults()
         taskDraft.resetDefaults()
         forceFixedKinds()

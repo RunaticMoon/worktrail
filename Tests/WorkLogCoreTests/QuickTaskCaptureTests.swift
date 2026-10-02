@@ -118,8 +118,38 @@ final class QuickTaskCaptureTests: XCTestCase {
         XCTAssertTrue(model.relatedRecords.isEmpty, "성공 후 관련 후보 초기화")
     }
 
-    // MARK: - 기존 업무 진행기록 + 프로젝트 검증
+    @MainActor
+    func testNewTaskWithLeadingBlankLineUsesFirstNonEmptyLineAsTitle() async throws {
+        let env = try environment()
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.text = "\n   \n첫 업무 제목\n본문 첫 줄\n본문 둘째 줄"
 
+        XCTAssertTrue(model.submit())
+        let taskId = try XCTUnwrap(model.lastSavedId)
+        XCTAssertEqual(try env.repo.task(id: taskId)?.title, "첫 업무 제목",
+                       "첫 줄이 공백이면 첫 번째 비어 있지 않은 줄이 업무명")
+        let activities = try env.repo.activities(taskId: taskId)
+        XCTAssertEqual(activities.count, 1, "제목 줄 뒤 나머지는 하나의 본문 기록이 된다")
+        XCTAssertEqual(activities.first?.body, "본문 첫 줄\n본문 둘째 줄",
+                       "제목 줄 이전의 빈 줄은 본문에 포함하지 않는다")
+    }
+
+    @MainActor
+    func testNewTaskWithoutLeadingBlankKeepsFirstLineAsTitle() async throws {
+        let env = try environment()
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.text = "제목 줄\n본문 줄"
+
+        XCTAssertTrue(model.submit())
+        let taskId = try XCTUnwrap(model.lastSavedId)
+        XCTAssertEqual(try env.repo.task(id: taskId)?.title, "제목 줄")
+        XCTAssertEqual(try env.repo.activities(taskId: taskId).first?.body, "본문 줄",
+                       "기존 분할 규칙(첫 줄=업무명) 유지")
+    }
+
+    // MARK: - 기존 업무 진행기록 + 프로젝트 검증
     @MainActor
     func testExistingTaskActivityValidatesProjectAndLinks() async throws {
         let env = try environment()
@@ -188,6 +218,46 @@ final class QuickTaskCaptureTests: XCTestCase {
     }
 
     @MainActor
+    func testStatusChangeSuccessClearsRelatedRecordsButKeepsText() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "상태 업무")
+        let memo = try env.tasks.captureMemo(body: "관련 메모")
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.taskSelection = .existing(task.id)
+        model.taskAction = .changeStatus
+
+        model.text = "상태 변경 뒤에도 남는 본문"
+        model.relatedRecords = try model.searchRelated("관련 메모")
+        XCTAssertEqual(model.relatedRecords.first?.reference, ref(.memo, memo.id))
+
+        model.statusTarget = .inProgress
+        XCTAssertTrue(model.submit())
+
+        XCTAssertTrue(model.relatedRecords.isEmpty, "상태 변경 성공 후 관련 후보를 비운다")
+        XCTAssertEqual(model.text, "상태 변경 뒤에도 남는 본문", "상태 변경은 본문을 지우지 않는다")
+    }
+
+    @MainActor
+    func testDisallowedStatusTransitionKeepsRelatedRecords() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "완료 업무")
+        _ = try env.tasks.completeTask(taskId: task.id, confirmRemaining: true)
+        let memo = try env.tasks.captureMemo(body: "관련 메모")
+
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.taskSelection = .existing(task.id)
+        model.taskAction = .changeStatus
+        model.statusTarget = .onHold
+        model.relatedRecords = try model.searchRelated("관련 메모")
+
+        XCTAssertFalse(model.submit())
+        XCTAssertFalse(model.relatedRecords.isEmpty, "실패 시 관련 후보를 보존한다")
+        XCTAssertEqual(model.relatedRecords.first?.reference, ref(.memo, memo.id))
+    }
+
+    @MainActor
     func testDisallowedStatusTransitionKeepsDraftAndSelection() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "완료 업무")
@@ -232,8 +302,10 @@ final class QuickTaskCaptureTests: XCTestCase {
 
         XCTAssertFalse(model.submit())
         XCTAssertNotNil(model.pendingCompletion)
+        model.relatedRecords = [RelatedRecordCandidate(reference: ref(.memo, "m-관련"), title: "관련 메모")]
         XCTAssertTrue(model.confirmCompletion())
         XCTAssertNil(model.pendingCompletion)
+        XCTAssertTrue(model.relatedRecords.isEmpty, "완료 확인 성공 후 관련 후보를 비운다")
         XCTAssertEqual(try env.tasks.currentStatus(taskId: task.id), .completed)
         XCTAssertEqual(try env.tasks.detail(taskId: task.id).checklist.first?.done, false,
                        "남은 체크리스트를 자동 완료하지 않는다")

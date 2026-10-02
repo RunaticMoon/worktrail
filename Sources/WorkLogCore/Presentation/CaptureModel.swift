@@ -61,10 +61,10 @@ public enum CaptureTaskAction: Equatable, Sendable {
     public private(set) var isSubmitting = false
     public private(set) var lastSavedId: String?
     /// Deprecated: 설정 기본값으로 일반 제출을 막던 정책은 제거됐다. 활성 탭 판단은 입력 세션이 담당한다.
-    public var requiresSecretEditor: Bool { environment.settings.defaultCaptureKind == .secret }
-    @ObservationIgnored private let environment: AppEnvironment
-    @ObservationIgnored private let linkedCapture: LinkedCaptureService
-    @ObservationIgnored private let linkStore: RecordLinkStore
+    public var requiresSecretEditor: Bool { environment?.settings.defaultCaptureKind == .secret }
+    @ObservationIgnored private var environment: AppEnvironment?
+    @ObservationIgnored private var linkedCapture: LinkedCaptureService?
+    @ObservationIgnored private var linkStore: RecordLinkStore?
     /// 완료 확인 재시도 대상 업무 id. `pendingCompletion`과 함께만 유효하다.
     @ObservationIgnored private var pendingCompletionTaskId: String?
 
@@ -79,13 +79,22 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     /// Applied only to a fresh draft; opening an existing draft preserves it.
     public func resetDefaults() {
+        guard let environment else { return }
         if !requiresSecretEditor {
             kind = environment.settings.defaultCaptureKind == .task ? .task : .memo
         }
         workDate = environment.calendar.workDate(of: environment.options.clock.now())
     }
 
+    /// 저장소 참조를 놓는다. 백업 복원 등에서 DB를 붙잡지 않게 한다. 이후 호출은 무해하다.
+    public func detach() {
+        environment = nil
+        linkedCapture = nil
+        linkStore = nil
+    }
+
     public func reloadCandidates() {
+        guard let environment else { return }
         do {
             projects = try environment.repo.projects()
             tags = try environment.repo.tags()
@@ -125,7 +134,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
         case .project:
             let linkedIds: [String]?
             if kind == .activity {
-                linkedIds = targetTaskId.flatMap { try? environment.repo.taskProjects(taskId: $0).map(\.projectId) } ?? []
+                linkedIds = targetTaskId.flatMap { id in
+                    environment.flatMap { try? $0.repo.taskProjects(taskId: id).map(\.projectId) }
+                } ?? []
             } else { linkedIds = nil }
             all = projects.filter { !selectedProjectIds.contains($0.id) && (linkedIds?.contains($0.id) ?? true) }
                 .map { CaptureCandidate(id: $0.id, name: $0.name, kind: .project) }
@@ -147,7 +158,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     /// Selection is stored by ID; replace only the query and preserve surrounding prose.
     public func select(_ candidate: CaptureCandidate) {
-        guard candidates.contains(candidate), let token else { return }
+        guard candidates.contains(candidate), let token, let environment else { return }
         do {
             switch candidate.kind {
             case .project:
@@ -192,7 +203,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
     /// 선택된 기존 업무의 현재 상태에서 허용되는 전이 목표(현재 상태 제외). 선택이 없으면 빈 배열.
     public func availableStatusTargets() -> [TaskStatus] {
         guard case let .existing(id) = taskSelection,
-              let current = try? environment.tasks.currentStatus(taskId: id) else { return [] }
+              let current = environment.flatMap({ try? $0.tasks.currentStatus(taskId: id) }) else { return [] }
         return TaskStatus.allCases.filter { target in
             target != current && Self.transitionKind(from: current, to: target) != nil
         }
@@ -200,6 +211,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     /// 수동 관련 링크 후보를 검색한다. 이미 선택한 후보와 현재 대상 업무는 제외한다.
     public func searchRelated(_ query: String) throws -> [RelatedRecordCandidate] {
+        guard let linkStore else { return [] }
         var excluding = Set(relatedRecords.map(\.reference))
         if case let .existing(id) = taskSelection {
             excluding.insert(RecordReference(kind: .task, id: id))
@@ -210,7 +222,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
     /// 완료 확인이 필요한 경우 `confirmRemaining: true`로 재시도한다. 성공하면 true.
     @discardableResult public func confirmCompletion() -> Bool {
         guard let taskId = pendingCompletionTaskId, pendingCompletion != nil else { return false }
-        guard !isSubmitting else { return false }
+        guard !isSubmitting, let environment else { return false }
         isSubmitting = true
         defer { isSubmitting = false }
         do {
@@ -219,6 +231,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
             pendingCompletionTaskId = nil
             taskSelection = .newTask
             statusTarget = nil
+            relatedRecords = []
             errorMessage = nil
             reloadCandidates()
             return true
@@ -237,7 +250,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
     // MARK: - 저장
 
     @discardableResult public func submit() -> Bool {
-        guard !isSubmitting else { return false }
+        guard !isSubmitting, let environment, let linkedCapture else { return false }
         isSubmitting = true
         defer { isSubmitting = false }
         do {
@@ -257,9 +270,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
                 case .newTask:
                     guard hasBody else { errorMessage = "업무명을 입력하세요."; return false }
                     let (names, tagNames) = try resolveProjectAndTagNames()
-                    let lines = text.components(separatedBy: "\n")
+                    let (title, body) = Self.splitTaskText(text)
                     let reference = try linkedCapture.create(
-                        .task(title: lines[0], body: lines.dropFirst().joined(separator: "\n"),
+                        .task(title: title, body: body,
                               initialStatus: initialStatus, workDate: workDate, effectiveTime: nil,
                               dueOn: nil, projectNames: names, trackingMode: projectTrackingMode,
                               tagNames: tagNames, checklist: [], links: []),
@@ -302,6 +315,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     /// 기존 업무에 진행 기록을 추가하고 관련 링크를 함께 저장한다.
     private func submitActivityToExisting(taskId: String) throws -> Bool {
+        guard let environment, let linkedCapture else { return false }
         guard hasBody else { errorMessage = "진행 기록 내용을 입력하세요."; return false }
         let linkedIds = try environment.repo.taskProjects(taskId: taskId).map(\.projectId)
         guard selectedProjectIds.allSatisfy({ linkedIds.contains($0) }) else {
@@ -318,6 +332,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     /// 상태만 변경한다. 본문은 사용·삭제하지 않고 보존한다. 완료 계열은 확인 절차를 거친다.
     private func submitStatusChange(taskId: String) throws -> Bool {
+        guard let environment else { return false }
         guard let target = statusTarget else {
             errorMessage = "변경할 상태를 선택하세요."; return false
         }
@@ -347,6 +362,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
         statusTarget = nil
         pendingCompletion = nil
         pendingCompletionTaskId = nil
+        relatedRecords = []
         errorMessage = nil
         reloadCandidates()
         return true
@@ -354,8 +370,26 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     private var hasBody: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    /// 새 업무 초안을 업무명과 본문으로 나눈다.
+    ///
+    /// 기존 규칙은 첫 줄을 업무명, 나머지를 본문으로 한다. 첫 줄이 공백뿐이면
+    /// 첫 번째 비어 있지 않은 줄을 업무명으로 쓰고, 그 이후 줄만 본문으로 남긴다.
+    static func splitTaskText(_ text: String) -> (title: String, body: String) {
+        let lines = text.components(separatedBy: "\n")
+        if let first = lines.first, !first.trimmingCharacters(in: .whitespaces).isEmpty {
+            return (first, lines.dropFirst().joined(separator: "\n"))
+        }
+        guard let index = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else {
+            return (text, "")
+        }
+        return (lines[index], lines.dropFirst(index + 1).joined(separator: "\n"))
+    }
+
     /// 이름이 바뀌어도 두 번째 프로젝트가 생기지 않도록 안정 ID에서 현재 이름을 확인한다.
     private func resolveProjectAndTagNames() throws -> (projects: [String], tags: [String]) {
+        guard let environment else {
+            throw WorkLogError.validation("저장소 연결이 닫혔습니다.")
+        }
         let names = try selectedProjectIds.map { id -> String in
             guard let project = try environment.repo.project(id: id) else {
                 throw WorkLogError.validation("선택한 프로젝트를 찾을 수 없습니다.")
