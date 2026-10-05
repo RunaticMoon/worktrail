@@ -7,11 +7,15 @@ import WorkLogCore
     private let panel: SearchKeyboardPanel
     private var model: SearchModel?
     private var environment: AppEnvironment?
+    private var secrets: SecretsModel?
+    private var onOpenSecrets: (() -> Void)?
     private var previousApp: NSRunningApplication?
 
-    init(model: SearchModel, environment: AppEnvironment) {
+    init(model: SearchModel, environment: AppEnvironment, secrets: SecretsModel, onOpenSecrets: @escaping () -> Void) {
         self.model = model
         self.environment = environment
+        self.secrets = secrets
+        self.onOpenSecrets = onOpenSecrets
         panel = SearchKeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 640),
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         super.init()
@@ -34,12 +38,17 @@ import WorkLogCore
         guard let model, let environment else { return }
         if !panel.isVisible {
             previousApp = NSWorkspace.shared.frontmostApplication
-            // Remount so the search field and persisted model filters hydrate together.
-            let hosting = NSHostingView(rootView: AnyView(SearchPanelContent(
-                model: model, environment: environment, onClose: { [weak self] in self?.dismiss() })))
-            // The controller owns window bounds; content must not override their constraints.
-            hosting.sizingOptions = []
-            panel.contentView = hosting
+            // Reuse hosting to preserve scope, title/key selection, filters and scroll.
+            if panel.contentView == nil {
+                let hosting = NSHostingView(rootView: AnyView(SearchPanelContent(
+                    model: model, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
+                        self?.dismiss(restorePreviousApp: false)
+                        self?.onOpenSecrets?()
+                    }, onClose: { [weak self] in self?.dismiss() })))
+                // The controller owns window bounds; content must not override their constraints.
+                hosting.sizingOptions = []
+                panel.contentView = hosting
+            }
             panel.contentMinSize = NSSize(width: 580, height: 480)
             FloatingPanelPositioning.place(panel)
         }
@@ -71,15 +80,15 @@ import WorkLogCore
         panel.delegate = nil
         model = nil
         environment = nil
+        secrets = nil
+        onOpenSecrets = nil
+        if let hosting = panel.contentView as? NSHostingView<AnyView> { hosting.rootView = AnyView(EmptyView()) }
+        panel.contentView = nil
         previousApp = nil
     }
 
     private func hidePanel() {
         panel.makeFirstResponder(nil)
-        if let hosting = panel.contentView as? NSHostingView<AnyView> {
-            hosting.rootView = AnyView(EmptyView())
-        }
-        panel.contentView = nil
         panel.initialFirstResponder = nil
         panel.orderOut(nil)
     }
@@ -90,6 +99,8 @@ import WorkLogCore
 @MainActor private struct SearchPanelContent: View {
     let model: SearchModel
     let environment: AppEnvironment
+    let secrets: SecretsModel?
+    let onOpenSecrets: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -97,31 +108,31 @@ import WorkLogCore
             HStack(spacing: 10) {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.callout).fontWeight(.semibold)
                         .foregroundStyle(WorkLogTheme.accent)
                         .frame(width: 28, height: 28)
                         .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
-                    Text("WorkLog").font(.system(size: 13, weight: .semibold))
-                    Text("/ 검색").font(.system(size: 12)).foregroundStyle(WorkLogTheme.muted)
+                    Text("WorkLog").font(.headline)
+                    Text("/ 검색").font(.callout).foregroundStyle(WorkLogTheme.muted)
                     Spacer()
                     Keycap("esc")
                 }
                 .overlay(SearchWindowDragArea())
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.callout).fontWeight(.semibold)
                         .frame(width: 26, height: 26)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(WorkLogButtonStyle())
                 .accessibilityLabel("검색 패널 닫기")
-                .help("닫고 이전 앱으로 돌아가기 (Esc)")
+                .worklogHelp("닫고 이전 앱으로 돌아가기", keys: "Esc")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(WorkLogTheme.surface)
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
-            SearchScreen(model: model, environment: environment)
+            SearchScreen(model: model, environment: environment, secrets: secrets, onOpenSecrets: onOpenSecrets)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .foregroundStyle(WorkLogTheme.text)
@@ -194,7 +205,7 @@ import WorkLogCore
 
     private func focusSearchField(in root: Any?, depth: Int = 0) -> Bool {
         guard depth < 40, let element = root as? NSAccessibilityProtocol else { return false }
-        if element.accessibilityLabel() == "원문 검색 또는 AI 질문" {
+        if element.accessibilityLabel() == "원문 검색 또는 AI 질문" || element.accessibilityLabel() == "Secret 제목 검색" {
             element.setAccessibilityFocused(true)
             return true
         }
@@ -202,6 +213,45 @@ import WorkLogCore
             if focusSearchField(in: child, depth: depth + 1) { return true }
         }
         return false
+    }
+}
+
+/// A window-scoped monitor handles navigation before NSTextView consumes arrows.
+/// It leaves marked text and standard editing chords to the input method/AppKit.
+@MainActor struct SearchKeyboardBridge: NSViewRepresentable {
+    let handle: (NSEvent, Bool) -> Bool
+
+    func makeNSView(context: Context) -> KeyView {
+        let view = KeyView(); view.handle = handle; return view
+    }
+    func updateNSView(_ view: KeyView, context: Context) { view.handle = handle }
+    static func dismantleNSView(_ view: KeyView, coordinator: ()) { view.stopMonitoring() }
+
+    final class KeyView: NSView {
+        var handle: ((NSEvent, Bool) -> Bool)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                var handled = false
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window, window.isVisible,
+                          window.isKeyWindow, event.window === window, window.attachedSheet == nil else { return }
+                    let responder = window.firstResponder
+                    guard (responder as? NSTextInputClient)?.hasMarkedText() != true else { return }
+                    let editing = responder is NSTextView || responder is NSTextField
+                    handled = self.handle?(event, editing) == true
+                }
+                return handled ? nil : event
+            }
+        }
+        func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
     }
 }
 #endif

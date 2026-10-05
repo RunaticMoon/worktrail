@@ -147,9 +147,13 @@ import WorkLogCore
         capturePanel?.show()
     }
     func showSearch() {
-        guard let search, let environment else { return }
+        guard let search, let environment, let secrets else { return }
         if searchPanel == nil {
-            searchPanel = SearchPanelController(model: search, environment: environment)
+            searchPanel = SearchPanelController(model: search, environment: environment, secrets: secrets,
+                onOpenSecrets: { [weak self] in
+                    self?.route = .secrets
+                    self?.openMainWindow?()
+                })
         }
         searchPanel?.show()
     }
