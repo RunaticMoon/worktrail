@@ -12,6 +12,8 @@ struct PromptEditorView: View {
     @State private var selectedPurpose: TemplatePurpose
     @State private var pendingAction: PendingAction?
     @FocusState private var errorFocused: Bool
+    @State private var retryAction: RetryAction = .load
+    private enum RetryAction { case load, save, restore }
 
     init(prompts: PromptSettingsModel, job: AIJobType) {
         self.prompts = prompts
@@ -22,18 +24,10 @@ struct PromptEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("프롬프트 편집").font(.title2).fontWeight(.semibold)
-                Text(PromptCatalog.title(for: selectedPurpose)).font(.headline)
-                HStack(spacing: 12) {
-                    if let version = prompts.activeVersionNumber {
-                        Text("활성 버전 \(version)")
-                        Text(prompts.isBuiltInActive ? "기본값 사용 중" : "사용자 수정")
-                            .font(.caption).padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(.quaternary, in: Capsule())
-                    } else {
-                        Text("활성 버전 없음").foregroundStyle(.secondary)
-                    }
-                    if prompts.hasChanges { Text("저장하지 않은 변경").font(.caption).foregroundStyle(.secondary) }
+                ScreenHeader(title: "양식·프롬프트 편집", purpose: PromptCatalog.title(for: selectedPurpose))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { versionSummary }
+                    VStack(alignment: .leading, spacing: 8) { versionSummary }
                 }
             }.padding(12)
             Divider()
@@ -41,10 +35,8 @@ struct PromptEditorView: View {
             Form {
                 if let error = prompts.errorMessage {
                     Section("프롬프트를 확인하세요") {
-                        InlineNotice(message: error).accessibilityLabel("프롬프트 오류: \(error)")
-                        if prompts.activeVersionNumber == nil {
-                            Button("다시 불러오기") { prompts.load(purpose: selectedPurpose) }
-                        }
+                        RecoveryNotice(failed: error, preserved: preservedMessage,
+                                       retryTitle: "다시 시도", retry: { retry() })
                     }.focusable().focused($errorFocused)
                 }
                 if let message = prompts.message {
@@ -106,11 +98,15 @@ struct PromptEditorView: View {
             HStack(spacing: 12) {
                 Button("기본값으로 복원") { pendingAction = .restore }
                     .disabled(prompts.activeVersionNumber == nil || (prompts.isBuiltInActive && !prompts.hasChanges))
+                    .worklogHelp("기본 프롬프트를 새 버전으로 저장 · 이전 버전 보존")
                 Button("변경 취소") { prompts.discardChanges() }.disabled(!prompts.hasChanges)
+                    .worklogHelp("저장하지 않은 프롬프트 변경 되돌리기")
                 Spacer(minLength: 8)
                 Button("닫기") { requestClose() }.keyboardShortcut(.cancelAction)
-                Button("저장") { prompts.save() }
-                    .keyboardShortcut(.defaultAction)
+                    .worklogHelp("양식·프롬프트 편집 닫기", keys: "Esc")
+                Button { retryAction = .save; prompts.save() } label: { ShortcutLabel(title: "저장", keys: "⌘S") }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .worklogHelp("프롬프트를 새 버전으로 저장 · 바로 적용", keys: "⌘S")
                     .disabled(prompts.activeVersionNumber == nil || !prompts.hasChanges)
             }.padding(12)
         }
@@ -124,7 +120,7 @@ struct PromptEditorView: View {
             get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })) {
                 switch pendingAction {
                 case .restore:
-                    Button("기본값으로 복원") { prompts.restoreBuiltInDefault() }
+                    Button("기본값으로 복원") { retryAction = .restore; prompts.restoreBuiltInDefault() }
                 case .close:
                     Button("변경 버리고 닫기", role: .destructive) {
                         prompts.discardChanges()
@@ -144,6 +140,24 @@ struct PromptEditorView: View {
             }
     }
 
+    @ViewBuilder private var versionSummary: some View {
+        if let version = prompts.activeVersionNumber {
+            Text("활성 버전 \(version)")
+            if prompts.isBuiltInActive {
+                StatusBadge(label: "기본값 사용 중", systemImage: "doc.text", tone: .neutral)
+            } else {
+                StatusBadge(label: "사용자 수정", systemImage: "pencil.circle", tone: .info)
+            }
+        } else {
+            Text("활성 버전 없음").foregroundStyle(.secondary)
+        }
+        if prompts.hasChanges { StatusBadge(label: "저장하지 않은 변경", systemImage: "pencil.circle", tone: .warning) }
+    }
+    private var preservedMessage: String {
+        if case .load = retryAction { return "저장한 이전 양식 버전은 그대로 보존됩니다." }
+        return "이전 양식 버전과 입력한 내용은 그대로 보존됩니다."
+    }
+
     private func readOnlyText(_ text: String) -> some View {
         Text(text.isEmpty ? "내용이 없습니다." : text)
             .font(.body).textSelection(.enabled)
@@ -159,7 +173,16 @@ struct PromptEditorView: View {
 
     private func load(_ purpose: TemplatePurpose) {
         selectedPurpose = purpose
+        retryAction = .load
         prompts.load(purpose: purpose)
+    }
+
+    private func retry() {
+        switch retryAction {
+        case .load: prompts.load(purpose: selectedPurpose)
+        case .save: prompts.save()
+        case .restore: prompts.restoreBuiltInDefault()
+        }
     }
 
     private func requestClose() {
