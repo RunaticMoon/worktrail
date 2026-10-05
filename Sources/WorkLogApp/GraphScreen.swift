@@ -42,7 +42,7 @@ struct GraphScreen: View {
             legend.padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .navigationTitle("그래프")
+        .navigationTitle("관계 그래프")
         .onAppear { if model.phase == .idle { model.reload() } }
         .onChange(of: model.rangePreset) { _, _ in reloadAndFit() }
         .onChange(of: model.visibleKinds) { _, _ in reloadAndFit() }
@@ -214,7 +214,7 @@ struct GraphScreen: View {
         } symbols: {
             ForEach(GraphNodeKind.allCases, id: \.self) { kind in
                 Image(systemName: GraphModel.symbol(for: kind))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(Self.nodeColor(kind))
                     .tag(kind)
             }
@@ -455,7 +455,7 @@ struct GraphScreen: View {
     private func familyLabel(_ family: String) -> String {
         switch family {
         case ReportFamily.submission.rawValue: return "제출용 주간보고"
-        case ReportFamily.performance.rawValue: return "성과 리포트"
+        case ReportFamily.performance.rawValue: return "성과자료"
         default: return family
         }
     }

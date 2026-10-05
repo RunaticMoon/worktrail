@@ -14,6 +14,40 @@ import Observation
     public init(environment: AppEnvironment) { self.environment = environment; load() }
     public var folder: URL? { environment?.options.paths.backupRoot }
     public func detach() { environment = nil }
+    /// 설정 화면의 "마지막 성공" 요약. 실패가 마지막이면 함께 알리고, 성공 기록이 없으면 안내한다.
+    public var lastSuccessLabel: String {
+        Self.successLabel(status: status, calendar: environment?.calendar ?? WorkCalendar())
+    }
+    static func successLabel(status: BackupStatus, calendar: WorkCalendar) -> String {
+        guard let last = status.lastSuccessAt else { return "아직 성공한 백업이 없습니다" }
+        let label = koreanDateTime(last, calendar: calendar)
+        if let failure = status.lastFailureAt, failure > last {
+            return "마지막 시도 실패 · 마지막 성공 \(label)"
+        }
+        return "마지막 성공 \(label)"
+    }
+    /// 백업 위치를 홈 디렉터리 기준 "~" 표기로 줄인 경로.
+    public var backupLocationLabel: String {
+        guard let folder else { return "" }
+        return Self.homeRelative(folder.path)
+    }
+    static func homeRelative(_ path: String,
+                             home: String = FileManager.default.homeDirectoryForCurrentUser.path) -> String {
+        guard !path.isEmpty else { return path }
+        let normalizedHome = home != "/" && home.hasSuffix("/") ? String(home.dropLast()) : home
+        guard !normalizedHome.isEmpty,
+              path == normalizedHome || path.hasPrefix(normalizedHome + "/") else { return path }
+        return "~" + path.dropFirst(normalizedHome.count)
+    }
+    private static let koreanWeekdays = ["일", "월", "화", "수", "목", "금", "토"]
+    /// "10월 5일(월) 09:12" 형식. KoreanDateLabel이 이 브랜치에 없어 동일 형식을 여기서 구성한다.
+    private static func koreanDateTime(_ date: Date, calendar: WorkCalendar) -> String {
+        let c = calendar.calendar.dateComponents([.month, .day, .weekday, .hour, .minute], from: date)
+        let name = koreanWeekdays[((c.weekday ?? 1) - 1 + 7) % 7]
+        let hour = String(format: "%02d", c.hour ?? 0)
+        let minute = String(format: "%02d", c.minute ?? 0)
+        return "\(c.month ?? 0)월 \(c.day ?? 0)일(\(name)) \(hour):\(minute)"
+    }
     public func load() {
         guard let environment else { return }
         do {

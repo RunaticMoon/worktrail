@@ -33,21 +33,39 @@ public struct SearchQuery: Sendable {
 }
 
 /// 검색 결과 한 건. snippet은 첫 일치 위치 주변 최대 120자다.
+/// projectNames는 이 원문에 연결된 프로젝트 이름(이름 오름차순, 중복 없음)이다.
 public struct SearchHit: Hashable, Sendable {
     public var sourceType: SearchSourceType
     public var sourceId: String
     public var taskId: String?
     public var workDate: WorkDate?
     public var snippet: String
+    public var projectNames: [String]
 
     public init(sourceType: SearchSourceType, sourceId: String, taskId: String?,
-                workDate: WorkDate?, snippet: String) {
+                workDate: WorkDate?, snippet: String, projectNames: [String] = []) {
         self.sourceType = sourceType
         self.sourceId = sourceId
         self.taskId = taskId
         self.workDate = workDate
         self.snippet = snippet
+        self.projectNames = projectNames
     }
+}
+
+/// 검색 결과 항목을 가리키는 안정 키. 결과가 갱신돼도 같은 항목인지 판단한다.
+public struct SearchHitKey: Hashable, Sendable {
+    public let sourceType: SearchSourceType
+    public let sourceId: String
+
+    public init(sourceType: SearchSourceType, sourceId: String) {
+        self.sourceType = sourceType
+        self.sourceId = sourceId
+    }
+}
+
+public extension SearchHit {
+    var key: SearchHitKey { SearchHitKey(sourceType: sourceType, sourceId: sourceId) }
 }
 
 /// 일반 기록(Memo·Task·Activity·Report 본문)의 로컬 원문 검색 인덱스.
@@ -334,15 +352,21 @@ public final class SearchIndex: @unchecked Sendable {
         params.append(limit)
 
         let rows = try db.query(sql, params)
-        return rows.compactMap { row -> SearchHit? in
+        var hits: [SearchHit] = []
+        hits.reserveCapacity(rows.count)
+        for row in rows {
             guard let typeRaw = row.string("source_type"),
                   let type = SearchSourceType(rawValue: typeRaw),
-                  let sourceId = row.string("source_id") else { return nil }
+                  let sourceId = row.string("source_id") else { continue }
             let text = row.string("text") ?? ""
-            return SearchHit(sourceType: type, sourceId: sourceId, taskId: row.string("task_id"),
-                             workDate: row.workDate("work_date"),
-                             snippet: snippet(from: text, terms: terms))
+            let taskId = row.string("task_id")
+            hits.append(SearchHit(sourceType: type, sourceId: sourceId, taskId: taskId,
+                                  workDate: row.workDate("work_date"),
+                                  snippet: snippet(from: text, terms: terms),
+                                  projectNames: (try? projectNames(sourceType: type, sourceId: sourceId,
+                                                                  taskId: taskId)) ?? []))
         }
+        return hits
     }
 
     // MARK: - 헬퍼
@@ -422,5 +446,33 @@ public final class SearchIndex: @unchecked Sendable {
             JOIN activity_project ap ON ap.project_id = p.id
             WHERE ap.activity_id = ? ORDER BY p.name ASC, p.id ASC
             """, activityId).compactMap { $0.string("name") }
+    }
+
+    /// 검색 결과의 projectNames. 유형별 연결 규칙:
+    /// memo → 연결 프로젝트, task → 제거되지 않은 연결 프로젝트,
+    /// activity → 진행 기록 자체 프로젝트가 있으면 그것, 없으면 소속 업무의 프로젝트, report → 항상 [].
+    private func projectNames(sourceType: SearchSourceType, sourceId: String,
+                              taskId: String?) throws -> [String] {
+        switch sourceType {
+        case .memo:
+            return sortedUnique(try memoProjectNames(sourceId))
+        case .task:
+            return sortedUnique(try taskProjectNames(sourceId))
+        case .activity:
+            let own = try activityProjectNames(sourceId)
+            if !own.isEmpty { return sortedUnique(own) }
+            guard let taskId else { return [] }
+            return sortedUnique(try taskProjectNames(taskId))
+        case .report:
+            return []
+        }
+    }
+
+    /// 이름 오름차순, 중복 제거.
+    private func sortedUnique(_ names: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for name in names where seen.insert(name).inserted { result.append(name) }
+        return result.sorted()
     }
 }

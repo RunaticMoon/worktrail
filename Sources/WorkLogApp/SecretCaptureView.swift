@@ -1,5 +1,6 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
 import WorkLogCore
 
 /// The quick-input Secret tab uses the same vault model as the main window.
@@ -12,6 +13,7 @@ import WorkLogCore
     @State private var phase: Phase = .waiting
     @State private var isActive = false
     @State private var confirmsDiscard = false
+    @State private var confirmsCancel = false
 
     init(model: SecretsModel, onSaved: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.model = model
@@ -22,14 +24,14 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label(model.isLocked ? "잠긴 보관함" : "보관함 열림",
-                      systemImage: model.isLocked ? "lock.fill" : "lock.open")
+                StatusBadge(label: model.isLocked ? "잠김" : "잠금 해제됨",
+                            systemImage: model.isLocked ? "lock.fill" : "lock.open", tone: .neutral)
                 Spacer()
                 if model.isUnlocking { ProgressView().controlSize(.small) }
                 if !model.isLocked {
-                    Button("지금 잠금") { model.lock() }
+                    Button("지금 잠금") { model.lock() }.worklogHelp("Secret 보관함 잠금")
                 }
-                Button("닫기") { leaveEditor(); onCancel() }
+                Button("닫기") { leaveEditor(); onCancel() }.worklogHelp("초안을 보존하고 닫기", keys: "Esc")
             }
             if let message = model.message { InlineNotice(message: message) }
             if model.isLocked {
@@ -40,7 +42,7 @@ import WorkLogCore
                             await model.unlock()
                             prepareEditor()
                         }
-                    }.disabled(model.isUnlocking)
+                    }.disabled(model.isUnlocking).worklogHelp("기기 인증으로 Secret 잠금 해제")
                 }
             } else if !model.canEdit(from: .capture) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -66,7 +68,8 @@ import WorkLogCore
                 }
             } else if phase == .editing {
                 ScrollView {
-                    SecretEditorView(model: model, host: .capture, keyboardMode: .panel, onSave: save)
+                    SecretEditorView(model: model, host: .capture, keyboardMode: .panel, onSave: save,
+                                     onCancel: requestCancel)
                         .padding(12)
                 }
             }
@@ -83,11 +86,11 @@ import WorkLogCore
             prepareEditor()
         }
         .onChange(of: model.isLocked) { _, locked in
-            if locked { phase = .waiting; confirmsDiscard = false }
+            if locked { phase = .waiting; confirmsDiscard = false; confirmsCancel = false }
             else { prepareEditor() }
         }
         .onChange(of: model.editorOwner) { _, owner in
-            if owner != .capture { phase = .waiting; confirmsDiscard = false }
+            if owner != .capture { phase = .waiting; confirmsDiscard = false; confirmsCancel = false }
         }
         .onDisappear { leaveEditor() }
         .alert("암호화 초안을 버릴까요?", isPresented: $confirmsDiscard) {
@@ -96,6 +99,10 @@ import WorkLogCore
         } message: {
             Text("저장하지 않은 제목·그룹·행을 복구할 수 없게 됩니다.")
         }
+        .alert("입력한 변경을 버릴까요?", isPresented: $confirmsCancel) {
+            Button("계속 편집", role: .cancel) {}
+            Button("변경 버리고 닫기", role: .destructive) { cancelEditing() }
+        } message: { Text("저장하지 않은 제목·그룹·행을 버립니다. 초안 보존은 ‘닫기’ 또는 Esc를 사용하세요.") }
     }
 
     private func prepareEditor() {
@@ -115,6 +122,7 @@ import WorkLogCore
         if model.hasRecoverableDraft { model.recoverDraft() }
         guard !model.hasRecoverableDraft else { return }
         model.showsValues = false
+        if !model.isEditing { model.beginEditing() }
         phase = .editing
     }
 
@@ -145,6 +153,21 @@ import WorkLogCore
         model.releaseEditor(.capture)
         phase = .waiting
         confirmsDiscard = false
+        confirmsCancel = false
+    }
+
+    private func requestCancel() {
+        guard isActive, !model.isLocked, model.canEdit(from: .capture),
+              (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return }
+        if model.hasUnsavedDraft { confirmsCancel = true } else { cancelEditing() }
+    }
+
+    private func cancelEditing() {
+        guard isActive, !model.isLocked, model.canEdit(from: .capture) else { return }
+        model.cancelEditing()
+        model.discardDraft()
+        leaveEditor()
+        onCancel()
     }
 }
 #endif

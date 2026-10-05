@@ -58,7 +58,8 @@ final class ReportsPlanPresentationTests: XCTestCase {
         XCTAssertEqual(try env.repo.reportVersion(id: id)?.content, "검토한 제출용 문장")
         XCTAssertEqual(try env.repo.reportVersions(reportId: XCTUnwrap(model.report?.id)).count, 1)
         await model.generate()
-        XCTAssertEqual(model.version?.version, 2)
+        XCTAssertEqual(model.version?.version, 1, "확정본 화면은 유지된다")
+        XCTAssertEqual(model.pendingRegeneration?.version, 2)
         XCTAssertEqual(try env.repo.reportVersion(id: id)?.state, .confirmed)
     }
     @MainActor func testUnstoredEditsSurviveReloadAndPreventRegeneration() async throws {
@@ -147,7 +148,8 @@ final class ReportsPlanPresentationTests: XCTestCase {
         await writer.generate(); writer.confirm()
         let historicalId = try XCTUnwrap(writer.version?.id)
         await writer.generate()
-        let latestId = try XCTUnwrap(writer.version?.id)
+        // 확정본 화면은 유지되므로 새 버전은 pending에 담긴다.
+        let latestId = try XCTUnwrap(writer.pendingRegeneration?.id)
         let nextMonday = env.calendar.adding(days: 7, to: monday)
         writer.reportDate = nextMonday; writer.loadSelection(); await writer.generate()
         let nextWeekId = try XCTUnwrap(writer.version?.id)
@@ -162,16 +164,21 @@ final class ReportsPlanPresentationTests: XCTestCase {
     }
     @MainActor func testVersionNavigationDoesNotDiscardUnsavedEditsOrLeaveARequestBehind() async throws {
         let env = try environment(); let model = ReportsModel(environment: env)
-        await model.generate(); model.confirm()
-        let historicalId = try XCTUnwrap(model.version?.id)
         await model.generate()
-        let latestId = try XCTUnwrap(model.version?.id)
+        model.content = "수정본 본문"; model.saveEdits()
+        let firstId = try XCTUnwrap(model.version?.id)
+        await model.generate()
+        // 수정본 화면은 유지되고 새 버전은 pending에 담긴다.
+        let pendingId = try XCTUnwrap(model.pendingRegeneration?.id)
+        model.selectVersion(pendingId)
+        XCTAssertEqual(model.version?.id, pendingId)
         model.content = "저장 전 본문"
-        model.requestVersionSelection(historicalId); model.loadSelection()
-        XCTAssertEqual(model.version?.id, latestId)
+        XCTAssertTrue(model.hasChanges)
+        model.requestVersionSelection(firstId); model.loadSelection()
+        XCTAssertEqual(model.version?.id, pendingId, "저장 전 편집 중에는 이동하지 않는다")
         XCTAssertEqual(model.content, "저장 전 본문")
         model.discardEdits(); model.loadSelection()
-        XCTAssertEqual(model.version?.id, latestId)
+        XCTAssertEqual(model.version?.id, pendingId)
     }
     @MainActor func testMissingRequestedVersionReportsAnErrorAndConsumesTheRequest() async throws {
         let env = try environment(); let model = ReportsModel(environment: env)
@@ -190,7 +197,8 @@ final class ReportsPlanPresentationTests: XCTestCase {
         let historicalId = try XCTUnwrap(writer.version?.id)
         await writer.generate()
         let reportId = try XCTUnwrap(writer.report?.id)
-        let latestId = try XCTUnwrap(writer.version?.id)
+        // 확정본 화면은 유지되므로 최신 버전은 pending에 담긴다.
+        let latestId = try XCTUnwrap(writer.pendingRegeneration?.id)
 
         let model = ReportsModel(environment: env)
         model.requestVersionSelection(historicalId)
@@ -352,7 +360,8 @@ final class ReportsPlanPresentationTests: XCTestCase {
         _ = try env.tasks.addActivity(taskId: task.id, body: "늦게 추가한 지난주 근거", workDate: prior)
         model.checkStale(); XCTAssertTrue(model.isStale)
         await model.generate()
-        XCTAssertNotEqual(model.version?.id, confirmed.id)
+        XCTAssertEqual(model.version?.id, confirmed.id, "확정본 화면은 유지된다")
+        XCTAssertNotEqual(model.pendingRegeneration?.id, confirmed.id)
         XCTAssertEqual(try env.repo.reportVersion(id: confirmed.id)?.content, confirmed.content)
         XCTAssertEqual(try env.repo.reportVersion(id: confirmed.id)?.state, .confirmed)
     }

@@ -168,24 +168,30 @@ final class QuickTaskCaptureTests: XCTestCase {
     func testExistingTaskActivityValidatesProjectAndLinks() async throws {
         let env = try environment()
         let platform = try env.repo.createProject(name: "플랫폼")
-        _ = try env.repo.createProject(name: "다른")
+        let unlinked = try env.repo.createProject(name: "다른")
         let task = try env.tasks.createTask(title: "대상 업무", projectNames: ["플랫폼"],
                                             trackingMode: .shared)
         let memo = try env.tasks.captureMemo(body: "근거 메모")
 
         let model = CaptureModel(environment: env)
         model.kind = .task
+        // 새 업무 모드에서 연결 밖 프로젝트를 고른 뒤 기존 업무+진행 기록으로 전환한다.
+        model.text = "@다른"
+        model.select(try XCTUnwrap(model.candidates.first))
+        XCTAssertEqual(model.selectedProjectIds, [unlinked.id])
+
         model.taskSelection = .existing(task.id)
         model.taskAction = .addActivity
+        model.text = "진행 상황"
 
-        // 연결되지 않은 프로젝트 → 프로젝트 검증 실패, 초안·선택 보존.
-        model.text = "진행 상황 @다른"
-        model.select(try XCTUnwrap(model.candidates.first))
+        // 연결되지 않은 프로젝트 → 저장 실패, 오류 안내, 초안·선택 보존.
         XCTAssertFalse(model.submit())
         XCTAssertNotNil(model.errorMessage)
+        XCTAssertTrue(model.errorMessage?.contains("다른") ?? false)
         XCTAssertTrue(try env.tasks.detail(taskId: task.id).activities.isEmpty)
         XCTAssertEqual(model.taskSelection, .existing(task.id))
         XCTAssertFalse(model.text.isEmpty)
+        XCTAssertEqual(model.selectedProjectIds, [unlinked.id], "연결 밖 선택을 조용히 바꾸지 않는다")
 
         // 연결된 프로젝트 → 성공 + 링크.
         model.removeProject(try XCTUnwrap(model.selectedProjectIds.first))
