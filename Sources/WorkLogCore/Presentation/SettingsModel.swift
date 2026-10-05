@@ -6,6 +6,32 @@ public enum SettingsHotkeyField: String, CaseIterable, Sendable {
     case capture, search
 }
 
+/// 설정 화면의 AI 연결 상태 요약. 오프라인/실패를 판별하는 Core 신호가 없어
+/// `unavailable(reason:)`은 호출자(검사 결과를 아는 UI)가 채운다.
+public enum AIConnectionSummary: Equatable, Sendable {
+    case notConfigured
+    case connected
+    case unavailable(reason: String)
+
+    public var title: String {
+        switch self {
+        case .notConfigured: return "AI에 연결되어 있지 않습니다"
+        case .connected: return "AI에 연결되어 있습니다"
+        case .unavailable: return "AI에 연결할 수 없습니다"
+        }
+    }
+    public var detail: String {
+        switch self {
+        case .notConfigured:
+            return "기록·검색·기록 기반 초안은 그대로 사용할 수 있습니다. 필요할 때 설정에서 연결하세요."
+        case .connected:
+            return "기록을 바탕으로 한 AI 답변과 초안을 사용할 수 있습니다."
+        case .unavailable(let reason):
+            return reason
+        }
+    }
+}
+
 @Observable @MainActor public final class SettingsModel {
     public var draft: AppSettings
     public private(set) var errors: [String] = []
@@ -21,6 +47,11 @@ public enum SettingsHotkeyField: String, CaseIterable, Sendable {
         set { draft.defaultCaptureKind = newValue }
     }
     public func detach() { environment = nil }
+    /// 설정 화면 상단의 AI 연결 상태. 런타임 AI 실행기가 없으면 미연결로 본다.
+    public var aiConnectionSummary: AIConnectionSummary {
+        guard let environment, environment.aiRunner != nil else { return .notConfigured }
+        return .connected
+    }
     public func reset() { if let environment { draft = environment.settings }; errors = []; message = nil }
     public func validate() -> Bool {
         // 단축키 검증·정규화 규칙은 HotkeyBinding 한 곳에서만 정의한다.

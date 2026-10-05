@@ -18,6 +18,12 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
     public private(set) var selectedRevisionId: String?
     public private(set) var duplicateRowIds: Set<String> = []
     public private(set) var hasRecoverableDraft = false
+    /// 조회(읽기) 모드와 편집 모드의 분리. 조회 상태에서는 행 복사만 가능하다.
+    public private(set) var isEditing = false
+    /// 조회 상태에서 Return/복사 대상이 되는 행. 이미 포커스된 행을 지우지 않는다.
+    public private(set) var focusedRowId: String?
+    /// 가림 문자만 있는 값이라 저장을 거부한 행들. 값을 고쳐 다음 저장이 성공하면 해제된다.
+    public private(set) var maskedRowIds: Set<String> = []
     /// The single screen that may currently mutate the shared editor draft.
     public private(set) var editorOwner: SecretEditorHost?
     public var title = "" { didSet { preserveDraft() } }
@@ -48,6 +54,8 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
         var preview: [DraftPreview]
     }
     private static let draftEnvelopeId = "worklog.secret.editor-draft.v1"
+    /// 실제 값 대신 붙여넣기되는 가림 문자. 이 문자들만으로 이루어진 값은 저장하지 않는다.
+    private static let maskedCharacters: Set<Character> = ["•", "●", "∙", "*"]
     @ObservationIgnored private var suppressDraft = false
     @ObservationIgnored private var recoveredDraft: SecretPayload?
     public var clipboardClearSeconds: Int { environment?.settings.clipboardClearSeconds ?? 120 }
@@ -86,7 +94,8 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
             if editorOwner != nil { editorOwner = nil }
             if selectedId != nil || !rows.isEmpty || !originalRows.isEmpty || !preview.isEmpty ||
                 !pasteText.isEmpty || !revisionRows.isEmpty || !revisions.isEmpty || recoveredDraft != nil ||
-                hasRecoverableDraft || showsValues || !title.isEmpty || !groupName.isEmpty || !trashItems.isEmpty {
+                hasRecoverableDraft || showsValues || !title.isEmpty || !groupName.isEmpty || !trashItems.isEmpty ||
+                isEditing || focusedRowId != nil || !maskedRowIds.isEmpty {
                 conceal()
             }
         }
@@ -99,6 +108,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
         recoveredDraft = nil; hasRecoverableDraft = false
         selectedId = nil; title = ""; groupName = ""; originalTitle = ""; originalGroup = ""; showsValues = false
         duplicateRowIds = []; trashItems = []
+        isEditing = false; focusedRowId = nil; maskedRowIds = []
         suppressDraft = false
     }
     private func requireUnlocked() -> AppEnvironment? {
@@ -143,6 +153,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
     public func beginNew() {
         guard requireUnlocked() != nil else { return }
         replaceEditor(id: nil, title: "", group: "", items: [])
+        isEditing = true
         message = nil
     }
     public func open(_ item: SecretMetadata) {
@@ -151,8 +162,26 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
             let items = try environment.vaultSession.currentRows(secretId: item.id)
             replaceEditor(id: item.id, title: item.title, group: item.groupName ?? "", items: items)
             revisions = try environment.vaultSession.revisions(secretId: item.id)
+            isEditing = false
             message = nil
         } catch { fail(error) }
+    }
+    /// 조회 상태에서 편집 상태로 전환한다. 잠겨 있으면 아무 것도 바꾸지 않는다.
+    public func beginEditing() {
+        guard requireUnlocked() != nil else { return }
+        isEditing = true
+        message = nil
+    }
+    /// 편집 중 변경을 버리고 마지막으로 열었거나 저장한 상태로 되돌린다.
+    public func cancelEditing() {
+        guard requireUnlocked() != nil else { return }
+        suppressDraft = true
+        rows = originalRows; title = originalTitle; groupName = originalGroup
+        preview = []; pasteText = ""
+        isEditing = false; focusedRowId = nil; maskedRowIds = []
+        suppressDraft = false
+        message = nil
+        preserveDraft()
     }
     private func replaceEditor(id: String?, title: String, group: String, items: [SecretRow]) {
         suppressDraft = true
@@ -160,6 +189,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
         originalRows = items; originalTitle = title; originalGroup = group
         rows = items; pasteText = ""; preview = []
         duplicateRowIds = []; revisions = []; revisionRows = []; selectedRevisionId = nil
+        focusedRowId = nil; maskedRowIds = []
         showsValues = false
         suppressDraft = false
     }
@@ -190,6 +220,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
             }
             self.recoveredDraft = nil; hasRecoverableDraft = false
             suppressDraft = false
+            isEditing = true
             message = "암호화 초안을 복구했습니다. 제목·그룹·행을 확인하고 저장하세요. 원래 항목이 변경되었으면 새 항목으로 보존합니다."
         } catch { suppressDraft = false; fail(error) }
     }
@@ -250,6 +281,17 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
         guard preview.isEmpty && pasteText.isEmpty else {
             message = "붙여넣기 미리보기를 확인하고 행에 추가한 뒤 저장하세요."; return false
         }
+        // 가림 문자만 있는 값은 실제 값으로 저장하지 않는다. 다른 행·입력은 그대로 보존한다.
+        let maskedIds = Set(rows.filter { row in
+            let value = SecretNormalizer.trim(row.value)
+            return value.count >= 3 && value.allSatisfy { Self.maskedCharacters.contains($0) }
+        }.map(\.id))
+        if !maskedIds.isEmpty {
+            maskedRowIds = maskedIds
+            message = "가림 문자(•)만 있는 값은 저장하지 않았습니다. 실제 값을 입력하세요."
+            return false
+        }
+        maskedRowIds = []
         // Use only local IDs for validation; never consume persisted IDs just to preview.
         let normalized = SecretNormalizer.apply(existing: [], changes: SecretChangeSet(upserts:
             rows.map { SecretRowInput(key: $0.key, value: $0.value) }), ids: SequentialIDGenerator(prefix: "preview"))
@@ -282,6 +324,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
                 replaceEditor(id: id, title: title, group: groupName, items: items)
                 revisions = try environment.vaultSession.revisions(secretId: id)
             }
+            isEditing = false
             message = "저장했습니다."
             return true
         } catch { fail(error); return false }
@@ -294,6 +337,22 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
             } else { environment.clipboard.copySecret(row.value); preserveDraft() }
             message = "복사했습니다. \(clipboardClearSeconds)초 후 같은 복사 항목이 남아 있을 때만 지웁니다."
         } catch { fail(error) }
+    }
+    /// 조회 상태 키보드 탐색. delta만큼 포커스만 옮기고 절대 복사하지 않는다.
+    public func moveFocus(by delta: Int) {
+        guard requireUnlocked() != nil else { return }
+        guard !rows.isEmpty else { focusedRowId = nil; return }
+        let current = focusedRowId.flatMap { id in rows.firstIndex { $0.id == id } }
+        let base: Int
+        if let current { base = current } else { base = delta >= 0 ? -1 : rows.count }
+        let next = min(max(base + delta, 0), rows.count - 1)
+        focusedRowId = rows[next].id
+    }
+    /// Return/클릭으로 포커스된 행을 복사한다. 편집 중에는 아무 것도 하지 않는다.
+    public func copyFocusedRow() {
+        guard !isEditing else { return }
+        guard let id = focusedRowId, let row = rows.first(where: { $0.id == id }) else { return }
+        copyRow(row)
     }
     public func selectRevision(_ revision: SecretRevisionInfo) {
         guard let environment = requireUnlocked(), let selectedId else { return }
@@ -317,6 +376,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
             try environment.vaultSession.moveToTrash(secretId: selectedId)
             try environment.vaultSession.clearDraft()
             replaceEditor(id: nil, title: "", group: "", items: [])
+            isEditing = false
             searchTitles(); loadTrash(); message = "항목과 버전을 휴지통으로 옮겼습니다."
         } catch { fail(error) }
     }
