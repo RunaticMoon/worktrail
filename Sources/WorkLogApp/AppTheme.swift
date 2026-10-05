@@ -15,6 +15,9 @@ enum WorkLogTheme {
     static let border = Color(nsColor: .separatorColor)
     static let text = Color(nsColor: .labelColor)
     static let muted = Color(nsColor: .secondaryLabelColor)
+    static let rowCornerRadius: CGFloat = 6
+    static let rowHeight: CGFloat = 32
+    static var rowHover: Color { text.opacity(0.05) }
 
     static func outlineColor(for contrast: ColorSchemeContrast) -> Color {
         contrast == .increased ? text : border
@@ -22,6 +25,39 @@ enum WorkLogTheme {
 
     static func outlineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
         contrast == .increased ? 2 : 1
+    }
+}
+
+/// Source-list and task rows share a quiet selection, independent of button chrome.
+struct WorkLogSourceRowStyle: ButtonStyle {
+    var isSelected: Bool
+    var isFocused: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorSchemeContrast) private var contrast
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(WorkLogTheme.text)
+            .background(background(pressed: configuration.isPressed),
+                        in: RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius))
+            .overlay {
+                if isFocused || (isSelected && contrast == .increased) {
+                    RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius)
+                        .strokeBorder(contrast == .increased ? WorkLogTheme.text : WorkLogTheme.accent,
+                                      lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
+            .opacity(isEnabled ? 1 : 0.5)
+            .contentShape(RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius))
+            .onHover { isHovering = $0 }
+    }
+
+    private func background(pressed: Bool) -> Color {
+        if pressed { return WorkLogTheme.accent.opacity(0.18) }
+        if isSelected { return WorkLogTheme.accentSoft }
+        return isHovering ? WorkLogTheme.rowHover : .clear
     }
 }
 
