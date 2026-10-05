@@ -132,7 +132,8 @@ import WorkLogCore
             .padding(.vertical, 8)
             .background(WorkLogTheme.surface)
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
-            SearchScreen(model: model, environment: environment, secrets: secrets, onOpenSecrets: onOpenSecrets)
+            SearchScreen(model: model, environment: environment, secrets: secrets,
+                onOpenSecrets: onOpenSecrets, isPanel: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .foregroundStyle(WorkLogTheme.text)

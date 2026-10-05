@@ -417,8 +417,7 @@ import Observation
     }
 
     private func workDate(draft: CaptureModel) -> some View {
-        // PastDateBadge adds its own prefix; Core's full label is used elsewhere.
-        let pastLabel = String(draft.workDateLabel.dropFirst("과거 날짜 · ".count))
+        let pastLabel = KoreanDateLabel.monthDayWeekday(draft.workDate, calendar: calendar)
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { dateContents(draft: draft, pastLabel: pastLabel) }
             VStack(alignment: .leading, spacing: 8) { dateContents(draft: draft, pastLabel: pastLabel) }
@@ -757,11 +756,6 @@ import Observation
                     .accessibilityLabel("현재 선택한 업무: \(selectedTaskTitle). 검색 결과 밖에 있습니다.")
             }
             taskRow(key: "new", title: newTaskLabel, status: nil)
-            if isNewTask {
-                Toggle("완료한 일로 등록", isOn: $model.registersAsCompleted)
-                    .font(.callout)
-                    .worklogHelp("새 업무를 처음부터 완료 상태로 등록")
-            }
             Rectangle().fill(WorkLogTheme.border.opacity(0.7)).frame(height: 0.5)
             ScrollViewReader { proxy in
                 ScrollView {

@@ -31,16 +31,19 @@ enum WorkLogEntryPoint {
                 ForEach(Array(SidebarRoute.primary.enumerated()), id: \.element.id) { index, route in
                     Button(route.title) { controller.route = route }
                         .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
-                        .disabled(NSApp.keyWindow is NSPanel)
+                        .disabled(controller.isPanelKeyWindow)
                 }
                 Divider()
                 Button(controller.sidebarExpanded ? "사이드바 접기" : "사이드바 펼치기") {
                     controller.sidebarExpanded.toggle()
                 }.keyboardShortcut("s", modifiers: [.control, .command])
+                    .disabled(controller.isPanelKeyWindow)
             }
             CommandGroup(after: .newItem) {
                 Button("빠른 입력") { controller.showCapture() }.keyboardShortcut("n", modifiers: .command)
+                    .disabled(controller.isPanelKeyWindow)
                 Button("검색") { controller.showSearch() }.keyboardShortcut("f", modifiers: .command)
+                    .disabled(controller.isPanelKeyWindow)
             }
         }
         MenuBarExtra("WorkLog", systemImage: "square.and.pencil") {

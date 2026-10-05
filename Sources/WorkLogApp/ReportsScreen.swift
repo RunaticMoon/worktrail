@@ -66,6 +66,7 @@ private struct ReportWorkspace: View {
     @State private var comparisonExpanded = false
     @State private var copyFailed = false
     @State private var retryAction: RetryAction = .load
+    @State private var isPreparingScreen = false
 
     private enum RetryAction { case load, generate, save, confirm, apply, propose, createEvaluation }
     private var isWeekly: Bool { family == .submission }
@@ -101,7 +102,7 @@ private struct ReportWorkspace: View {
             }
         }
         .navigationTitle(title)
-        .task(id: model.reportDate) { await prepareScreen() }
+        .task { await prepareScreen() }
         .onChange(of: model.hasChanges) { _, changed in
             if !changed && model.family != family && !model.isGenerating {
                 Task { await prepareScreen() }
@@ -144,8 +145,14 @@ private struct ReportWorkspace: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(model.previousPeriodLabel)
             Text(model.planPeriodLabel)
-            WorkDatePicker(title: "보고 주 선택", value: $model.reportDate, calendar: calendar)
-                .frame(maxWidth: 400).disabled(selectionLocked)
+            WorkDatePicker(title: "보고 주 선택", value: Binding(
+                get: { model.reportDate }, set: { date in
+                    let week = Periods(calendar: calendar).weekStart(containing: date)
+                    guard week != model.submissionPeriods.plan.start else { return }
+                    model.reportDate = week
+                    Task { await prepareScreen() }
+                }), calendar: calendar)
+                .frame(maxWidth: 400).disabled(selectionLocked || isPreparingScreen)
             Text("공통 업무는 한 번만 묶고, 사용자 확정 계획만 예정에 포함합니다.")
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
         }
@@ -414,12 +421,16 @@ private struct ReportWorkspace: View {
         return .empty
     }
     private func prepareScreen() async {
-        guard !model.isGenerating, !model.hasChanges else { return }
+        guard !isPreparingScreen, !model.isGenerating, !model.hasChanges else { return }
+        isPreparingScreen = true
+        defer { isPreparingScreen = false }
         model.family = family
         if isWeekly {
             syncPlan()
             retryAction = .load
             await model.ensureDraftForCurrentPeriod()
+            // An exact-version request can select another week while preparing the screen.
+            if let plan, plan.weekStart != model.reportDate { syncPlan() }
         } else { model.loadSelection() }
     }
     private func syncPlan() { plan?.selectWeek(model.reportDate); model.checkStale() }

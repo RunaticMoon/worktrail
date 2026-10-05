@@ -55,10 +55,11 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
 struct AppRootView: View {
     @Bindable var controller: AppController
     @Environment(\.openWindow) private var openWindow
+    @State private var detailDismissalRevision = 0
     private var selectedRoute: SidebarRoute { controller.route ?? .day }
 
     var body: some View {
-        GeometryReader { geometry in
+        GeometryReader { _ in
             Group {
                 if let error = controller.startupError {
                     RecoveryNotice(failed: error,
@@ -80,13 +81,15 @@ struct AppRootView: View {
                                         .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
                                 }.padding(12)
                             }
-                            destination(environment, windowWidth: geometry.size.width)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            GeometryReader { contentGeometry in
+                                destination(environment, contentWidth: contentGeometry.size.width)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            }
                         }
                     }
                     .worklogAnimation(.easeInOut(duration: 0.18), value: controller.sidebarExpanded)
                     .sheet(isPresented: Binding(get: { controller.selectedTaskId != nil },
-                        set: { if !$0 { controller.selectedTaskId = nil } }), onDismiss: { controller.refresh() }) {
+                        set: { if !$0 { controller.selectedTaskId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                         if let detail = controller.taskDetail {
                             TaskDetailScreen(model: detail, onClose: { controller.selectedTaskId = nil },
                                 taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) })
@@ -94,7 +97,7 @@ struct AppRootView: View {
                         }
                     }
                     .sheet(isPresented: Binding(get: { controller.selectedMemoId != nil },
-                        set: { if !$0 { controller.selectedMemoId = nil } }), onDismiss: { controller.refresh() }) {
+                        set: { if !$0 { controller.selectedMemoId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                         if let memo = controller.memoDetail {
                             MemoDetailScreen(model: memo, onClose: { controller.selectedMemoId = nil })
                         }
@@ -118,6 +121,12 @@ struct AppRootView: View {
 
     private var taskNames: [String: String] {
         Dictionary(uniqueKeysWithValues: (controller.taskList?.rows ?? []).map { ($0.id, $0.title) })
+    }
+
+    private func refreshAfterDetailDismissal() {
+        controller.refresh()
+        // DayViewModel.load() is synchronous; restore only after refreshed rows are available.
+        detailDismissalRevision += 1
     }
 
     private var sidebar: some View {
@@ -187,7 +196,7 @@ struct AppRootView: View {
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
-    @ViewBuilder private func destination(_ environment: AppEnvironment, windowWidth: CGFloat) -> some View {
+    @ViewBuilder private func destination(_ environment: AppEnvironment, contentWidth: CGFloat) -> some View {
         switch selectedRoute {
         case .day:
             if let day = controller.day {
@@ -196,7 +205,7 @@ struct AppRootView: View {
                         let asOf: WorkDate? = day.box?.isPast == true ? day.selectedDate : nil
                         controller.openTask(id, asOf: asOf)
                     }, projectNames: Dictionary(uniqueKeysWithValues: (controller.projects?.projects ?? []).map { ($0.id, $0.name) }),
-                    windowWidth: windowWidth)
+                    contentWidth: contentWidth, detailDismissalRevision: detailDismissalRevision)
             }
         case .tasks:
             if let tasks = controller.taskList {
@@ -220,7 +229,7 @@ struct AppRootView: View {
                     onManageTemplates: { controller.route = .settings })
             }
         case .performance:
-            if let reports = controller.reportModel {
+            if let reports = controller.performanceReports {
                 PerformanceReportScreen(model: reports, calendar: environment.calendar,
                     onManageTemplates: { controller.route = .settings })
             }
