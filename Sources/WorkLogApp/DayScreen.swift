@@ -2,343 +2,242 @@
 import SwiftUI
 import WorkLogCore
 
-struct DayScreen: View {
+@MainActor struct DayScreen: View {
     @Bindable var model: DayViewModel
     let calendar: WorkCalendar
     let onCapture: () -> Void
     let onMemo: (String) -> Void
     let onTask: (String) -> Void
+    var projectNames: [String: String] = [:]
+    /// Use the main-window width so the specified 980pt breakpoint is stable when the sidebar folds.
+    var windowWidth: CGFloat? = nil
+    @SceneStorage("worklog.day.region") private var selectedRegion = "timeline"
+    @State private var lastOpened: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
+            ScreenHeader(title: "오늘", purpose: "선택한 날짜의 기록과 업무 상태") {
+                Button(action: onCapture) { ShortcutLabel(title: "기록 추가", keys: "⌘N") }
+            }
             dateControls
             if let error = model.errorMessage {
-                HStack {
-                    InlineNotice(message: error)
-                    Button("다시 불러오기") { model.load() }
-                        .buttonStyle(WorkLogButtonStyle())
-                }
+                RecoveryNotice(failed: error, preserved: "기존 기록과 선택한 날짜는 그대로입니다.",
+                    retry: { model.load() })
             }
             if model.isLoading { ProgressView("기록 불러오는 중…") }
             if let box = model.box {
-                HStack(spacing: 7) {
-                    Image(systemName: box.isPast ? "clock.arrow.circlepath" : "calendar")
-                    Text(box.isPast
-                         ? "이 날짜 종료 시점의 상태입니다. 보충 기록은 빠른 입력에서 업무일을 지정하세요."
-                         : "선택한 업무일의 기록과 상태입니다.")
+                if box.isPast {
+                    AsOfDateBadge(dateLabel: KoreanDateLabel.monthDayWeekday(box.date, calendar: calendar))
+                    Text("이 화면의 업무 상태는 그날 종료 시점 기준입니다. 현재 상태는 업무 화면에서 관리합니다.")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .font(.caption)
-                .foregroundStyle(WorkLogTheme.muted)
-                GeometryReader { geometry in
-                    if geometry.size.width >= 850 {
-                        HStack(alignment: .top, spacing: 12) {
-                            timeline(box).frame(maxWidth: .infinity)
-                            taskColumn(box).frame(maxWidth: .infinity)
-                            memos(box).frame(maxWidth: .infinity)
-                        }
-                    } else {
-                        ScrollView {
+                if box.timeline.isEmpty && box.tasks.isEmpty && box.memos.isEmpty && model.aiSummary == nil {
+                    StateView(kind: .empty, title: "이 날짜의 기록이 없습니다", detail: "빠른 입력에서 선택한 날짜의 기록을 추가하세요.",
+                        actionTitle: "기록 추가 ⌘N", action: onCapture)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    GeometryReader { geometry in
+                        if (windowWidth ?? geometry.size.width) >= 980 {
+                            HStack(alignment: .top, spacing: 12) {
+                                timeline(box).frame(maxWidth: .infinity)
+                                taskColumn(box).frame(maxWidth: .infinity)
+                                memos(box).frame(maxWidth: .infinity)
+                            }
+                        } else {
                             VStack(spacing: 12) {
-                                timeline(box).frame(height: 350)
-                                taskColumn(box).frame(height: 350)
-                                memos(box).frame(height: 420)
+                                Picker("표시 영역", selection: $selectedRegion) {
+                                    Text("타임라인 \(box.timeline.count)").tag("timeline")
+                                    Text("업무 \(box.tasks.count)").tag("tasks")
+                                    Text("메모 \(box.memos.count)").tag("memos")
+                                }.pickerStyle(.segmented)
+                                switch selectedRegion {
+                                case "tasks": taskColumn(box)
+                                case "memos": memos(box)
+                                default: timeline(box)
+                                }
                             }
                         }
                     }
                 }
             } else if model.errorMessage == nil {
-                EmptyMessage(title: "하루 기록", detail: "날짜를 선택하면 기록을 불러옵니다.")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .worklogCard()
-            } else {
-                Spacer(minLength: 0)
+                StateView(kind: .empty, title: "날짜를 선택하세요", detail: "기록을 불러오면 타임라인·업무·메모를 보여드립니다.")
             }
+            Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(WorkLogTheme.contentInset)
         .background(WorkLogTheme.canvas)
-        .navigationTitle("하루")
         .onAppear { model.load() }
-        .onChange(of: model.selectedDate) { _, _ in model.load() }
+        .onChange(of: model.selectedDate) { _, _ in lastOpened = [:]; model.load() }
         .onChange(of: model.includeHeldAndCancelled) { _, _ in model.load() }
-    }
-
-    private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("하루의 흐름")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(WorkLogTheme.text)
-                Text("작은 기록이 모여, 선명한 하루가 됩니다.")
-                    .font(.caption)
-                    .foregroundStyle(WorkLogTheme.muted)
-            }
-            Spacer(minLength: 12)
-            Button(action: onCapture) {
-                Label("기록 남기기", systemImage: "plus")
-            }
-            .buttonStyle(WorkLogButtonStyle(prominent: true))
-        }
     }
 
     private var dateControls: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                dateNavigation
-                Spacer(minLength: 12)
-                Toggle("보류·취소 포함", isOn: $model.includeHeldAndCancelled)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .font(.caption)
-                    .fixedSize()
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                dateNavigation
-                Toggle("보류·취소 포함", isOn: $model.includeHeldAndCancelled)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .font(.caption)
-            }
+            HStack(spacing: 8) { dateNavigation; Spacer(minLength: 12); heldToggle }
+            VStack(alignment: .leading, spacing: 8) { dateNavigation; heldToggle }
         }
-        .tint(WorkLogTheme.accent)
-        .padding(.vertical, 2)
+    }
+
+    private var heldToggle: some View {
+        Toggle("보류·취소 포함", isOn: $model.includeHeldAndCancelled)
+            .toggleStyle(.switch).controlSize(.small).font(.callout)
     }
 
     private var dateNavigation: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 8) {
             Button("이전 날", systemImage: "chevron.left") { model.move(days: -1) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(WorkLogButtonStyle())
-                .help("이전 날")
+                .labelStyle(.iconOnly).accessibilityLabel("이전 날").worklogHelp("이전 날")
             WorkDatePicker(title: "업무일", value: $model.selectedDate, calendar: calendar, showsTitle: false)
-                .fixedSize()
             Button("다음 날", systemImage: "chevron.right") { model.move(days: 1) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(WorkLogButtonStyle())
-                .help("다음 날")
-            Button("오늘") { model.showToday() }
-                .buttonStyle(WorkLogButtonStyle())
+                .labelStyle(.iconOnly).accessibilityLabel("다음 날").worklogHelp("다음 날")
+            Button("오늘로") { model.showToday() }
         }
     }
 
-    private func panelHeader(_ title: String, subtitle: String, icon: String, count: Int) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: icon)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(WorkLogTheme.accent)
-                .frame(width: 20, height: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(WorkLogTheme.text)
-                Text(subtitle).font(.caption).foregroundStyle(WorkLogTheme.muted)
-            }
-            Spacer(minLength: 4)
-            Text(count.formatted())
-                .font(.system(.caption, design: .rounded, weight: .semibold))
-                .foregroundStyle(WorkLogTheme.muted)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(WorkLogTheme.elevated, in: Capsule())
-                .accessibilityLabel("\(count)개")
-        }
-        .padding(12)
+    private func panelHeader(_ title: String, icon: String, count: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).accessibilityHidden(true)
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            Text("\(count)개").font(.callout).foregroundStyle(WorkLogTheme.muted)
+        }.padding(12)
     }
 
     private func timeline(_ box: DayBox) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader("타임라인", subtitle: "기록이 쌓인 순서", icon: "clock", count: box.timeline.count)
-            Rectangle().fill(WorkLogTheme.border).frame(height: 0.5)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if box.timeline.isEmpty {
-                        EmptyMessage(title: "아직 조용한 하루", detail: "메모와 업무의 변화를 남기면 하루의 흐름이 이곳에 쌓입니다.")
-                    }
-                    ForEach(box.timeline) { entry in
-                        timelineRow(entry, isLast: entry.id == box.timeline.last?.id)
-                    }
+            panelHeader("타임라인", icon: "clock", count: box.timeline.count)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if box.timeline.isEmpty {
+                            StateView(kind: .empty, title: "타임라인 기록이 없습니다", detail: "메모와 업무의 변화를 기록하면 여기에 표시됩니다.",
+                                      actionTitle: "기록 추가 ⌘N", action: onCapture)
+                        }
+                        ForEach(box.timeline) { entry in
+                            timelineRow(entry).id(entry.id)
+                        }
+                    }.padding(12)
                 }
-                .padding(12)
+                .onAppear { if let id = lastOpened["timeline"] { proxy.scrollTo(id) } }
             }
-            .frame(maxHeight: .infinity)
-        }
-        .worklogCard(padding: 0)
+        }.worklogCard(padding: 0)
     }
 
-    private func timelineRow(_ entry: TimelineEntry, isLast: Bool) -> some View {
+    private func timelineRow(_ entry: TimelineEntry) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            VStack(spacing: 4) {
-                Image(systemName: timelineIcon(entry.kind))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(WorkLogTheme.accent)
-                    .frame(width: 22, height: 22)
-                    .background(WorkLogTheme.accentSoft, in: Circle())
-                if !isLast {
-                    Rectangle().fill(WorkLogTheme.border).frame(width: 1)
-                }
-            }
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(label(entry)).lineLimit(2)
+            Image(systemName: timelineIcon(entry.kind)).foregroundStyle(WorkLogTheme.muted).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(label(entry))
                     Spacer(minLength: 0)
                     if let time = entry.effectiveTime {
-                        Text(time, style: .time)
-                            .monospacedDigit()
-                            .environment(\.timeZone, calendar.timeZone)
+                        Text(time, style: .time).monospacedDigit().environment(\.timeZone, calendar.timeZone)
                     }
-                }
-                .font(.caption2)
-                .foregroundStyle(WorkLogTheme.muted)
+                }.font(.callout).foregroundStyle(WorkLogTheme.muted)
                 if let id = entry.taskId {
-                    Button { onTask(id) } label: {
-                        Text(entry.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(WorkLogTheme.text)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .buttonStyle(.plain)
+                    Button {
+                        lastOpened["timeline"] = entry.id
+                        onTask(id)
+                    } label: { Text(entry.title).font(.headline).multilineTextAlignment(.leading) }
                     .accessibilityHint("업무 상세 열기")
-                } else {
-                    Text(entry.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(WorkLogTheme.text)
-                }
+                } else if entry.kind == .memo, entry.id.hasPrefix("memo:") {
+                    Button {
+                        lastOpened["timeline"] = entry.id
+                        onMemo(String(entry.id.dropFirst(5)))
+                    } label: { Text(entry.title).font(.headline).multilineTextAlignment(.leading) }
+                    .accessibilityHint("메모 상세 열기")
+                } else { Text(entry.title).font(.headline) }
                 if let detail = entry.detail, detail != entry.title, !detail.isEmpty {
-                    Text(detail)
-                        .font(.callout)
-                        .foregroundStyle(WorkLogTheme.muted)
-                        .textSelection(.enabled)
+                    Text(detail).font(.body).foregroundStyle(WorkLogTheme.muted).textSelection(.enabled)
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 2)
-            .padding(.bottom, isLast ? 0 : 16)
-        }
-        .fixedSize(horizontal: false, vertical: true)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.fixedSize(horizontal: false, vertical: true)
     }
 
     private func taskColumn(_ box: DayBox) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader("업무", subtitle: "선택한 날짜의 상태", icon: "checkmark.circle", count: box.tasks.count)
-            Rectangle().fill(WorkLogTheme.border).frame(height: 0.5)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if box.tasks.isEmpty {
-                        EmptyMessage(title: "표시할 업무가 없어요", detail: "예정·진행 중인 업무와 이날 활동한 업무를 모아 보여드립니다.")
-                    }
-                    ForEach(box.tasks) { row in
-                        Button { onTask(row.taskId) } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text(row.title)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(WorkLogTheme.text)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    Image(systemName: "arrow.up.right")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(WorkLogTheme.muted)
-                                }
-                                HStack(spacing: 5) {
-                                    Image(systemName: statusIcon(row.status))
-                                    Text(row.status.koreanLabel)
-                                }
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(row.status == .inProgress ? WorkLogTheme.accent : WorkLogTheme.muted)
-                                .padding(.horizontal, 6).padding(.vertical, 3)
-                                .background(row.status == .inProgress ? WorkLogTheme.accentSoft : WorkLogTheme.surface, in: Capsule())
-                                if row.startedOnDay || row.completedOnDay || row.dueOn != nil {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        if row.startedOnDay { Label("이날 시작", systemImage: "play.circle") }
-                                        if row.completedOnDay { Label("이날 완료", systemImage: "checkmark.circle") }
-                                        if let due = row.dueOn { Label("마감 \(due.iso)", systemImage: "calendar") }
-                                    }
-                                    .font(.caption2)
-                                    .foregroundStyle(WorkLogTheme.muted)
-                                }
-                            }
-                            .multilineTextAlignment(.leading)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
-                            .contentShape(RoundedRectangle(cornerRadius: 8))
+            panelHeader("업무", icon: "checkmark.circle", count: box.tasks.count)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if box.tasks.isEmpty {
+                            StateView(kind: .empty, title: "표시할 업무가 없습니다", detail: "예정·진행 중인 업무와 이날 활동한 업무를 모아 보여드립니다.",
+                                      actionTitle: "기록 추가 ⌘N", action: onCapture)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("업무 상세 열기")
-                    }
+                        ForEach(box.tasks) { row in
+                            Button {
+                                lastOpened["tasks"] = row.id
+                                onTask(row.taskId)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(row.title).font(.headline).foregroundStyle(WorkLogTheme.text)
+                                    TaskStatusBadge(status: row.status)
+                                    if !row.projectIds.isEmpty {
+                                        Text(row.projectIds.map { projectNames[$0] ?? "프로젝트" }.joined(separator: " · "))
+                                            .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                    }
+                                    if row.startedOnDay { Label("이날 시작", systemImage: "play.circle").font(.callout) }
+                                    if row.completedOnDay { Label("이날 완료", systemImage: "checkmark.circle").font(.callout) }
+                                    if let due = row.dueOn {
+                                        Label("마감 \(KoreanDateLabel.monthDayWeekday(due, calendar: calendar))", systemImage: "calendar")
+                                            .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .multilineTextAlignment(.leading).padding(12)
+                                .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
+                            }.buttonStyle(WorkLogButtonStyle()).id(row.id).accessibilityHint("업무 상세 열기")
+                        }
+                    }.padding(12)
                 }
-                .padding(10)
+                .onAppear { if let id = lastOpened["tasks"] { proxy.scrollTo(id) } }
             }
-            .frame(maxHeight: .infinity)
-        }
-        .worklogCard(padding: 0)
+        }.worklogCard(padding: 0)
     }
 
     private func memos(_ box: DayBox) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader("메모 원문", subtitle: "가공하지 않은 생각과 기록", icon: "text.alignleft", count: box.memos.count)
-            Rectangle().fill(WorkLogTheme.border).frame(height: 0.5)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if box.memos.isEmpty {
-                        EmptyMessage(title: "생각을 가볍게 남겨보세요", detail: "확인한 내용, 떠오른 생각, 작은 진척까지. 짧은 문장이면 충분합니다.")
-                        Button(action: onCapture) { Label("첫 메모 남기기", systemImage: "plus") }
-                            .buttonStyle(WorkLogButtonStyle())
-                    }
-                    ForEach(box.memos) { memo in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(memo.body)
-                                .font(.system(size: 13))
-                                .lineSpacing(3)
-                                .foregroundStyle(WorkLogTheme.text)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Button { onMemo(memo.id) } label: {
-                                Label("업무 연결 검토", systemImage: "link")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(WorkLogButtonStyle())
+            panelHeader("메모 정리", icon: "text.alignleft", count: box.memos.count)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if box.memos.isEmpty {
+                            StateView(kind: .empty, title: "메모가 없습니다", detail: "확인한 내용이나 떠오른 생각을 남겨보세요.",
+                                      actionTitle: "기록 추가 ⌘N", action: onCapture)
                         }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    if let summary = model.aiSummary {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "sparkles").foregroundStyle(WorkLogTheme.accent)
-                                Text("하루 AI 정리").fontWeight(.semibold)
-                                Spacer(minLength: 2)
-                                Text(summary.state == .confirmed ? "확정" : "초안")
-                                    .font(.caption2)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(WorkLogTheme.accentSoft, in: Capsule())
+                        ForEach(box.memos) { memo in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(memo.body).font(.body).textSelection(.enabled)
+                                Button {
+                                    lastOpened["memos"] = memo.id
+                                    onMemo(memo.id)
+                                } label: { Label("메모 상세·업무 연결", systemImage: "link") }
                             }
-                            .font(.callout)
-                            HStack(spacing: 5) {
-                                Text(summary.createdAt, style: .date)
-                                Text(summary.createdAt, style: .time)
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(WorkLogTheme.muted)
-                            .environment(\.timeZone, calendar.timeZone)
-                            Text(summary.content)
-                                .font(.callout)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 8)).id(memo.id)
                         }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(WorkLogTheme.accentSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-                    } else {
-                        Label("생성된 AI 정리 없음", systemImage: "sparkles")
-                            .font(.caption2)
-                            .foregroundStyle(WorkLogTheme.muted)
-                            .padding(.vertical, 4)
-                    }
+                        if let summary = model.aiSummary {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("하루 AI 정리").font(.headline)
+                                StatusBadge(label: summary.state == .confirmed ? "확정" : "초안", systemImage: "doc.text", tone: .neutral)
+                                HStack {
+                                    Text(summary.createdAt, style: .date)
+                                    Text(summary.createdAt, style: .time)
+                                }.font(.callout).foregroundStyle(WorkLogTheme.muted).environment(\.timeZone, calendar.timeZone)
+                                Text(summary.content).textSelection(.enabled)
+                            }.frame(maxWidth: .infinity, alignment: .leading).worklogCard()
+                        } else {
+                            Label("생성된 AI 정리 없음", systemImage: "sparkles").font(.callout).foregroundStyle(WorkLogTheme.muted)
+                        }
+                    }.padding(12)
                 }
-                .padding(10)
+                .onAppear { if let id = lastOpened["memos"] { proxy.scrollTo(id) } }
             }
-            .frame(maxHeight: .infinity)
-        }
-        .worklogCard(padding: 0)
+        }.worklogCard(padding: 0)
     }
 
     private func timelineIcon(_ kind: TimelineEntryKind) -> String {
@@ -349,16 +248,6 @@ struct DayScreen: View {
         case .taskStatus: return "arrow.triangle.2.circlepath"
         case .projectStatus: return "folder"
         case .checklistStatus: return "checkmark"
-        }
-    }
-
-    private func statusIcon(_ status: TaskStatus) -> String {
-        switch status {
-        case .planned: return "circle.dashed"
-        case .inProgress: return "circle.lefthalf.filled"
-        case .onHold: return "pause.circle"
-        case .completed: return "checkmark.circle.fill"
-        case .cancelled: return "xmark.circle"
         }
     }
 
