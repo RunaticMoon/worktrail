@@ -305,14 +305,12 @@ import WorkLogCore
     }
 
     private var emptyResults: some View {
-        let reset: (() -> Void)? = model.activeFilterCount > 0 ? { resetFilters() } : nil
-        let kind: StateView.Kind = model.emptyMessage == nil ? .empty : .noResults
-        return StateView(kind: kind,
+        StateView(kind: model.emptyMessage == nil ? .empty : .noResults,
             title: model.emptyMessage ?? "찾을 기록을 입력하세요",
             detail: model.emptyMessage == nil ? "메모·업무·진행 기록·리포트를 검색합니다. ↑↓로 선택하고 Return으로 원문을 여세요."
                 : "철자를 확인하거나 필터를 넓혀보세요.",
             actionTitle: model.activeFilterCount > 0 ? "필터 초기화" : nil,
-            action: reset)
+            action: model.activeFilterCount > 0 ? resetFilters : nil)
     }
 
     private func resultRow(_ hit: SearchHit) -> some View {
