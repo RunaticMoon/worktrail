@@ -8,6 +8,7 @@ import WorkLogCore
     let environment: AppEnvironment
     var secrets: SecretsModel? = nil
     var onOpenSecrets: (() -> Void)? = nil
+    var isPanel: Bool = false
     @State private var scope: SearchScope = .records
     @State private var secretSelection = SearchSecretSelection()
     @FocusState private var focusedResult: SearchHitKey?
@@ -26,11 +27,11 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("검색 범위", selection: $scope) {
-                Text("기록 (⌘1)").tag(SearchScope.records)
-                Text("Secret (⌘2)").tag(SearchScope.secret)
+                Text(isPanel ? "기록 (⌘1)" : "기록").tag(SearchScope.records)
+                Text(isPanel ? "Secret (⌘2)" : "Secret").tag(SearchScope.secret)
             }
             .pickerStyle(.segmented)
-            .worklogHelp("검색 범위", keys: "⌘1 기록 · ⌘2 Secret")
+            .worklogHelp(isPanel ? "검색 범위 · ⌘1 기록 · ⌘2 Secret" : "검색 범위 · Tab으로 포커스한 뒤 화살표로 전환")
             if scope == .records {
                 recordSearch
             } else if let secrets {
@@ -122,8 +123,8 @@ import WorkLogCore
     // query; bare Space previews only a focused result. Both leave selection intact.
     private func handleKey(_ event: NSEvent, editingText: Bool) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if modifiers == .command, event.keyCode == 18 { scope = .records; return true }
-        if modifiers == .command, event.keyCode == 19 { scope = .secret; return true }
+        if isPanel, modifiers == .command, event.keyCode == 18 { scope = .records; return true }
+        if isPanel, modifiers == .command, event.keyCode == 19 { scope = .secret; return true }
         guard scope == .records, source == nil else { return false }
         let navigatingResults = focused || focusedResult != nil
         if navigatingResults, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {

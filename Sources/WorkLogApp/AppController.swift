@@ -30,6 +30,7 @@ import WorkLogCore
     private(set) var taskList: TaskListModel?
     private(set) var projects: ProjectsModel?
     var sidebarExpanded = true
+    private(set) var isPanelKeyWindow = false
     private(set) var startupError: String?
     private(set) var notice: String?
     private var didStart = false
@@ -261,6 +262,15 @@ import WorkLogCore
     }
 
     private func installLifecycleObservers() {
+        isPanelKeyWindow = NSApp.keyWindow is NSPanel
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
+            object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated { self?.isPanelKeyWindow = notification.object is NSPanel }
+            })
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.isPanelKeyWindow = false }
+            })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
             object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.environment?.lockSecrets(.appQuit) }

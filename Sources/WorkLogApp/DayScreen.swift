@@ -9,8 +9,9 @@ import WorkLogCore
     let onMemo: (String) -> Void
     let onTask: (String) -> Void
     var projectNames: [String: String] = [:]
-    /// Use the main-window width so the specified 980pt breakpoint is stable when the sidebar folds.
-    var windowWidth: CGFloat? = nil
+    /// Measure the destination area, excluding the sidebar, for the 980pt breakpoint.
+    var contentWidth: CGFloat? = nil
+    var detailDismissalRevision: Int = 0
     @SceneStorage("worklog.day.region") private var selectedRegion = "timeline"
     @State private var lastOpened: [String: String] = [:]
 
@@ -38,7 +39,7 @@ import WorkLogCore
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     GeometryReader { geometry in
-                        if (windowWidth ?? geometry.size.width) >= 980 {
+                        if (contentWidth ?? geometry.size.width) >= 980 {
                             HStack(alignment: .top, spacing: 12) {
                                 timeline(box).frame(maxWidth: .infinity)
                                 taskColumn(box).frame(maxWidth: .infinity)
@@ -121,6 +122,9 @@ import WorkLogCore
                     }.padding(12)
                 }
                 .onAppear { if let id = lastOpened["timeline"] { proxy.scrollTo(id) } }
+                .onChange(of: detailDismissalRevision) { _, _ in
+                    if let id = lastOpened["timeline"] { proxy.scrollTo(id) }
+                }
             }
         }.worklogCard(padding: 0)
     }
@@ -194,6 +198,9 @@ import WorkLogCore
                     }.padding(12)
                 }
                 .onAppear { if let id = lastOpened["tasks"] { proxy.scrollTo(id) } }
+                .onChange(of: detailDismissalRevision) { _, _ in
+                    if let id = lastOpened["tasks"] { proxy.scrollTo(id) }
+                }
             }
         }.worklogCard(padding: 0)
     }
@@ -236,6 +243,9 @@ import WorkLogCore
                     }.padding(12)
                 }
                 .onAppear { if let id = lastOpened["memos"] { proxy.scrollTo(id) } }
+                .onChange(of: detailDismissalRevision) { _, _ in
+                    if let id = lastOpened["memos"] { proxy.scrollTo(id) }
+                }
             }
         }.worklogCard(padding: 0)
     }
