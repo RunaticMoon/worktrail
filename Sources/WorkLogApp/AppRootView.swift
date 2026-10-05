@@ -220,7 +220,7 @@ struct AppRootView: View {
                     onManageTemplates: { controller.route = .settings })
             }
         case .performance:
-            if let reports = controller.reportModel {
+            if let reports = controller.performanceReports {
                 PerformanceReportScreen(model: reports, calendar: environment.calendar,
                     onManageTemplates: { controller.route = .settings })
             }

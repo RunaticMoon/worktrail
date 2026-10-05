@@ -14,7 +14,9 @@ import WorkLogCore
     private(set) var search: SearchModel?
     private(set) var taskDetail: TaskDetailModel?
     private(set) var memoDetail: MemoDetailModel?
+    /// Submission and performance screens retain independent selection and editing state.
     private(set) var reportModel: ReportsModel?
+    private(set) var performanceReports: ReportsModel?
     private(set) var plan: PlanModel?
     private(set) var quiz: QuizModel?
     private(set) var secrets: SecretsModel?
@@ -66,6 +68,9 @@ import WorkLogCore
             search = SearchModel(environment: env); taskDetail = TaskDetailModel(environment: env)
             memoDetail = MemoDetailModel(environment: env)
             reportModel = ReportsModel(environment: env)
+            reportModel?.family = .submission
+            performanceReports = ReportsModel(environment: env)
+            performanceReports?.family = .performance
             plan = PlanModel(environment: env)
             quiz = QuizModel(environment: env)
             secrets = SecretsModel(environment: env)
@@ -108,6 +113,8 @@ import WorkLogCore
         observers = []
     }
     func refresh() {
+        // Both report models reload through their screen's guarded loadSelection path.
+        // Do not reset pending drafts or version requests during a general refresh.
         day?.load()
         taskList?.load()
         projects?.load()
@@ -131,14 +138,22 @@ import WorkLogCore
                 if let activity = try environment?.repo.activity(id: node.id.id) { openTask(activity.taskId) }
             } catch { notice = "진행기록의 업무를 불러오지 못했습니다. 다시 시도하세요." }
         case .reportVersion:
-            guard let reports = reportModel else { return }
+            let destination: SidebarRoute
+            let destinationModel: ReportsModel?
+            if node.reportFamily == ReportFamily.performance.rawValue {
+                destination = .performance
+                destinationModel = performanceReports
+            } else {
+                destination = .weekly
+                destinationModel = reportModel
+            }
+            guard let reports = destinationModel else { return }
             guard !reports.isGenerating, !reports.hasChanges else {
                 notice = "리포트 작업을 마치거나 본문 변경을 저장한 뒤 다른 버전을 여세요."
                 return
             }
             reports.requestVersionSelection(node.id.id)
-            if node.reportFamily == ReportFamily.performance.rawValue { route = .performance }
-            else { route = .weekly }
+            route = destination
         case .project, .tag, .supplement, .historicalSource:
             break
         }
@@ -201,6 +216,7 @@ import WorkLogCore
         weak var previousTask = taskDetail
         weak var previousMemo = memoDetail
         weak var previousReports = reportModel
+        weak var previousPerformanceReports = performanceReports
         weak var previousPlan = plan
         weak var previousQuiz = quiz
         selectedTaskId = nil; selectedMemoId = nil
@@ -214,14 +230,14 @@ import WorkLogCore
         // Release them and check their weak lifetimes before replacing the stores.
         taskList = nil; projects = nil
         day = nil; search = nil; taskDetail = nil; memoDetail = nil
-        reportModel = nil; plan = nil; quiz = nil
+        reportModel = nil; performanceReports = nil; plan = nil; quiz = nil
         secrets = nil; settingsModel = nil; backups = nil; environment = nil
         startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
         for _ in 0..<30 {
-            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil { break }
+            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousPlan == nil && previousQuiz == nil { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil else {
+        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousPlan == nil && previousQuiz == nil else {
             startupError = "저장소 연결을 안전하게 닫지 못해 복원을 중단했습니다. 앱을 다시 열고 시도하세요."
             isRestoring = false
             return
