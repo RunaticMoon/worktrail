@@ -10,6 +10,7 @@ import WorkLogCore
     let kind: Kind
     let allowsCreation: Bool
     let onClose: () -> Void
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
     @State private var isPresented = false
     @State private var query = ""
     @State private var highlighted: String?
@@ -39,24 +40,35 @@ import WorkLogCore
     }
 
     var body: some View {
-        Button {
-            query = ""
-            highlighted = options.first(where: { !$0.isNew })?.id
-            isPresented = true
-        } label: {
+        Button(action: open) {
             Text(kind == .project ? "@ 프로젝트" : "# 태그").font(.callout)
         }
         .buttonStyle(.bordered)
-        .worklogHelp("\(title) 검색 및 선택")
+        .captureFocus(kind == .project ? "project" : "tag", order: kind == .project ? 510 : 520, action: open)
+        .worklogHelp("\(title) 검색 및 선택", keys: kind == .project ? "⌘⇧P" : "⌘⇧T")
+        .onAppear { navigation.tokenActions[kind == .project] = open }
+        .onDisappear { navigation.tokenActions[kind == .project] = nil }
         .accessibilityHint("검색 가능한 목록을 엽니다. 본문은 바뀌지 않습니다.")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) { pickerContent }
         .disabled(model.isSubmitting)
         .onChange(of: isPresented) { _, presented in
+            navigation.isPopoverPresented = presented
             if !presented { onClose() }
         }
+        .onChange(of: allowsCreation) { _, _ in navigation.tokenActions[kind == .project] = open }
         .onChange(of: isEnabled) { _, enabled in
-            if !enabled { isPresented = false }
+            if !enabled { isPresented = false; navigation.tokenActions[kind == .project] = nil }
+            else { navigation.tokenActions[kind == .project] = open }
         }
+    }
+
+    private func open() {
+        guard isEnabled, !model.isSubmitting,
+              (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return }
+        query = ""
+        highlighted = options.first(where: { !$0.isNew })?.id
+        navigation.isPopoverPresented = true
+        isPresented = true
     }
 
     private var pickerContent: some View {
@@ -104,6 +116,7 @@ import WorkLogCore
         .frame(width: 340)
         .foregroundStyle(WorkLogTheme.text)
         .tint(WorkLogTheme.accent)
+        .onExitCommand { if !hasMarkedText { isPresented = false } }
         .onChange(of: rowFocus) { _, id in
             if let id { highlighted = id }
         }
@@ -130,7 +143,7 @@ import WorkLogCore
                 Text(option.isNew ? "‘\(option.name)’ 새로 만들기" : option.name)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
-                if selected { Image(systemName: "chevron.right").accessibilityHidden(true) }
+                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
             }
             .font(.callout)
             .foregroundStyle(WorkLogTheme.text)
