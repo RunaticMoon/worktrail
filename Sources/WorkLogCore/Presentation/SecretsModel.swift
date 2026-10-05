@@ -55,7 +55,8 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
     }
     private static let draftEnvelopeId = "worklog.secret.editor-draft.v1"
     /// 실제 값 대신 붙여넣기되는 가림 문자. 이 문자들만으로 이루어진 값은 저장하지 않는다.
-    private static let maskedCharacters: Set<Character> = ["•", "●", "∙", "*"]
+    /// 일반 문자로도 쓰일 수 있는 `*`는 제외한다.
+    private static let maskedCharacters: Set<Character> = ["•", "●", "∙"]
     @ObservationIgnored private var suppressDraft = false
     @ObservationIgnored private var recoveredDraft: SecretPayload?
     public var clipboardClearSeconds: Int { environment?.settings.clipboardClearSeconds ?? 120 }
@@ -284,7 +285,7 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
         // 가림 문자만 있는 값은 실제 값으로 저장하지 않는다. 다른 행·입력은 그대로 보존한다.
         let maskedIds = Set(rows.filter { row in
             let value = SecretNormalizer.trim(row.value)
-            return value.count >= 3 && value.allSatisfy { Self.maskedCharacters.contains($0) }
+            return !value.isEmpty && value.allSatisfy { Self.maskedCharacters.contains($0) }
         }.map(\.id))
         if !maskedIds.isEmpty {
             maskedRowIds = maskedIds

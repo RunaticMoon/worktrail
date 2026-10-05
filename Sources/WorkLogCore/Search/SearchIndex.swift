@@ -363,8 +363,8 @@ public final class SearchIndex: @unchecked Sendable {
             hits.append(SearchHit(sourceType: type, sourceId: sourceId, taskId: taskId,
                                   workDate: row.workDate("work_date"),
                                   snippet: snippet(from: text, terms: terms),
-                                  projectNames: try projectNames(sourceType: type, sourceId: sourceId,
-                                                                 taskId: taskId)))
+                                  projectNames: (try? projectNames(sourceType: type, sourceId: sourceId,
+                                                                  taskId: taskId)) ?? []))
         }
         return hits
     }

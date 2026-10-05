@@ -436,6 +436,8 @@ public enum CaptureTaskAction: Equatable, Sendable {
             statusTarget = nil
             relatedRecords = []
             errorMessage = nil
+            // 완료 확인 성공도 다른 성공 경로와 같이 업무일을 오늘로 되돌린다(과거 날짜가 몰래 유지되지 않게).
+            resetWorkDateToToday()
             reloadCandidates()
             return true
         } catch {
