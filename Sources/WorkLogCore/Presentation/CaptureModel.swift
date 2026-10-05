@@ -30,7 +30,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
 /// Ordinary record draft only. No Secret, network or AI path.
 @Observable @MainActor public final class CaptureModel {
-    public var text = "" { didSet { selectionRange = nil } }
+    public var text = "" { didSet { selectionRange = nil; highlightOverride = nil; dismissedTokenKey = nil } }
     /// UTF-16 selection from the native editor; nil uses existing-name prefix matching.
     public var selectionRange: NSRange?
     public var kind: RecordCaptureKind = .memo
@@ -38,6 +38,17 @@ public enum CaptureTaskAction: Equatable, Sendable {
     public var targetTaskId: String?
     public var initialStatus: TaskStatus = .planned
     public var projectTrackingMode: ProjectTrackingMode = .shared
+
+    /// `initialStatus`를 완료로 등록할지 여부. 새 업무 저장 시 완료 상태로 만든다.
+    public var registersAsCompleted: Bool {
+        get { initialStatus == .completed }
+        set { initialStatus = newValue ? .completed : .planned }
+    }
+
+    /// 사용자가 ↑↓로 옮긴 강조. `text`가 바뀌면 초기화되어 기본 규칙(첫 기존 후보)으로 돌아간다.
+    private var highlightOverride: CaptureCandidate?
+    /// `dismissCandidates()`로 숨긴 토큰 식별자. 같은 토큰이면 후보를 숨기고, 토큰이 바뀌면 다시 보인다.
+    private var dismissedTokenKey: String?
 
     /// 업무 탭 검색어. 제목 부분 일치(대소문자 무시).
     public var taskQuery: String = ""
@@ -84,6 +95,8 @@ public enum CaptureTaskAction: Equatable, Sendable {
             kind = environment.settings.defaultCaptureKind == .task ? .task : .memo
         }
         workDate = environment.calendar.workDate(of: environment.options.clock.now())
+        highlightOverride = nil
+        dismissedTokenKey = nil
     }
 
     /// 저장소 참조를 놓는다. 백업 복원 등에서 DB를 붙잡지 않게 한다. 이후 호출은 무해하다.
@@ -127,8 +140,16 @@ public enum CaptureTaskAction: Equatable, Sendable {
         return (tokenKind, marker..<text.index(start, offsetBy: query.count), query)
     }
 
+    /// 현재 토큰(종류·마커 위치·query)을 식별하는 키. 후보 숨김 비교에 쓴다.
+    private var tokenKey: String? {
+        guard let token else { return nil }
+        let location = NSRange(token.range, in: text).location
+        return "\(token.kind)#\(location)#\(token.query)"
+    }
+
     public var candidates: [CaptureCandidate] {
         guard let token else { return [] }
+        if let dismissedTokenKey, dismissedTokenKey == tokenKey { return [] }
         let all: [CaptureCandidate]
         switch token.kind {
         case .project:
@@ -156,6 +177,45 @@ public enum CaptureTaskAction: Equatable, Sendable {
         return matches
     }
 
+    /// 후보를 숨긴다. 같은 토큰이면 `candidates`가 빈 배열을 반환하고, 토큰 문자열이 바뀌면 다시 보인다.
+    public func dismissCandidates() {
+        guard let key = tokenKey else { return }
+        dismissedTokenKey = key
+        highlightOverride = nil
+    }
+
+    public var isShowingCandidates: Bool { !candidates.isEmpty }
+
+    /// 기본 강조는 `candidates` 중 첫 번째 기존 항목(`isNew == false`). 새로 만들기 후보만 있으면 nil.
+    /// 사용자가 ↑↓로 옮긴 강조가 후보 목록에 남아 있으면 그것을 우선한다.
+    public var highlightedCandidate: CaptureCandidate? {
+        let list = candidates
+        if let override = highlightOverride, list.contains(override) { return override }
+        return list.first { !$0.isNew }
+    }
+
+    /// 후보 목록(새로 만들기 포함) 안에서 강조를 이동한다. 양 끝에서 멈춘다.
+    /// 강조가 nil이면 delta > 0은 첫 후보, delta < 0은 마지막 후보.
+    public func moveCandidateHighlight(by delta: Int) {
+        guard delta != 0 else { return }
+        let list = candidates
+        guard !list.isEmpty else { return }
+        if let current = highlightedCandidate, let index = list.firstIndex(of: current) {
+            let next = min(max(index + delta, 0), list.count - 1)
+            highlightOverride = list[next]
+        } else {
+            highlightOverride = delta > 0 ? list.first : list.last
+        }
+    }
+
+    /// 강조 후보가 있으면 선택하고 true. 없으면 false(호출자는 Return을 줄바꿈으로 넘긴다).
+    @discardableResult
+    public func acceptHighlightedCandidate() -> Bool {
+        guard let candidate = highlightedCandidate else { return false }
+        select(candidate)
+        return true
+    }
+
     /// Selection is stored by ID; replace only the query and preserve surrounding prose.
     public func select(_ candidate: CaptureCandidate) {
         guard candidates.contains(candidate), let token, let environment else { return }
@@ -180,6 +240,123 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     public func removeProject(_ id: String) { selectedProjectIds.removeAll { $0 == id } }
     public func removeTag(_ id: String) { selectedTagIds.removeAll { $0 == id } }
+
+    // MARK: - 버튼 경로(문법 없이 선택)
+    //
+    // `@`/`#` 문법을 몰라도 같은 후보를 고를 수 있게 한다. 본문 `text`는 건드리지 않는다.
+
+    /// 이미 선택된 것을 제외한 프로젝트 후보. 대소문자 무시 포함 검색, 빈 query면 전체, 최대 50.
+    /// 진행 기록(`kind == .activity`)이면 대상 업무에 연결된 프로젝트만 보여준다.
+    public func projectOptions(matching query: String) -> [Project] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var linkedIds: [String]?
+        if kind == .activity {
+            linkedIds = targetTaskId.flatMap { id in
+                environment.flatMap { try? $0.repo.taskProjects(taskId: id).map(\.projectId) }
+            } ?? []
+        }
+        return projects
+            .filter { !selectedProjectIds.contains($0.id) && (linkedIds?.contains($0.id) ?? true) }
+            .filter { trimmed.isEmpty || $0.name.lowercased().contains(trimmed) }
+            .prefix(50)
+            .map { $0 }
+    }
+
+    /// 이미 선택된 것을 제외한 태그 후보. 대소문자 무시 포함 검색, 빈 query면 전체, 최대 50.
+    /// 진행 기록(`kind == .activity`)에서는 태그를 쓰지 않으므로 빈 배열.
+    public func tagOptions(matching query: String) -> [Tag] {
+        guard kind != .activity else { return [] }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return tags
+            .filter { !selectedTagIds.contains($0.id) }
+            .filter { trimmed.isEmpty || $0.name.lowercased().contains(trimmed) }
+            .prefix(50)
+            .map { $0 }
+    }
+
+    /// 존재하는 프로젝트 id를 선택에 추가한다. 없는 id·중복은 무시한다.
+    public func addProject(id: String) {
+        guard projects.contains(where: { $0.id == id }), !selectedProjectIds.contains(id) else { return }
+        selectedProjectIds.append(id)
+    }
+
+    /// 존재하는 태그 id를 선택에 추가한다. 없는 id·중복은 무시한다.
+    public func addTag(id: String) {
+        guard tags.contains(where: { $0.id == id }), !selectedTagIds.contains(id) else { return }
+        selectedTagIds.append(id)
+    }
+
+    /// 이름으로 프로젝트를 찾거나 만들고 선택에 추가한다. trim 후 빈 값은 무시한다.
+    /// 진행 기록(`kind == .activity`)에서는 새 프로젝트를 만들지 않는다.
+    public func addNewProject(name: String) {
+        guard kind != .activity, let environment else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let project = try environment.repo.findOrCreateProject(name: trimmed)
+            if !selectedProjectIds.contains(project.id) { selectedProjectIds.append(project.id) }
+            errorMessage = nil
+            reloadCandidates()
+        } catch {
+            errorMessage = "프로젝트를 추가하지 못했습니다. 다시 시도하세요."
+        }
+    }
+
+    /// 이름으로 태그를 찾거나 만들고 선택에 추가한다. trim 후 빈 값은 무시한다.
+    /// 진행 기록(`kind == .activity`)에서는 새 태그를 만들지 않는다.
+    public func addNewTag(name: String) {
+        guard kind != .activity, let environment else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let tag = try environment.repo.findOrCreateTag(name: trimmed)
+            if !selectedTagIds.contains(tag.id) { selectedTagIds.append(tag.id) }
+            errorMessage = nil
+            reloadCandidates()
+        } catch {
+            errorMessage = "태그를 추가하지 못했습니다. 다시 시도하세요."
+        }
+    }
+
+    // MARK: - 업무일
+
+    /// 주입된 `environment.clock` 기준 오늘.
+    private var today: WorkDate? {
+        environment.map { $0.calendar.workDate(of: $0.options.clock.now()) }
+    }
+
+    public var isPastWorkDate: Bool {
+        guard let today else { return false }
+        return workDate < today
+    }
+
+    public var isFutureWorkDate: Bool {
+        guard let today else { return false }
+        return workDate > today
+    }
+
+    /// 업무일을 오늘로 되돌린다.
+    public func resetWorkDateToToday() {
+        guard let today else { return }
+        workDate = today
+    }
+
+    /// 업무일 표시. 오늘/과거/미래를 라벨로 구분하고 요일은 `WorkCalendar` 시간대 기준 한국어 한 글자.
+    public var workDateLabel: String {
+        guard let today, let environment else { return "" }
+        let weekday = Self.koreanWeekday(environment.calendar.isoWeekday(workDate))
+        let date = "\(workDate.month)월 \(workDate.day)일(\(weekday))"
+        if workDate == today { return "오늘 · \(date)" }
+        if workDate < today { return "과거 날짜 · \(date)" }
+        return "미래 날짜 · \(date)"
+    }
+
+    /// ISO 요일(월=1…일=7) → 한국어 한 글자.
+    static func koreanWeekday(_ isoWeekday: Int) -> String {
+        let names = ["월", "화", "수", "목", "금", "토", "일"]
+        guard (1...names.count).contains(isoWeekday) else { return "" }
+        return names[isoWeekday - 1]
+    }
 
     // MARK: - 업무 검색·선택
 
@@ -364,6 +541,8 @@ public enum CaptureTaskAction: Equatable, Sendable {
         pendingCompletionTaskId = nil
         relatedRecords = []
         errorMessage = nil
+        // 상태 변경도 일반 저장 성공과 같이 업무일을 오늘로 되돌린다(과거 날짜가 몰래 유지되지 않게).
+        workDate = environment.calendar.workDate(of: environment.options.clock.now())
         reloadCandidates()
         return true
     }
