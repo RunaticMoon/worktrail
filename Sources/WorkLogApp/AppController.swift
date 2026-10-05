@@ -82,7 +82,7 @@ import WorkLogCore
             if launch.backupError != nil { notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다." }
             refresh()
             installLifecycleObservers()
-            let keys = GlobalHotkeys(handlers: [
+            let keys = GlobalHotkeys(clock: env.options.clock, timeZone: env.calendar.timeZone, handlers: [
                 .capture: { [weak self] in self?.showCapture() },
                 .search: { [weak self] in self?.showSearch() },
             ])
@@ -167,8 +167,21 @@ import WorkLogCore
         }
         capturePanel?.show()
     }
+    var hotkeyDiagnostics: [HotkeyAction: HotkeyDiagnostic] { hotkeys?.diagnostics ?? [:] }
+
+    func hotkeyDisplay(_ action: HotkeyAction) -> String {
+        guard let settings = environment?.settings else { return "단축키 준비 중" }
+        let raw = action == .capture ? settings.captureHotkey : settings.searchHotkey
+        return (try? HotkeyBinding(parsing: raw).displayString) ?? raw
+    }
+
     func showSearch() {
-        guard let search, let environment, let secrets else { return }
+        guard let search, let environment else {
+            notice = "검색을 아직 준비하지 못했습니다. 메인 창에서 저장소 연결 상태를 확인하세요."
+            openMainWindow?()
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         if searchPanel == nil {
             searchPanel = SearchPanelController(model: search, environment: environment, secrets: secrets,
                 onOpenSecrets: { [weak self] in
