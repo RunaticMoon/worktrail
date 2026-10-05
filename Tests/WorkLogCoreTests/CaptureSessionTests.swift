@@ -5,7 +5,7 @@ import XCTest
 ///
 /// - 탭 순환·역순·select, 탭 전환이 설정을 바꾸지 않음.
 /// - 새 세션 기본 탭(설정 memo/task/secret 각각).
-/// - Esc로 닫고 다시 열면 탭·초안 유지, 저장 성공 후 새 세션 기본값 복귀.
+/// - Esc로 닫고 다시 열면 기본 탭으로 시작하되 유형별 초안은 유지, 저장 성공 후 새 세션 기본값 복귀.
 /// - 두 일반 초안 독립성, 고정 kind.
 /// - Secret 탭 `submitOrdinary`가 false이고 DB 변화가 없음.
 /// - 설정 기본값이 Secret이어도 메모 탭 저장 가능.
@@ -115,7 +115,7 @@ final class CaptureSessionTests: XCTestCase {
     // MARK: - Esc 재열기 보존 / 저장 후 초기화
 
     @MainActor
-    func testReopenAfterEscPreservesTabAndDrafts() async throws {
+    func testReopenAfterEscStartsAtDefaultTabAndPreservesDrafts() async throws {
         let env = try environment(defaultKind: .memo)
         let model = CaptureSessionModel(environment: env)
         model.beginSession()
@@ -127,9 +127,9 @@ final class CaptureSessionTests: XCTestCase {
         // Esc 닫기: 별도 정리 호출 없이 패널을 다시 연다.
         model.beginSession()
 
-        XCTAssertEqual(model.tab, .task, "Esc로 닫은 뒤 현재 탭 유지")
-        XCTAssertEqual(model.memoDraft.text, "메모 초안")
-        XCTAssertEqual(model.taskDraft.text, "업무 초안\n둘째 줄")
+        XCTAssertEqual(model.tab, .memo, "다시 열면 이전 탭이 아니라 기본 유형으로 시작")
+        XCTAssertEqual(model.memoDraft.text, "메모 초안", "메모 초안은 지워지지 않는다")
+        XCTAssertEqual(model.taskDraft.text, "업무 초안\n둘째 줄", "업무 초안은 지워지지 않는다")
     }
 
     @MainActor
