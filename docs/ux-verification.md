@@ -25,7 +25,7 @@
 | 37256853093 | `de7dde3` | success | 빠른 입력, 검색, Secret UI, Core 타입 검사·테스트, DMG |
 | 37258026218 | `9579e0d` | success | 주간보고·설정 UI 병합 |
 | 37258389054 | `fc419ab` | success | 전체 UI 통합 macOS 타입 검사, Core 테스트, DMG |
-| 37259663935 | `02fdf34` | 진행 중(지휘자 갱신 예정) | 검토 L·M 수정 반영 |
+| 37259663935 | `02fdf34` | success (지휘자 제공: macOS 빌드·타입검사·Core 테스트·DMG 통과) | 검토 L·M 수정 반영 |
 
 CI에서 하는 일은 macOS 빌드·타입 검사와 Core 테스트, DMG 생성이다. UI 자동 조작 테스트는 포함되지 않으므로, CI가 통과해도 §4의 항목은 검증된 것이 아니다.
 
@@ -46,8 +46,12 @@ CI에서 하는 일은 macOS 빌드·타입 검사와 Core 테스트, DMG 생성
 | ⑨ Secret trim·부분 수정·이전 버전·휴지통 복원, 가림 문자 거부 | **testSecretFlowTrimOnSavePartialEditRevisionTrashAndConcealedFeedback**(입력 중에는 trim하지 않고 저장할 때 앞뒤만 trim, 내부 공백·개행·대소문자 보존. 부분 수정 시 다른 행의 id·값 유지, v1→v2. `••••••` 거부 시 다른 행·저장본 유지. v1 복원은 v3로 저장. 휴지통 복원 후 행·버전 유지, 다시 열면 값 가림) · SecretNormalizerTests(trim·부분 수정·key1/key2·붙여넣기) · SecretVaultTests.testPartialUpdateFixtureScenario · testTrashAndRestore · testDuplicateKeyRejectedAndNothingSaved · SecretsSettingsBackupPresentationTests.testRevisionRestoreTrashRestoreAndPurge · ReviewFixesTests.testShortBulletMaskIsRejectedAndInputPreserved · testRejectionPreservesOtherRowsAndNotifiesOnlyMaskedRow · SecretSettingsUXTests.testMaskedOnlyValueIsNotSavedAndOtherRowsPreserved | 통과 | 인라인 경고 위치(중복 key, 가림 문자), 붙여넣기 미리보기 UI, 기기 인증 프롬프트 |
 | ⑩ 긴 한국어·오프라인 | **testOfflineAIKeepsLocalCaptureSearchAndEditedReport**(400줄 한국어 메모를 그대로 저장하고 검색됨. AI 네트워크 실패 시 결과·선택 유지, 문구 "AI 답변을 만들지 못했습니다. 잠시 후 다시 요청하세요." 자동 초안은 AI 호출 없이 생성) · **testAIUnconnectedStillAllowsFirstMemoSearchAndDraft**(AI 미연결 상태에서 첫 메모·검색·기록 기반 초안 동작) · SecretSettingsUXTests.testRecoveryMessages · testAIConnectionSummaryReflectsRuntimeRunner · SearchIndexTests.testSEARCH_T02_KoreanEnglishSymbolsAndAndQuery · testSEARCH_T03_ShortKoreanTermsUseLikePath · ReportServiceTests.testAIPayloadOmitsRunTimestampsAndFailureIsNotAutoRetriedWhenUnchanged | 통과(Core) | 좁은 창(840pt)·980pt 레이아웃 전환, 긴 한국어 줄바꿈과 잘림, 키보드 전용 조작, 오프라인 배너 표시 |
 
-Core에서 결함이나 실패한 재현은 발견하지 않았다. 아래는 결함은 아니지만 Mac에서 확인할 관찰 사항이다.
-- Secret 복사 피드백의 Core 문구(`SecretsModel.copyRow`)는 "복사했습니다. 120초 후 같은 복사 항목이 남아 있을 때만 지웁니다."다. `ux-flows.md §3.8`의 예시("‘key’ 값을 복사했습니다 · 120초 후 클립보드 비움")와 표현이 다르다. 값은 노출하지 않으므로 보안 문제는 아니며, 문구를 맞출지는 제품 판단에 맡긴다.
+Core에서 결함이나 실패한 재현은 발견하지 않았다.
+
+알려진 차이:
+- Secret 복사 피드백(`SecretsModel.copyRow`)의 문구 "복사했습니다. 120초 후 같은 복사 항목이 남아 있을 때만 지웁니다."는 `ux-flows.md §3.8`의 예시("‘key’ 값을 복사했습니다 · 120초 후 클립보드 비움")와 다르다. 값을 노출하지 않으므로 보안 문제는 아니며, 현재 문구가 클립보드를 비우는 조건을 더 정확히 설명한다.
+
+관찰 사항(결함 아님):
 - ⑦의 화면 보존 로직(`ReportsModel.runGeneration`의 `preservesDisplay`)은 초안을 만든 주체(AI/결정적)와 상관없이 동작한다. 테스트한 경로는 결정적 재생성과 AI 실패 후 대체 경로다. 유효한 AI JSON으로 성공한 재생성 경로는 화면 보존 관점에서 별도로 테스트하지 않았다.
 
 ## 3. 보안 확인
