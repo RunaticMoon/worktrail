@@ -104,6 +104,13 @@ public enum CaptureTaskAction: Equatable, Sendable {
         } ?? []
     }
 
+    /// 현재 진행 기록 맥락에서 대상 업무에 연결되지 않은 선택 프로젝트 id. 맥락이 아니면 빈 배열.
+    /// 저장 전에 저장을 막을 연결 밖 선택을 UI가 칩 경고로 표시할 수 있게 노출한다.
+    public var unlinkedSelectedProjectIds: [String] {
+        guard let linkedIds = activityLinkedProjectIds else { return [] }
+        return selectedProjectIds.filter { !linkedIds.contains($0) }
+    }
+
     public init(environment: AppEnvironment) {
         self.environment = environment
         linkedCapture = LinkedCaptureService(repo: environment.repo, tasks: environment.tasks)
@@ -515,11 +522,20 @@ public enum CaptureTaskAction: Equatable, Sendable {
         guard hasBody else { errorMessage = "진행 기록 내용을 입력하세요."; return false }
         let linkedIds = try environment.repo.taskProjects(taskId: taskId).map(\.projectId)
         // 진입 경로상 남아 있을 수 있는 연결 밖 선택(예: 새 업무 모드에서 고른 뒤 전환)은
-        // 저장 시 연결 프로젝트만 남긴다.
-        let projectIds = selectedProjectIds.filter { linkedIds.contains($0) }
+        // 조용히 바꾸지 않고 저장을 막아 사용자가 선택을 인지하고 고치게 한다. 초안·선택은 보존한다.
+        let unlinkedIds = selectedProjectIds.filter { !linkedIds.contains($0) }
+        if !unlinkedIds.isEmpty {
+            let names = unlinkedIds.map { id -> String in
+                (try? environment.repo.project(id: id))?.name ?? id
+            }
+            errorMessage = "이 업무에 연결되지 않은 프로젝트가 선택되어 있습니다: "
+                + "\(names.joined(separator: ", ")). "
+                + "칩을 제거하거나 업무 상세에서 프로젝트를 연결하세요."
+            return false
+        }
         let reference = try linkedCapture.create(
             .activity(taskId: taskId, body: text, workDate: workDate, effectiveTime: nil,
-                      projectIds: projectIds, checklistItemIds: [], kind: .progress, links: []),
+                      projectIds: selectedProjectIds, checklistItemIds: [], kind: .progress, links: []),
             related: relatedRecords.map(\.reference))
         lastSavedId = reference.id
         finishOrdinarySubmit()

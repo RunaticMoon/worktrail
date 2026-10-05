@@ -344,7 +344,7 @@ final class CaptureUXTests: XCTestCase {
     }
 
     @MainActor
-    func testExistingTaskActivityDropsUnlinkedSelectionOnSave() async throws {
+    func testExistingTaskActivityRejectsUnlinkedSelectionAndPreserves() async throws {
         let env = try environment()
         _ = try env.repo.createProject(name: "플랫폼")
         _ = try env.repo.createProject(name: "다른")
@@ -363,8 +363,17 @@ final class CaptureUXTests: XCTestCase {
         model.taskAction = .addActivity
         model.text = "진행 상황"
 
-        XCTAssertTrue(model.submit())
-        let detail = try env.tasks.detail(taskId: task.id)
-        XCTAssertEqual(detail.activities.first?.projectIds, [], "연결 밖 선택은 저장 시 빠진다")
+        XCTAssertEqual(model.unlinkedSelectedProjectIds, [other.id], "연결 밖 선택을 노출한다")
+        XCTAssertFalse(model.submit(), "연결 밖 프로젝트가 있으면 저장하지 않는다")
+        XCTAssertTrue(model.errorMessage?.contains("다른") ?? false, "오류에 연결 밖 프로젝트 이름")
+        XCTAssertTrue(model.errorMessage?.contains("연결") ?? false)
+        XCTAssertTrue(try env.tasks.detail(taskId: task.id).activities.isEmpty, "저장되지 않는다")
+        XCTAssertEqual(model.text, "진행 상황", "본문을 보존한다")
+        XCTAssertEqual(model.selectedProjectIds, [other.id], "프로젝트 선택을 보존한다")
+        XCTAssertEqual(model.taskSelection, .existing(task.id), "업무 선택을 보존한다")
+
+        // 진행 기록 맥락을 벗어나면(새 업무 모드) 경고 대상이 없다.
+        model.taskSelection = .newTask
+        XCTAssertTrue(model.unlinkedSelectedProjectIds.isEmpty, "맥락이 아니면 빈 배열")
     }
 }
