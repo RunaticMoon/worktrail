@@ -79,6 +79,38 @@ public enum CaptureTaskAction: Equatable, Sendable {
     /// 완료 확인 재시도 대상 업무 id. `pendingCompletion`과 함께만 유효하다.
     @ObservationIgnored private var pendingCompletionTaskId: String?
 
+    /// 진행 기록 입력 맥락인지. 진행 기록 탭이거나, 업무 탭에서 기존 업무에 진행 기록을 추가하는 상태.
+    /// 이 맥락에서는 프로젝트는 대상 업무 연결 프로젝트만, 태그·새 생성은 쓰지 않는다.
+    private var isActivityContext: Bool {
+        if kind == .activity { return true }
+        if case .existing = taskSelection, taskAction == .addActivity { return true }
+        return false
+    }
+
+    /// 진행 기록이 향하는 대상 업무 id. 진행 기록 탭이면 `targetTaskId`,
+    /// 업무 탭에서 기존 업무+진행 기록이면 그 업무 id, 그 외에는 nil.
+    public var activityTargetTaskId: String? {
+        if kind == .activity { return targetTaskId }
+        if case let .existing(id) = taskSelection, taskAction == .addActivity { return id }
+        return nil
+    }
+
+    /// 진행 기록 맥락에서 대상 업무에 연결된 프로젝트 id. 맥락이 아니면 nil(제한 없음).
+    /// 맥락인데 대상 업무가 없으면 빈 배열(모든 프로젝트 제외).
+    private var activityLinkedProjectIds: [String]? {
+        guard isActivityContext else { return nil }
+        return activityTargetTaskId.flatMap { id in
+            environment.flatMap { try? $0.repo.taskProjects(taskId: id).map(\.projectId) }
+        } ?? []
+    }
+
+    /// 현재 진행 기록 맥락에서 대상 업무에 연결되지 않은 선택 프로젝트 id. 맥락이 아니면 빈 배열.
+    /// 저장 전에 저장을 막을 연결 밖 선택을 UI가 칩 경고로 표시할 수 있게 노출한다.
+    public var unlinkedSelectedProjectIds: [String] {
+        guard let linkedIds = activityLinkedProjectIds else { return [] }
+        return selectedProjectIds.filter { !linkedIds.contains($0) }
+    }
+
     public init(environment: AppEnvironment) {
         self.environment = environment
         linkedCapture = LinkedCaptureService(repo: environment.repo, tasks: environment.tasks)
@@ -153,16 +185,11 @@ public enum CaptureTaskAction: Equatable, Sendable {
         let all: [CaptureCandidate]
         switch token.kind {
         case .project:
-            let linkedIds: [String]?
-            if kind == .activity {
-                linkedIds = targetTaskId.flatMap { id in
-                    environment.flatMap { try? $0.repo.taskProjects(taskId: id).map(\.projectId) }
-                } ?? []
-            } else { linkedIds = nil }
+            let linkedIds = activityLinkedProjectIds
             all = projects.filter { !selectedProjectIds.contains($0.id) && (linkedIds?.contains($0.id) ?? true) }
                 .map { CaptureCandidate(id: $0.id, name: $0.name, kind: .project) }
         case .tag:
-            guard kind != .activity else { return [] }
+            guard !isActivityContext else { return [] }
             all = tags.filter { !selectedTagIds.contains($0.id) }
                 .map { CaptureCandidate(id: $0.id, name: $0.name, kind: .tag) }
         }
@@ -171,7 +198,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
         let exists = token.kind == .project ? projects.contains { $0.name == name } : tags.contains { $0.name == name }
         let hasExistingPrefix = (token.kind == .project ? projects.map(\.name) : tags.map(\.name))
             .contains { $0.lowercased().hasPrefix(name.lowercased()) }
-        if !name.isEmpty && !exists && !hasExistingPrefix && kind != .activity {
+        if !name.isEmpty && !exists && !hasExistingPrefix && !isActivityContext {
             matches.append(CaptureCandidate(id: "new:\(token.kind):\(name)", name: name, kind: token.kind, isNew: true))
         }
         return matches
@@ -246,15 +273,10 @@ public enum CaptureTaskAction: Equatable, Sendable {
     // `@`/`#` 문법을 몰라도 같은 후보를 고를 수 있게 한다. 본문 `text`는 건드리지 않는다.
 
     /// 이미 선택된 것을 제외한 프로젝트 후보. 대소문자 무시 포함 검색, 빈 query면 전체, 최대 50.
-    /// 진행 기록(`kind == .activity`)이면 대상 업무에 연결된 프로젝트만 보여준다.
+    /// 진행 기록 맥락이면 대상 업무에 연결된 프로젝트만 보여준다.
     public func projectOptions(matching query: String) -> [Project] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        var linkedIds: [String]?
-        if kind == .activity {
-            linkedIds = targetTaskId.flatMap { id in
-                environment.flatMap { try? $0.repo.taskProjects(taskId: id).map(\.projectId) }
-            } ?? []
-        }
+        let linkedIds = activityLinkedProjectIds
         return projects
             .filter { !selectedProjectIds.contains($0.id) && (linkedIds?.contains($0.id) ?? true) }
             .filter { trimmed.isEmpty || $0.name.lowercased().contains(trimmed) }
@@ -263,9 +285,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
     }
 
     /// 이미 선택된 것을 제외한 태그 후보. 대소문자 무시 포함 검색, 빈 query면 전체, 최대 50.
-    /// 진행 기록(`kind == .activity`)에서는 태그를 쓰지 않으므로 빈 배열.
+    /// 진행 기록 맥락에서는 태그를 쓰지 않으므로 빈 배열.
     public func tagOptions(matching query: String) -> [Tag] {
-        guard kind != .activity else { return [] }
+        guard !isActivityContext else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return tags
             .filter { !selectedTagIds.contains($0.id) }
@@ -275,21 +297,25 @@ public enum CaptureTaskAction: Equatable, Sendable {
     }
 
     /// 존재하는 프로젝트 id를 선택에 추가한다. 없는 id·중복은 무시한다.
+    /// 진행 기록 맥락에서는 대상 업무에 연결되지 않은 프로젝트를 무시한다.
     public func addProject(id: String) {
         guard projects.contains(where: { $0.id == id }), !selectedProjectIds.contains(id) else { return }
+        if let linkedIds = activityLinkedProjectIds, !linkedIds.contains(id) { return }
         selectedProjectIds.append(id)
     }
 
     /// 존재하는 태그 id를 선택에 추가한다. 없는 id·중복은 무시한다.
+    /// 진행 기록 맥락에서는 태그를 쓰지 않으므로 무시한다.
     public func addTag(id: String) {
+        guard !isActivityContext else { return }
         guard tags.contains(where: { $0.id == id }), !selectedTagIds.contains(id) else { return }
         selectedTagIds.append(id)
     }
 
     /// 이름으로 프로젝트를 찾거나 만들고 선택에 추가한다. trim 후 빈 값은 무시한다.
-    /// 진행 기록(`kind == .activity`)에서는 새 프로젝트를 만들지 않는다.
+    /// 진행 기록 맥락에서는 새 프로젝트를 만들지 않는다.
     public func addNewProject(name: String) {
-        guard kind != .activity, let environment else { return }
+        guard !isActivityContext, let environment else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         do {
@@ -303,9 +329,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
     }
 
     /// 이름으로 태그를 찾거나 만들고 선택에 추가한다. trim 후 빈 값은 무시한다.
-    /// 진행 기록(`kind == .activity`)에서는 새 태그를 만들지 않는다.
+    /// 진행 기록 맥락에서는 새 태그를 만들지 않는다.
     public func addNewTag(name: String) {
-        guard kind != .activity, let environment else { return }
+        guard !isActivityContext, let environment else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         do {
@@ -495,8 +521,17 @@ public enum CaptureTaskAction: Equatable, Sendable {
         guard let environment, let linkedCapture else { return false }
         guard hasBody else { errorMessage = "진행 기록 내용을 입력하세요."; return false }
         let linkedIds = try environment.repo.taskProjects(taskId: taskId).map(\.projectId)
-        guard selectedProjectIds.allSatisfy({ linkedIds.contains($0) }) else {
-            errorMessage = "대상 업무에 연결된 프로젝트를 선택하세요."; return false
+        // 진입 경로상 남아 있을 수 있는 연결 밖 선택(예: 새 업무 모드에서 고른 뒤 전환)은
+        // 조용히 바꾸지 않고 저장을 막아 사용자가 선택을 인지하고 고치게 한다. 초안·선택은 보존한다.
+        let unlinkedIds = selectedProjectIds.filter { !linkedIds.contains($0) }
+        if !unlinkedIds.isEmpty {
+            let names = unlinkedIds.map { id -> String in
+                (try? environment.repo.project(id: id))?.name ?? id
+            }
+            errorMessage = "이 업무에 연결되지 않은 프로젝트가 선택되어 있습니다: "
+                + "\(names.joined(separator: ", ")). "
+                + "칩을 제거하거나 업무 상세에서 프로젝트를 연결하세요."
+            return false
         }
         let reference = try linkedCapture.create(
             .activity(taskId: taskId, body: text, workDate: workDate, effectiveTime: nil,

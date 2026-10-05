@@ -295,4 +295,85 @@ final class CaptureUXTests: XCTestCase {
         XCTAssertTrue(model.memoDraft.text.isEmpty)
         XCTAssertEqual(model.memoDraft.workDate, today, "저장 완료 후 새 세션은 오늘로 시작")
     }
+
+    // MARK: - (l) 업무 탭 기존 업무 + 진행 기록도 진행 기록 제한을 따른다
+
+    @MainActor
+    func testExistingTaskActivityRestrictsProjectsAndTags() async throws {
+        let env = try environment()
+        _ = try env.repo.createProject(name: "플랫폼")
+        let other = try env.repo.createProject(name: "다른")
+        let tag = try env.repo.findOrCreateTag(name: "검증")
+        let task = try env.tasks.createTask(title: "대상 업무", projectNames: ["플랫폼"],
+                                            trackingMode: .shared)
+
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        model.taskSelection = .existing(task.id)
+        model.taskAction = .addActivity
+
+        XCTAssertEqual(model.activityTargetTaskId, task.id, "대상 업무 id를 노출한다")
+        XCTAssertEqual(model.projectOptions(matching: "").map(\.name), ["플랫폼"], "연결 프로젝트만")
+        XCTAssertTrue(model.tagOptions(matching: "").isEmpty, "진행 기록에서는 태그를 쓰지 않는다")
+
+        model.addProject(id: other.id)
+        XCTAssertTrue(model.selectedProjectIds.isEmpty, "연결되지 않은 프로젝트는 무시")
+        model.addTag(id: tag.id)
+        XCTAssertTrue(model.selectedTagIds.isEmpty, "진행 기록에서는 태그를 무시")
+        model.addNewProject(name: "새 프로젝트")
+        XCTAssertTrue(model.selectedProjectIds.isEmpty, "진행 기록에서는 새 프로젝트를 만들지 않는다")
+        XCTAssertFalse(try env.repo.projects().contains { $0.name == "새 프로젝트" })
+        model.addNewTag(name: "새 태그")
+        XCTAssertTrue(model.selectedTagIds.isEmpty, "진행 기록에서는 새 태그를 만들지 않는다")
+        XCTAssertFalse(try env.repo.tags().contains { $0.name == "새 태그" })
+
+        model.text = "@"
+        XCTAssertEqual(model.candidates.filter { $0.kind == .project }.map(\.name), ["플랫폼"],
+                       "@ 후보도 연결 프로젝트만")
+        XCTAssertTrue(model.candidates.filter { $0.kind == .tag }.isEmpty)
+        model.text = "#"
+        XCTAssertTrue(model.candidates.isEmpty, "진행 기록에서는 태그 후보가 없다")
+
+        // 새 업무 모드로 돌아가면 다시 전체 프로젝트를 쓴다.
+        model.taskSelection = .newTask
+        model.text = "@"
+        XCTAssertEqual(Set(model.candidates.filter { $0.kind == .project }.map(\.name)),
+                       Set(["플랫폼", "다른"]), "새 업무 모드에서는 전체 프로젝트")
+
+        XCTAssertNil(CaptureModel(environment: env).activityTargetTaskId, "진행 기록 맥락이 아니면 nil")
+    }
+
+    @MainActor
+    func testExistingTaskActivityRejectsUnlinkedSelectionAndPreserves() async throws {
+        let env = try environment()
+        _ = try env.repo.createProject(name: "플랫폼")
+        _ = try env.repo.createProject(name: "다른")
+        let task = try env.tasks.createTask(title: "대상 업무", projectNames: ["플랫폼"],
+                                            trackingMode: .shared)
+        let other = try XCTUnwrap(try env.repo.projects().first { $0.name == "다른" })
+
+        let model = CaptureModel(environment: env)
+        model.kind = .task
+        // 새 업무 모드에서 연결 밖 프로젝트를 고른 뒤 기존 업무로 전환한 상황을 재현한다.
+        model.text = "@다른"
+        model.select(try XCTUnwrap(model.candidates.first))
+        XCTAssertEqual(model.selectedProjectIds, [other.id])
+
+        model.taskSelection = .existing(task.id)
+        model.taskAction = .addActivity
+        model.text = "진행 상황"
+
+        XCTAssertEqual(model.unlinkedSelectedProjectIds, [other.id], "연결 밖 선택을 노출한다")
+        XCTAssertFalse(model.submit(), "연결 밖 프로젝트가 있으면 저장하지 않는다")
+        XCTAssertTrue(model.errorMessage?.contains("다른") ?? false, "오류에 연결 밖 프로젝트 이름")
+        XCTAssertTrue(model.errorMessage?.contains("연결") ?? false)
+        XCTAssertTrue(try env.tasks.detail(taskId: task.id).activities.isEmpty, "저장되지 않는다")
+        XCTAssertEqual(model.text, "진행 상황", "본문을 보존한다")
+        XCTAssertEqual(model.selectedProjectIds, [other.id], "프로젝트 선택을 보존한다")
+        XCTAssertEqual(model.taskSelection, .existing(task.id), "업무 선택을 보존한다")
+
+        // 진행 기록 맥락을 벗어나면(새 업무 모드) 경고 대상이 없다.
+        model.taskSelection = .newTask
+        XCTAssertTrue(model.unlinkedSelectedProjectIds.isEmpty, "맥락이 아니면 빈 배열")
+    }
 }
