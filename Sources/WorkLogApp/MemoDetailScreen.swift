@@ -22,10 +22,16 @@ struct MemoDetailScreen: View {
                         .font(.callout).foregroundStyle(.secondary)
                     Button("AI 업무 연결 제안") { Task { await model.suggest() } }
                         .disabled(!model.isAIAvailable || model.isSuggesting)
-                    if !model.isAIAvailable { Text("AI 연결 제안 비활성화").foregroundStyle(.secondary) }
+                    if !model.isAIAvailable {
+                        StateView(kind: .aiUnavailable, title: "AI 업무 연결 제안은 연결 후 사용할 수 있습니다",
+                                  detail: "메모 원문과 기존 업무 연결은 계속 확인할 수 있습니다.")
+                    }
                     if model.isSuggesting { ProgressView("연결 후보 찾는 중…") }
                     if let message = model.message { InlineNotice(message: message) }
-                    if model.links.isEmpty { Text("연결 제안 없음").foregroundStyle(.secondary) }
+                    if model.links.isEmpty {
+                        StateView(kind: .empty, title: "연결 제안 없음",
+                                  detail: "메모 원문과 업무 상태는 유지됩니다. AI가 연결되어 있으면 제안을 요청할 수 있습니다.")
+                    }
                     ForEach(model.links) { link in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(model.tasks.first { $0.id == link.taskId }?.title ?? "찾을 수 없는 업무").font(.headline)

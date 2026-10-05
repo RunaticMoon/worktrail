@@ -14,7 +14,7 @@ import WorkLogCore
     private(set) var search: SearchModel?
     private(set) var taskDetail: TaskDetailModel?
     private(set) var memoDetail: MemoDetailModel?
-    private(set) var reports: ReportsModel?
+    private(set) var reportModel: ReportsModel?
     private(set) var plan: PlanModel?
     private(set) var quiz: QuizModel?
     private(set) var secrets: SecretsModel?
@@ -25,7 +25,9 @@ import WorkLogCore
     var route: SidebarRoute? = .day
     var selectedTaskId: String?
     var selectedMemoId: String?
-    private(set) var tasks: [WorkTask] = []
+    private(set) var taskList: TaskListModel?
+    private(set) var projects: ProjectsModel?
+    var sidebarExpanded = true
     private(set) var startupError: String?
     private(set) var notice: String?
     private var didStart = false
@@ -59,9 +61,11 @@ import WorkLogCore
             graph = GraphModel(environment: env)
             prompts = PromptSettingsModel(templates: env.templates)
             day = DayViewModel(environment: env)
+            taskList = TaskListModel(environment: env)
+            projects = ProjectsModel(environment: env)
             search = SearchModel(environment: env); taskDetail = TaskDetailModel(environment: env)
             memoDetail = MemoDetailModel(environment: env)
-            reports = ReportsModel(environment: env)
+            reportModel = ReportsModel(environment: env)
             plan = PlanModel(environment: env)
             quiz = QuizModel(environment: env)
             secrets = SecretsModel(environment: env)
@@ -105,8 +109,8 @@ import WorkLogCore
     }
     func refresh() {
         day?.load()
-        do { tasks = try environment?.repo.tasks() ?? [] }
-        catch { notice = "업무 목록을 불러오지 못했습니다. 다시 시도하세요." }
+        taskList?.load()
+        projects?.load()
         if let selectedTaskId { taskDetail?.load(taskId: selectedTaskId, asOf: taskDetail?.asOf) }
         search?.search()
         if let graph, graph.phase != .idle { graph.reload() }
@@ -127,13 +131,14 @@ import WorkLogCore
                 if let activity = try environment?.repo.activity(id: node.id.id) { openTask(activity.taskId) }
             } catch { notice = "진행기록의 업무를 불러오지 못했습니다. 다시 시도하세요." }
         case .reportVersion:
-            guard let reports else { return }
+            guard let reports = reportModel else { return }
             guard !reports.isGenerating, !reports.hasChanges else {
                 notice = "리포트 작업을 마치거나 본문 변경을 저장한 뒤 다른 버전을 여세요."
                 return
             }
             reports.requestVersionSelection(node.id.id)
-            route = .reports
+            if node.reportFamily == ReportFamily.performance.rawValue { route = .performance }
+            else { route = .weekly }
         case .project, .tag, .supplement, .historicalSource:
             break
         }
@@ -190,10 +195,12 @@ import WorkLogCore
         weak var previousGraph = graph
         weak var previousPrompts = prompts
         weak var previousDay = day
+        weak var previousTaskList = taskList
+        weak var previousProjects = projects
         weak var previousSearch = search
         weak var previousTask = taskDetail
         weak var previousMemo = memoDetail
-        weak var previousReports = reports
+        weak var previousReports = reportModel
         weak var previousPlan = plan
         weak var previousQuiz = quiz
         selectedTaskId = nil; selectedMemoId = nil
@@ -203,15 +210,18 @@ import WorkLogCore
         searchPanel?.teardown(); searchPanel = nil
         clearRegistrations()
         captureSession = nil; graph = nil; prompts = nil
+        // These read models own an immutable environment and expose no detach API.
+        // Release them and check their weak lifetimes before replacing the stores.
+        taskList = nil; projects = nil
         day = nil; search = nil; taskDetail = nil; memoDetail = nil
-        reports = nil; plan = nil; quiz = nil
+        reportModel = nil; plan = nil; quiz = nil
         secrets = nil; settingsModel = nil; backups = nil; environment = nil
         startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
         for _ in 0..<30 {
-            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil { break }
+            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil else {
+        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPlan == nil && previousQuiz == nil else {
             startupError = "저장소 연결을 안전하게 닫지 못해 복원을 중단했습니다. 앱을 다시 열고 시도하세요."
             isRestoring = false
             return
