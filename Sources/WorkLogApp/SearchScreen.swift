@@ -11,6 +11,10 @@ import WorkLogCore
     var isPanel: Bool = false
     @State private var scope: SearchScope = .all
     @State private var query = ""
+    @State private var recordQuery = ""
+    @State private var secretQuery = ""
+    @State private var secretTitles: [SecretMetadata] = []
+    @State private var secretSearchError: String?
     @State private var selectedResult: SearchResultSelection?
     @State private var openingId: String?
     @State private var isActive = false
@@ -52,16 +56,28 @@ import WorkLogCore
         .tint(WorkLogTheme.accent)
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
-        .onChange(of: scope) { _, _ in
+        .onChange(of: scope) { previous, current in
             cancelSecretOpening()
             secretSelection.openedId = nil
             secretSelection.selectedRowId = nil
+            // Secret-only input must never become an ordinary AI question on a scope change.
+            if previous == .secret {
+                secretQuery = query
+                query = recordQuery
+            } else if current == .secret {
+                recordQuery = query
+                query = secretQuery
+            }
             updateSearch()
             validateSelection()
             focused = true
         }
         .onChange(of: secrets?.isLocked) { _, locked in
             if locked == true { returnToResults() }
+        }
+        .onChange(of: secrets?.titles) { _, _ in
+            refreshSecretTitles()
+            validateSelection()
         }
         .onChange(of: secrets?.selectedId) { _, id in
             if let opened = secretSelection.openedId, id != opened { returnToResults() }
@@ -127,12 +143,13 @@ import WorkLogCore
                             }
                         }
                         if scope != .records, let secrets {
-                            if !secrets.titles.isEmpty {
+                            if !secretTitles.isEmpty {
                                 Label("Secret", systemImage: "lock.fill").font(.headline)
                                     .accessibilityAddTraits(.isHeader)
-                                ForEach(secrets.titles) { item in secretTitleRow(item, model: secrets) }
+                                ForEach(secretTitles) { item in secretTitleRow(item, model: secrets) }
                             }
                             if let secretNotice { InlineNotice(message: secretNotice) }
+                            if let secretSearchError { InlineNotice(message: secretSearchError) }
                             if secrets.isUnlocking || openingId != nil { ProgressView("Secret을 여는 중…") }
                             if !showsSecretKeys, let message = secrets.message {
                                 Label(message, systemImage: "info.circle")
@@ -141,7 +158,9 @@ import WorkLogCore
                         } else if scope != .records, secrets == nil {
                             InlineNotice(message: "Secret 검색을 연결하지 못했습니다. 기록 검색은 사용할 수 있습니다.")
                         }
-                        if resultIDs.isEmpty && !model.isSearching && (scope == .secret || model.errorMessage == nil) { emptyResults }
+                        if resultIDs.isEmpty && (scope == .secret || !model.isSearching)
+                            && (scope == .secret || model.errorMessage == nil)
+                            && !(scope == .secret && (secrets == nil || secretSearchError != nil)) { emptyResults }
                         if scope != .secret, let answer = model.answer { answerView(answer) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(1)
@@ -165,9 +184,10 @@ import WorkLogCore
     private func initializeSearch() {
         isActive = true
         focused = true
-        guard !hasInitialized else { return }
+        guard !hasInitialized else { updateSearch(); validateSelection(); return }
         hasInitialized = true
         query = model.text
+        recordQuery = query
         if let key = model.selectedKey { selectedResult = .record(key) }
         let today = environment.calendar.workDate(of: environment.options.clock.now())
         filterStart = model.range?.start ?? today
@@ -197,7 +217,7 @@ import WorkLogCore
     private var resultIDs: [SearchResultSelection] {
         var ids: [SearchResultSelection] = []
         if scope != .secret { ids += model.hits.map { SearchResultSelection.record($0.key) } }
-        if scope != .records, let secrets { ids += secrets.titles.map { SearchResultSelection.secret($0.id) } }
+        if scope != .records, secrets != nil { ids += secretTitles.map { SearchResultSelection.secret($0.id) } }
         return ids
     }
 
@@ -207,8 +227,19 @@ import WorkLogCore
             if model.text != query { model.text = query }
             model.search()
         }
-        if scope != .records, let secrets {
-            if secrets.query != query { secrets.query = query } else { secrets.searchTitles() }
+        refreshSecretTitles()
+    }
+
+    private func refreshSecretTitles() {
+        guard isActive, scope != .records else { return }
+        guard secrets != nil else { secretTitles = []; secretSearchError = nil; return }
+        // App-owned metadata results: leave the shared Secret screen's query and titles untouched.
+        do {
+            secretTitles = try environment.vaultSession.searchTitles(query)
+            secretSearchError = nil
+        } catch {
+            secretTitles = []
+            secretSearchError = "Secret 제목을 검색하지 못했습니다. 검색어를 다시 입력하세요."
         }
     }
 
@@ -246,16 +277,25 @@ import WorkLogCore
     }
 
     private func openSecretSelection() async {
-        guard let id = openingId, let secrets,
-              let item = secrets.titles.first(where: { $0.id == id }) else { return }
+        guard let id = openingId, let secrets else { openingId = nil; return }
         defer { if openingId == id { openingId = nil } }
+        guard secretTitles.contains(where: { $0.id == id }) else {
+            returnToResults()
+            secretNotice = "Secret을 찾지 못했습니다."
+            return
+        }
         let requestWindow = NSApp.keyWindow
         if secrets.isLocked { await secrets.unlock() }
         guard !Task.isCancelled, isActive, openingId == id, requestWindow?.isVisible == true,
               !secrets.isLocked, !secrets.hasUnsavedDraft, !secrets.hasRecoverableDraft,
-              (secrets.editorOwner == nil || !secrets.isEditing), selectedResult == .secret(id),
-              secrets.titles.contains(where: { $0.id == id }) else {
+              (secrets.editorOwner == nil || !secrets.isEditing), selectedResult == .secret(id) else {
             if secrets.hasRecoverableDraft { secretNotice = "Secret 화면에서 보존된 초안을 확인한 뒤 다시 여세요." }
+            return
+        }
+        refreshSecretTitles()
+        guard let item = secretTitles.first(where: { $0.id == id }) else {
+            returnToResults()
+            secretNotice = "Secret을 찾지 못했습니다."
             return
         }
         secrets.open(item)
@@ -269,12 +309,12 @@ import WorkLogCore
     }
 
     private func askAI() {
-        guard !secretSelected else { return }
+        guard scope != .secret, !secretSelected else { return }
         // Explicit invocation passes only the typed question. GroundedAnswerService uses ordinary records.
         if model.text != query { model.text = query }
         guard model.canAskAI else { return }
         Task {
-            guard !secretSelected else { return }
+            guard scope != .secret, !secretSelected else { return }
             await model.askAI()
         }
     }
@@ -291,6 +331,7 @@ import WorkLogCore
             }
         }
         if modifiers == .command, event.keyCode == 36 || event.keyCode == 76 {
+            guard scope != .secret, !secretSelected else { return false }
             if !event.isARepeat { askAI() }
             return true
         }
@@ -377,9 +418,9 @@ import WorkLogCore
             Image(systemName: "magnifyingglass")
                 .font(.title3)
                 .foregroundStyle(focused ? WorkLogTheme.accent : WorkLogTheme.muted)
-            SearchQueryField(text: $query, isFocused: $focused)
+            SearchQueryField(text: $query, isFocused: $focused, allowsAIQuestion: scope != .secret)
                 .frame(minHeight: 22)
-                .accessibilityLabel("통합 검색 또는 AI 질문")
+                .accessibilityLabel(scope == .secret ? "Secret 제목 검색" : "통합 검색 또는 AI 질문")
                 .accessibilityHint("↑↓로 기록과 Secret 선택, Return 열기. Secret은 AI로 보내지 않습니다")
                 .worklogHelp("원문 검색", keys: "↑↓ 선택 · ⌥Space 미리보기 · Return 원문")
             if !query.isEmpty {
@@ -509,21 +550,21 @@ import WorkLogCore
                         .worklogHelp("미리보기", keys: "⌥Space · 결과 행 Space")
                 }
             }
-            if secretSelected {
+            if scope == .secret || secretSelected {
                 Label("Secret은 AI로 보내지 않습니다", systemImage: "lock.fill")
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
-            if model.isAIAvailable {
+            if scope != .secret, model.isAIAvailable {
                 HStack {
                     Button(action: askAI) {
                         Label("기록을 바탕으로 AI 답변", systemImage: "sparkles")
                     }
                     .buttonStyle(WorkLogButtonStyle())
-                    .disabled(secretSelected || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.isAIAvailable || model.isAskingAI || !model.tagIds.isEmpty)
+                    .disabled(scope == .secret || secretSelected || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.isAIAvailable || model.isAskingAI || !model.tagIds.isEmpty)
                     .worklogHelp("기록을 바탕으로 AI 답변", keys: "⌘Return")
                     if model.isAskingAI { ProgressView("답변 생성 중…").controlSize(.small) }
                 }
-            } else {
+            } else if scope != .secret {
                 Label("AI 미연결 · 원문 검색은 그대로 사용할 수 있습니다", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)

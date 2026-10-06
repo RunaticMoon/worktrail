@@ -57,7 +57,7 @@ struct StatusBadge: View {
 extension TaskStatus {
     var badgeSymbol: String {
         switch self {
-        case .planned: return "clock"
+        case .planned: return "circle.dashed"
         case .inProgress: return "arrow.triangle.2.circlepath"
         case .onHold: return "pause.circle"
         case .completed: return "checkmark.circle"
@@ -90,14 +90,7 @@ struct TaskStatusIcon: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     private var symbol: String {
-        switch status {
-        case .planned: return "circle"
-        case .inProgress: return "circle.lefthalf.filled"
-        case .onHold: return "pause.circle"
-        case .completed: return "checkmark.circle"
-        case .cancelled: return "xmark.circle"
-        case nil: return "questionmark.circle"
-        }
+        status?.badgeSymbol ?? "questionmark.circle"
     }
 
     var body: some View {

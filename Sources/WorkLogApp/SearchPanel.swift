@@ -293,16 +293,17 @@ import WorkLogCore
 @MainActor struct SearchQueryField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    var allowsAIQuestion: Bool = true
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> SearchQueryTextField {
         let field = SearchQueryTextField(string: text)
-        field.placeholderString = "기록·Secret 제목을 찾거나, 업무에 대해 질문하세요"
+        field.placeholderString = allowsAIQuestion ? "기록·Secret 제목을 찾거나, 업무에 대해 질문하세요" : "Secret 제목·그룹명을 찾으세요"
         field.isBordered = false
         field.drawsBackground = false
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
-        field.setAccessibilityLabel("통합 검색 또는 AI 질문")
+        field.setAccessibilityLabel(allowsAIQuestion ? "통합 검색 또는 AI 질문" : "Secret 제목 검색")
         field.setAccessibilityHelp("↑↓ 결과 선택 · Return 열기 · Secret은 AI로 보내지 않습니다")
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.delegate = context.coordinator
@@ -311,6 +312,8 @@ import WorkLogCore
 
     func updateNSView(_ field: SearchQueryTextField, context: Context) {
         context.coordinator.parent = self
+        field.placeholderString = allowsAIQuestion ? "기록·Secret 제목을 찾거나, 업무에 대해 질문하세요" : "Secret 제목·그룹명을 찾으세요"
+        field.setAccessibilityLabel(allowsAIQuestion ? "통합 검색 또는 AI 질문" : "Secret 제목 검색")
         if (field.currentEditor() as? NSTextInputClient)?.hasMarkedText() != true, field.stringValue != text { field.stringValue = text }
         if isFocused, field.currentEditor() == nil {
             DispatchQueue.main.async { [weak field] in

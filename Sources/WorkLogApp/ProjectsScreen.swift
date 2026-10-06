@@ -9,6 +9,7 @@ import WorkLogCore
     let onCapture: () -> Void
     @State private var taskSelection: String?
     @State private var showsProjectTasks = false
+    @FocusState private var projectsFocused: Bool
     @FocusState private var tasksFocused: Bool
 
     var body: some View {
@@ -49,21 +50,68 @@ import WorkLogCore
     }
 
     private var projectList: some View {
-        List(selection: Binding(get: { model.selectedProjectId }, set: { id in
-            model.select(id)
-            if id != nil { showsProjectTasks = true }
-        })) {
-            ForEach(model.projects) { project in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(project.name).font(.headline)
-                    Text("진행 중 \(project.openTaskCount) · 전체 \(project.totalTaskCount)")
-                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(model.projects) { project in
+                        Button {
+                            model.select(project.id)
+                            projectsFocused = true
+                            showsProjectTasks = true
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(project.name)
+                                    .font(.body.weight(model.selectedProjectId == project.id ? .semibold : .regular))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Text("진행 중 \(project.openTaskCount) · 전체 \(project.totalTaskCount)")
+                                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, minHeight: WorkLogTheme.rowHeight, alignment: .leading)
+                        }
+                        .buttonStyle(WorkLogSourceRowStyle(isSelected: model.selectedProjectId == project.id,
+                            isFocused: projectsFocused && model.selectedProjectId == project.id))
+                        .focusable(false)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text("\(project.name), 진행 중 업무 \(project.openTaskCount)개, 전체 업무 \(project.totalTaskCount)개"))
+                        .accessibilityAddTraits(model.selectedProjectId == project.id ? .isSelected : [])
+                        .accessibilityHint("↑↓로 선택, Return으로 프로젝트 업무 보기")
+                        .worklogHelp("프로젝트 업무 보기", keys: "Return")
+                        .id(project.id)
+                    }
                 }
-                .padding(.vertical, 8).tag(project.id)
-                .accessibilityElement(children: .combine)
+                .padding(2)
             }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($projectsFocused)
+            .accessibilityLabel("프로젝트 목록")
+            .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                guard press.modifiers.isEmpty else { return .ignored }
+                if press.key == .return {
+                    if press.phase == .down, model.selectedProjectId != nil { showsProjectTasks = true }
+                } else { moveProjectSelection(press.key == .upArrow ? -1 : 1) }
+                return .handled
+            }
+            .onChange(of: projectsFocused) { _, focused in
+                if focused && model.selectedProjectId == nil { model.select(model.projects.first?.id) }
+            }
+            .onChange(of: model.selectedProjectId) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+            .onAppear { if let id = model.selectedProjectId { proxy.scrollTo(id) } }
         }
-        .listStyle(.inset).accessibilityLabel("프로젝트 목록")
+    }
+
+    private func moveProjectSelection(_ offset: Int) {
+        let ids = model.projects.map(\.id)
+        guard !ids.isEmpty else { return }
+        if let selected = model.selectedProjectId, let index = ids.firstIndex(of: selected) {
+            model.select(ids[min(max(index + offset, 0), ids.count - 1)])
+        } else {
+            model.select(offset < 0 ? ids.last : ids.first)
+        }
     }
 
     @ViewBuilder private var projectTasks: some View {

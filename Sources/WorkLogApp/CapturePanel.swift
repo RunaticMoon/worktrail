@@ -1195,13 +1195,7 @@ extension View {
     }
 
     private func statusSymbol(_ status: TaskStatus) -> String {
-        switch status {
-        case .planned: return "circle.dashed"
-        case .inProgress: return "circle.lefthalf.filled"
-        case .onHold: return "pause.circle"
-        case .completed: return "checkmark.circle"
-        case .cancelled: return "xmark.circle"
-        }
+        status.badgeSymbol
     }
 
     private func moveTask(_ delta: Int, focusRow: Bool) {
