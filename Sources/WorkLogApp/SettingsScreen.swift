@@ -11,6 +11,7 @@ struct SettingsScreen: View {
     let onEndHotkeyRecording: () -> Void
     let backups: BackupModel?
     let onOpenBackups: (() -> Void)?
+    @Environment(\.hotkeyDiagnostics) private var hotkeyDiagnostics
     @FocusState private var errorFocused: Bool
     @State private var promptEditor: PromptEditorSelection?
 
@@ -87,16 +88,32 @@ struct SettingsScreen: View {
                 .foregroundStyle(WorkLogTheme.muted)
         }
     }
+    private func hotkeyStatus(_ action: HotkeyAction) -> some View {
+        let diagnostic = hotkeyDiagnostics[action] ?? HotkeyDiagnostic()
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(diagnostic.registrationText)
+            if let recent = diagnostic.recentPressText { Text(recent) }
+            if let failure = diagnostic.lastFailure, failure != diagnostic.registrationText {
+                Text("최근 등록 시도 · \(failure)")
+            }
+        }
+        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
+    }
+
     private var shortcutsSection: some View {
         Section("단축키") {
             HotkeyRecorder(title: "빠른 입력", binding: try? HotkeyBinding(parsing: model.draft.captureHotkey),
                            rawValue: model.draft.captureHotkey,
                            onRecord: { model.setHotkey($0, for: .capture) },
                            onBeginRecording: onBeginHotkeyRecording, onEndRecording: onEndHotkeyRecording)
+            hotkeyStatus(.capture)
             HotkeyRecorder(title: "검색", binding: try? HotkeyBinding(parsing: model.draft.searchHotkey),
                            rawValue: model.draft.searchHotkey,
                            onRecord: { model.setHotkey($0, for: .search) },
                            onBeginRecording: onBeginHotkeyRecording, onEndRecording: onEndHotkeyRecording)
+            hotkeyStatus(.search)
             Button("단축키 기본값으로 되돌리기") { model.restoreDefaultHotkeys() }
                 .worklogHelp("빠른 입력·검색 전역 단축키 기본값 복원 · 설정 저장 후 적용")
             Text("칸을 누른 뒤 원하는 조합을 누르세요. 기본값: 빠른 입력 ⌃⌥Space, 검색 ⌃⌥D. 변경은 ‘설정 저장’ 후 적용됩니다.")

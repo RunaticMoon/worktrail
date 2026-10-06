@@ -11,7 +11,7 @@ import WorkLogCore
     private var onOpenSecrets: (() -> Void)?
     private var previousApp: NSRunningApplication?
 
-    init(model: SearchModel, environment: AppEnvironment, secrets: SecretsModel, onOpenSecrets: @escaping () -> Void) {
+    init(model: SearchModel, environment: AppEnvironment, secrets: SecretsModel?, onOpenSecrets: @escaping () -> Void) {
         self.model = model
         self.environment = environment
         self.secrets = secrets
@@ -35,30 +35,44 @@ import WorkLogCore
     }
 
     func show() {
-        guard let model, let environment else { return }
+        guard model != nil, environment != nil else { return }
         if !panel.isVisible {
             previousApp = NSWorkspace.shared.frontmostApplication
-            // Reuse hosting to preserve scope, title/key selection, filters and scroll.
-            if panel.contentView == nil {
-                let hosting = NSHostingView(rootView: AnyView(SearchPanelContent(
-                    model: model, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
-                        self?.dismiss(restorePreviousApp: false)
-                        self?.onOpenSecrets?()
-                    }, onClose: { [weak self] in self?.dismiss() })))
-                // The controller owns window bounds; content must not override their constraints.
-                hosting.sizingOptions = []
-                panel.contentView = hosting
-            }
+            ensureHosting()
             panel.contentMinSize = NSSize(width: 580, height: 480)
             FloatingPanelPositioning.place(panel)
         }
+        ensureHosting()
         NSApp.activate(ignoringOtherApps: true)
+        panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         if let sheet = panel.attachedSheet {
             sheet.makeKeyAndOrderFront(nil)
         } else {
-            panel.requestSearchFocus()
+            panel.requestSearchFocus { [weak self] in
+                guard let self else { return }
+                self.installHosting()
+                self.panel.requestSearchFocus()
+            }
         }
+    }
+
+    private func ensureHosting() {
+        guard let hosting = panel.contentView as? NSHostingView<AnyView>,
+              hosting.window === panel, !hosting.isHidden else {
+            installHosting(); return
+        }
+    }
+
+    private func installHosting() {
+        guard let model, let environment else { return }
+        let hosting = NSHostingView(rootView: AnyView(SearchPanelContent(
+            model: model, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
+                self?.dismiss(restorePreviousApp: false)
+                self?.onOpenSecrets?()
+            }, onClose: { [weak self] in self?.dismiss() })))
+        hosting.sizingOptions = []
+        panel.contentView = hosting
     }
 
     func dismiss(restorePreviousApp: Bool = true) {
@@ -77,6 +91,7 @@ import WorkLogCore
         if let sheet = panel.attachedSheet { panel.endSheet(sheet); sheet.orderOut(nil) }
         hidePanel()
         panel.onEscape = nil
+        panel.searchKeyHandler = nil
         panel.delegate = nil
         model = nil
         environment = nil
@@ -161,6 +176,7 @@ import WorkLogCore
 /// Escape cancels input composition before dismissing the panel.
 @MainActor private final class SearchKeyboardPanel: NSPanel {
     var onEscape: (() -> Void)?
+    var searchKeyHandler: ((NSEvent, Bool) -> Bool)?
     private var forwardingIME = false
     private var focusRequest = 0
     override var canBecomeKey: Bool { true }
@@ -171,18 +187,19 @@ import WorkLogCore
     }
 
     override func sendEvent(_ event: NSEvent) {
-        guard attachedSheet == nil, event.type == .keyDown, event.keyCode == 53 else {
-            super.sendEvent(event)
-            return
-        }
+        guard attachedSheet == nil, event.type == .keyDown else { super.sendEvent(event); return }
         if hasMarkedText {
-            forwardingIME = true
-            defer { forwardingIME = false }
-            firstResponder?.keyDown(with: event)
+            if event.keyCode == 53 {
+                forwardingIME = true
+                defer { forwardingIME = false }
+                firstResponder?.keyDown(with: event)
+            } else { super.sendEvent(event) }
             return
         }
+        let editing = firstResponder is NSTextView || firstResponder is NSTextField
+        if searchKeyHandler?(event, editing) == true { return }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if modifiers.isEmpty {
+        if event.keyCode == 53, modifiers.isEmpty {
             if !event.isARepeat { onEscape?() }
             return
         }
@@ -194,26 +211,32 @@ import WorkLogCore
         onEscape?()
     }
 
-    func requestSearchFocus() {
+    func requestSearchFocus(recover: (() -> Void)? = nil) {
         focusRequest += 1
-        let request = focusRequest
-        DispatchQueue.main.async { [weak self] in
+        attemptSearchFocus(request: focusRequest, remaining: 3, recover: recover)
+    }
+
+    private func attemptSearchFocus(request: Int, remaining: Int, recover: (() -> Void)?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
             guard let self, self.isVisible, self.attachedSheet == nil, request == self.focusRequest else { return }
             self.contentView?.layoutSubtreeIfNeeded()
-            _ = self.focusSearchField(in: self.contentView)
+            if let field = self.searchField(in: self.contentView), self.makeFirstResponder(field) {
+                self.initialFirstResponder = field
+                if (field.currentEditor() as? NSTextInputClient)?.hasMarkedText() != true { field.selectText(nil) }
+                return
+            }
+            if remaining > 0 { self.attemptSearchFocus(request: request, remaining: remaining - 1, recover: recover) }
+            else { recover?() }
         }
     }
 
-    private func focusSearchField(in root: Any?, depth: Int = 0) -> Bool {
-        guard depth < 40, let element = root as? NSAccessibilityProtocol else { return false }
-        if element.accessibilityLabel() == "원문 검색 또는 AI 질문" || element.accessibilityLabel() == "Secret 제목 검색" {
-            element.setAccessibilityFocused(true)
-            return true
+    private func searchField(in root: NSView?) -> SearchQueryTextField? {
+        guard let root else { return nil }
+        if let field = root as? SearchQueryTextField { return field }
+        for child in root.subviews {
+            if let field = searchField(in: child) { return field }
         }
-        for child in element.accessibilityChildren() ?? [] {
-            if focusSearchField(in: child, depth: depth + 1) { return true }
-        }
-        return false
+        return nil
     }
 }
 
@@ -232,10 +255,17 @@ import WorkLogCore
         var handle: ((NSEvent, Bool) -> Bool)?
         private var monitor: Any?
 
+        private weak var keyboardPanel: SearchKeyboardPanel?
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             stopMonitoring()
             guard window != nil else { return }
+            if let panel = window as? SearchKeyboardPanel {
+                keyboardPanel = panel
+                panel.searchKeyHandler = { [weak self] event, editing in self?.handle?(event, editing) == true }
+                return
+            }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 var handled = false
                 MainActor.assumeIsolated {
@@ -250,9 +280,59 @@ import WorkLogCore
             }
         }
         func stopMonitoring() {
+            keyboardPanel?.searchKeyHandler = nil
+            keyboardPanel = nil
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
         }
+    }
+}
+/// A concrete AppKit field lets a borderless panel guarantee first responder and select-all.
+@MainActor final class SearchQueryTextField: NSTextField {}
+
+@MainActor struct SearchQueryField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    var allowsAIQuestion: Bool = true
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> SearchQueryTextField {
+        let field = SearchQueryTextField(string: text)
+        field.placeholderString = allowsAIQuestion ? "기록·Secret 제목을 찾거나, 업무에 대해 질문하세요" : "Secret 제목·그룹명을 찾으세요"
+        field.isBordered = false
+        field.drawsBackground = false
+        field.font = .systemFont(ofSize: NSFont.systemFontSize)
+        field.setAccessibilityLabel(allowsAIQuestion ? "통합 검색 또는 AI 질문" : "Secret 제목 검색")
+        field.setAccessibilityHelp("↑↓ 결과 선택 · Return 열기 · Secret은 AI로 보내지 않습니다")
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: SearchQueryTextField, context: Context) {
+        context.coordinator.parent = self
+        field.placeholderString = allowsAIQuestion ? "기록·Secret 제목을 찾거나, 업무에 대해 질문하세요" : "Secret 제목·그룹명을 찾으세요"
+        field.setAccessibilityLabel(allowsAIQuestion ? "통합 검색 또는 AI 질문" : "Secret 제목 검색")
+        if (field.currentEditor() as? NSTextInputClient)?.hasMarkedText() != true, field.stringValue != text { field.stringValue = text }
+        if isFocused, field.currentEditor() == nil {
+            DispatchQueue.main.async { [weak field] in
+                guard let field, let window = field.window, window.isKeyWindow,
+                      context.coordinator.parent.isFocused else { return }
+                window.makeFirstResponder(field)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SearchQueryField
+        init(_ parent: SearchQueryField) { self.parent = parent }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+        func controlTextDidBeginEditing(_ notification: Notification) { parent.isFocused = true }
+        func controlTextDidEndEditing(_ notification: Notification) { parent.isFocused = false }
     }
 }
 #endif

@@ -62,14 +62,31 @@ import Observation
 
     /// 패널을 열 때 호출한다.
     ///
-    /// 진행 중 세션(이전 Esc 닫기로 초안이 남아 있음)이면 현재 탭·초안을 유지한다.
-    /// 새 세션(두 일반 초안이 비어 있고 직전 저장 성공 후)이면
-    /// `tab = settings.defaultCaptureKind`로 초기화하고 두 초안을 기본값으로 되돌린다.
+    /// 열 때마다 `tab = settings.defaultCaptureKind`로 시작한다. 설정의 기본 입력 유형이
+    /// 바뀌었으면 다음 열기부터 새 기본값을 따른다.
+    /// 진행 중 초안(Esc 닫기로 남은 `memoDraft`/`taskDraft`)은 지우지 않는다 —
+    /// 사용자가 ⌘2 등으로 해당 유형 탭에 가면 이어서 쓸 수 있다.
+    /// 새 세션(두 일반 초안이 비어 있고 직전 저장 성공 후)이면 기존대로
+    /// `startNewSession()`으로 두 초안을 기본값으로 되돌린다.
     public func beginSession() {
+        if let environment { tab = environment.settings.defaultCaptureKind }
         if pendingNewSession && draftsEmpty {
             startNewSession()
         }
         pendingNewSession = false
+    }
+
+    /// 해당 유형 탭에 사용자가 이어 쓸 초안이 남아 있는지.
+    ///
+    /// `memo`/`task`는 각 초안에 내용이 있으면(본문이 공백이 아니거나 관련 기록·대상 업무가
+    /// 선택되어 있으면) `true`이며 `draftsEmpty`와 같은 판정 기준을 쓴다.
+    /// `secret`은 이 모델이 Secret 초안을 소유하지 않으므로 항상 `false`다(앱이 `SecretsModel`로 판단).
+    public func hasDraft(_ kind: CaptureKind) -> Bool {
+        switch kind {
+        case .memo: return !isEmpty(memoDraft)
+        case .task: return !isEmpty(taskDraft)
+        case .secret: return false
+        }
     }
 
     /// 일반 탭에서만 활성 초안을 저장한다.

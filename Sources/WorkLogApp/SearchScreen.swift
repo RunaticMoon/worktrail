@@ -9,10 +9,20 @@ import WorkLogCore
     var secrets: SecretsModel? = nil
     var onOpenSecrets: (() -> Void)? = nil
     var isPanel: Bool = false
-    @State private var scope: SearchScope = .records
+    @State private var scope: SearchScope = .all
+    @State private var query = ""
+    @State private var recordQuery = ""
+    @State private var secretQuery = ""
+    @State private var secretTitles: [SecretMetadata] = []
+    @State private var secretSearchError: String?
+    @State private var selectedResult: SearchResultSelection?
+    @State private var openingId: String?
+    @State private var isActive = false
+    @State private var hasInitialized = false
+    @State private var secretNotice: String?
     @State private var secretSelection = SearchSecretSelection()
-    @FocusState private var focusedResult: SearchHitKey?
-    @FocusState private var focused: Bool
+    @FocusState private var focusedResult: SearchResultSelection?
+    @State private var focused = false
     @State private var source: SearchHit?
     @State private var sourceBody: String?
     @State private var sourceError: String?
@@ -27,18 +37,18 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("검색 범위", selection: $scope) {
-                Text(isPanel ? "기록 (⌘1)" : "기록").tag(SearchScope.records)
-                Text(isPanel ? "Secret (⌘2)" : "Secret").tag(SearchScope.secret)
+                Text(isPanel ? "전체 (⌘1)" : "전체").tag(SearchScope.all)
+                Text(isPanel ? "기록 (⌘2)" : "기록").tag(SearchScope.records)
+                Text(isPanel ? "Secret (⌘3)" : "Secret").tag(SearchScope.secret)
             }
             .pickerStyle(.segmented)
-            .worklogHelp(isPanel ? "검색 범위 · ⌘1 기록 · ⌘2 Secret" : "검색 범위 · Tab으로 포커스한 뒤 화살표로 전환")
-            if scope == .records {
-                recordSearch
-            } else if let secrets {
-                SearchSecretScope(model: secrets, selection: $secretSelection, onOpenSecrets: onOpenSecrets)
+            .worklogHelp(isPanel ? "검색 범위 · ⌘1 전체 · ⌘2 기록 · ⌘3 Secret" : "검색 범위 · Tab으로 포커스한 뒤 화살표로 전환")
+            queryField
+            if showsSecretKeys, let secrets {
+                SearchSecretScope(model: secrets, selection: $secretSelection,
+                    onBack: returnToResults, onOpenSecrets: onOpenSecrets)
             } else {
-                StateView(kind: .empty, title: "Secret 검색을 연결하지 못했습니다",
-                    detail: "검색 패널 또는 Secret 화면에서 제목을 검색하세요.")
+                unifiedResults
             }
         }
         .padding(WorkLogTheme.contentInset)
@@ -46,7 +56,56 @@ import WorkLogCore
         .tint(WorkLogTheme.accent)
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
-        .onChange(of: scope) { _, _ in focused = scope == .records }
+        .onChange(of: scope) { previous, current in
+            cancelSecretOpening()
+            secretSelection.openedId = nil
+            secretSelection.selectedRowId = nil
+            // Secret-only input must never become an ordinary AI question on a scope change.
+            if previous == .secret {
+                secretQuery = query
+                query = recordQuery
+            } else if current == .secret {
+                recordQuery = query
+                query = secretQuery
+            }
+            updateSearch()
+            validateSelection()
+            focused = true
+        }
+        .onChange(of: secrets?.isLocked) { _, locked in
+            if locked == true { returnToResults() }
+        }
+        .onChange(of: secrets?.titles) { _, _ in
+            refreshSecretTitles()
+            validateSelection()
+        }
+        .onChange(of: secrets?.selectedId) { _, id in
+            if let opened = secretSelection.openedId, id != opened { returnToResults() }
+        }
+        .onChange(of: secrets?.hasUnsavedDraft) { _, changed in
+            if changed == true { returnToResults() }
+        }
+        .onChange(of: secrets?.isEditing) { _, editing in
+            if editing == true { returnToResults() }
+        }
+        .onChange(of: secrets?.hasRecoverableDraft) { _, hasDraft in
+            if hasDraft == true { returnToResults() }
+        }
+        .onAppear { initializeSearch() }
+        .onChange(of: query) { _, _ in
+            cancelSecretOpening()
+            secretSelection.openedId = nil
+            secretSelection.selectedRowId = nil
+        }
+        .task(id: query) {
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            guard !Task.isCancelled else { return }
+            updateSearch()
+            validateSelection()
+        }
+        .onChange(of: focusedResult) { _, key in if let key { selectResult(key) } }
+        .onDisappear { isActive = false; cancelSecretOpening() }
+        .task(id: openingId) { await openSecretSelection() }
         .sheet(isPresented: Binding(get: { source != nil }, set: { if !$0 { source = nil } })) {
             SourceRecordSheet(bodyText: sourceBody, error: sourceError, snippet: source?.snippet ?? "",
                 sourceTitle: source.map { sourceLabel($0.sourceType) } ?? "기록",
@@ -54,98 +113,304 @@ import WorkLogCore
         }
     }
 
-    private var recordSearch: some View {
+    private var unifiedResults: some View {
         VStack(alignment: .leading, spacing: 12) {
-            queryField
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        filterControls
+                        if scope != .secret { filterControls }
                         resultsHeader
-                        if model.errorMessage != nil {
-                            RecoveryNotice(failed: "검색하지 못했습니다", preserved: "입력과 필터는 그대로입니다",
-                                retryTitle: "다시 검색", retry: { model.search() })
+                        if scope != .secret {
+                            if model.errorMessage != nil {
+                                RecoveryNotice(failed: "검색하지 못했습니다", preserved: "입력과 필터는 그대로입니다",
+                                    retryTitle: "다시 검색", retry: { model.search() })
+                            }
+                            if model.isAIAvailable, let message = model.aiMessage {
+                                Label(message, systemImage: "info.circle")
+                                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if model.activeFilterCount > 0 {
+                                Text("필터는 기록에만 적용됩니다. Secret은 제목·그룹명으로 검색합니다.")
+                                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                            }
+                            if model.isSearching { ProgressView("원문 검색 중…") }
+                            if !model.hits.isEmpty {
+                                Text("기록").font(.headline).accessibilityAddTraits(.isHeader)
+                                ForEach(model.hits, id: \.key) { hit in
+                                    resultRow(hit).id(SearchResultSelection.record(hit.key))
+                                }
+                            }
                         }
-                        if model.isAIAvailable, let message = model.aiMessage {
-                            Label(message, systemImage: "info.circle")
-                                .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
+                        if scope != .records, let secrets {
+                            if !secretTitles.isEmpty {
+                                Label("Secret", systemImage: "lock.fill").font(.headline)
+                                    .accessibilityAddTraits(.isHeader)
+                                ForEach(secretTitles) { item in secretTitleRow(item, model: secrets) }
+                            }
+                            if let secretNotice { InlineNotice(message: secretNotice) }
+                            if let secretSearchError { InlineNotice(message: secretSearchError) }
+                            if secrets.isUnlocking || openingId != nil { ProgressView("Secret을 여는 중…") }
+                            if !showsSecretKeys, let message = secrets.message {
+                                Label(message, systemImage: "info.circle")
+                                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else if scope != .records, secrets == nil {
+                            InlineNotice(message: "Secret 검색을 연결하지 못했습니다. 기록 검색은 사용할 수 있습니다.")
                         }
-                        if !model.tagIds.isEmpty {
-                            Text("태그 필터는 원문 검색에만 적용됩니다.")
-                                .font(.caption).foregroundStyle(WorkLogTheme.muted)
-                        }
-                        if model.isSearching { ProgressView("원문 검색 중…") }
-                        if model.hits.isEmpty && !model.isSearching && model.errorMessage == nil {
-                            emptyResults
-                        }
-                        ForEach(model.hits, id: \.key) { hit in resultRow(hit).id(hit.key) }
-                        if let answer = model.answer { answerView(answer) }
+                        if resultIDs.isEmpty && (scope == .secret || !model.isSearching)
+                            && (scope == .secret || model.errorMessage == nil)
+                            && !(scope == .secret && (secrets == nil || secretSearchError != nil)) { emptyResults }
+                        if scope != .secret, let answer = model.answer { answerView(answer) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(1)
                 }
-                .onChange(of: model.selectedKey) { _, key in
-                    if let key { proxy.scrollTo(key) }
-                }
+                .onChange(of: selectedResult) { _, key in if let key { proxy.scrollTo(key) } }
                 .onChange(of: source) { _, hit in
-                    if hit == nil, let key = model.selectedKey { proxy.scrollTo(key) }
+                    if hit == nil, let key = selectedResult { proxy.scrollTo(key) }
                 }
-                .onChange(of: model.hits) { _, _ in
-                    if let key = model.selectedKey { proxy.scrollTo(key) }
+                .onChange(of: resultIDs) { _, _ in
+                    validateSelection()
+                    if let key = selectedResult { proxy.scrollTo(key) }
                 }
-                .onAppear { if let key = model.selectedKey { proxy.scrollTo(key) } }
+                .onAppear { if let key = selectedResult { proxy.scrollTo(key) } }
             }
-            if model.isPreviewVisible, let hit = model.selectedHit {
+            if scope != .secret, isRecordSelected, model.isPreviewVisible, let hit = model.selectedHit {
                 ScrollView { preview(hit) }.frame(maxHeight: 160)
             }
         }
-        .onAppear {
-            focused = true
-            let today = environment.calendar.workDate(of: environment.options.clock.now())
-            filterStart = model.range?.start ?? today
-            filterEnd = model.range.map { environment.calendar.adding(days: -1, to: $0.endExclusive) } ?? today
-            useDates = model.range != nil
-            do { projects = try environment.repo.projects(); tags = try environment.repo.tags() }
-            catch { filterError = "필터 후보를 불러오지 못했습니다." }
+    }
+
+    private func initializeSearch() {
+        isActive = true
+        focused = true
+        guard !hasInitialized else { updateSearch(); validateSelection(); return }
+        hasInitialized = true
+        query = model.text
+        recordQuery = query
+        if let key = model.selectedKey { selectedResult = .record(key) }
+        let today = environment.calendar.workDate(of: environment.options.clock.now())
+        filterStart = model.range?.start ?? today
+        filterEnd = model.range.map { environment.calendar.adding(days: -1, to: $0.endExclusive) } ?? today
+        useDates = model.range != nil
+        do { projects = try environment.repo.projects(); tags = try environment.repo.tags() }
+        catch { filterError = "필터 후보를 불러오지 못했습니다." }
+        updateSearch()
+    }
+
+    private var showsSecretKeys: Bool {
+        guard let secrets else { return false }
+        return secretSelection.openedId != nil && secretSelection.openedId == secrets.selectedId
+            && !secrets.isLocked && !secrets.isEditing && !secrets.hasUnsavedDraft && !secrets.hasRecoverableDraft
+    }
+
+    private var isRecordSelected: Bool {
+        if case .record = selectedResult { return true }
+        return false
+    }
+
+    private var secretSelected: Bool {
+        if case .secret = selectedResult { return true }
+        return showsSecretKeys
+    }
+
+    private var resultIDs: [SearchResultSelection] {
+        var ids: [SearchResultSelection] = []
+        if scope != .secret { ids += model.hits.map { SearchResultSelection.record($0.key) } }
+        if scope != .records, secrets != nil { ids += secretTitles.map { SearchResultSelection.secret($0.id) } }
+        return ids
+    }
+
+    private func updateSearch() {
+        // Only the user-authored query is copied. Never assign a Secret title/key/value to SearchModel.
+        if scope != .secret {
+            if model.text != query { model.text = query }
             model.search()
         }
-        .task(id: model.text) {
-            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-            guard !Task.isCancelled else { return }
-            model.search()
-        }
-        .onChange(of: focusedResult) { _, key in
-            if let hit = model.hits.first(where: { $0.key == key }) { model.select(hit) }
+        refreshSecretTitles()
+    }
+
+    private func refreshSecretTitles() {
+        guard isActive, scope != .records else { return }
+        guard secrets != nil else { secretTitles = []; secretSearchError = nil; return }
+        // App-owned metadata results: leave the shared Secret screen's query and titles untouched.
+        do {
+            secretTitles = try environment.vaultSession.searchTitles(query)
+            secretSearchError = nil
+        } catch {
+            secretTitles = []
+            secretSearchError = "Secret 제목을 검색하지 못했습니다. 검색어를 다시 입력하세요."
         }
     }
 
-    // Space stays an ordinary space while editing. Option-Space previews from the
-    // query; bare Space previews only a focused result. Both leave selection intact.
+    private func selectResult(_ key: SearchResultSelection) {
+        selectedResult = key
+        switch key {
+        case .record(let recordKey):
+            if let hit = model.hits.first(where: { $0.key == recordKey }) { model.select(hit) }
+        case .secret(let id): secretSelection.selectedTitleId = id
+        }
+    }
+
+    private func validateSelection() {
+        if let selectedResult, !resultIDs.contains(selectedResult) {
+            self.selectedResult = nil; focusedResult = nil
+        }
+    }
+
+    private func returnToResults() {
+        cancelSecretOpening()
+        secretSelection.openedId = nil; secretSelection.selectedRowId = nil
+        focused = true
+    }
+
+    private func cancelSecretOpening() { openingId = nil; secretNotice = nil }
+
+    private func requestSecret(_ id: String) {
+        guard let secrets, openingId == nil, !secrets.isUnlocking else { return }
+        selectResult(.secret(id))
+        guard !secrets.hasUnsavedDraft, !secrets.hasRecoverableDraft, (secrets.editorOwner == nil || !secrets.isEditing) else {
+            secretNotice = "Secret 화면 또는 빠른 입력에서 편집 중인 초안을 저장하거나 정리한 뒤 다시 여세요."
+            return
+        }
+        openingId = id
+    }
+
+    private func openSecretSelection() async {
+        guard let id = openingId, let secrets else { openingId = nil; return }
+        defer { if openingId == id { openingId = nil } }
+        guard secretTitles.contains(where: { $0.id == id }) else {
+            returnToResults()
+            secretNotice = "Secret을 찾지 못했습니다."
+            return
+        }
+        let requestWindow = NSApp.keyWindow
+        if secrets.isLocked { await secrets.unlock() }
+        guard !Task.isCancelled, isActive, openingId == id, requestWindow?.isVisible == true,
+              !secrets.isLocked, !secrets.hasUnsavedDraft, !secrets.hasRecoverableDraft,
+              (secrets.editorOwner == nil || !secrets.isEditing), selectedResult == .secret(id) else {
+            if secrets.hasRecoverableDraft { secretNotice = "Secret 화면에서 보존된 초안을 확인한 뒤 다시 여세요." }
+            return
+        }
+        refreshSecretTitles()
+        guard let item = secretTitles.first(where: { $0.id == id }) else {
+            returnToResults()
+            secretNotice = "Secret을 찾지 못했습니다."
+            return
+        }
+        secrets.open(item)
+        if secrets.selectedId == id {
+            secretSelection.openedId = id
+            secretSelection.selectedRowId = secrets.rows.first?.id
+            focused = false
+            NSApp.activate(ignoringOtherApps: true)
+            requestWindow?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func askAI() {
+        guard scope != .secret, !secretSelected else { return }
+        // Explicit invocation passes only the typed question. GroundedAnswerService uses ordinary records.
+        if model.text != query { model.text = query }
+        guard model.canAskAI else { return }
+        Task {
+            guard scope != .secret, !secretSelected else { return }
+            await model.askAI()
+        }
+    }
+
     private func handleKey(_ event: NSEvent, editingText: Bool) -> Bool {
+        guard source == nil else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if isPanel, modifiers == .command, event.keyCode == 18 { scope = .records; return true }
-        if isPanel, modifiers == .command, event.keyCode == 19 { scope = .secret; return true }
-        guard scope == .records, source == nil else { return false }
-        let navigatingResults = focused || focusedResult != nil
-        if navigatingResults, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
-            model.moveSelection(by: event.keyCode == 125 ? 1 : -1)
-            if !editingText { focusedResult = model.selectedKey }
+        if isPanel, modifiers == .command {
+            switch event.keyCode {
+            case 18: scope = .all; return true
+            case 19: scope = .records; return true
+            case 20: scope = .secret; return true
+            default: break
+            }
+        }
+        if modifiers == .command, event.keyCode == 36 || event.keyCode == 76 {
+            guard scope != .secret, !secretSelected else { return false }
+            if !event.isARepeat { askAI() }
             return true
         }
-        if event.keyCode == 49,
-           (navigatingResults && modifiers == .option && !model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || modifiers.isEmpty && !editingText && focusedResult != nil) {
-            guard model.selectedHit != nil else { return false }
-            model.togglePreview(); return true
-        }
-        if event.keyCode == 36 || event.keyCode == 76 {
-            if modifiers == .command {
-                if model.canAskAI { Task { await model.askAI() } }
+        if showsSecretKeys, let secrets {
+            if (modifiers.isEmpty && event.keyCode == 53) || (modifiers == .command && event.keyCode == 123) {
+                returnToResults(); return true
+            }
+            if modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
+                let ids = secrets.rows.map(\.id)
+                guard !ids.isEmpty else { return true }
+                let delta = event.keyCode == 125 ? 1 : -1
+                let index = secretSelection.selectedRowId.flatMap { ids.firstIndex(of: $0) }
+                let next = index.map { min(max($0 + delta, 0), ids.count - 1) } ?? (delta > 0 ? 0 : ids.count - 1)
+                secretSelection.selectedRowId = ids[next]
                 return true
             }
-            if navigatingResults, modifiers.isEmpty, let hit = model.selectedHit { openSource(hit); return true }
+            if modifiers.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+                if !event.isARepeat,
+                   let row = secrets.rows.first(where: { $0.id == secretSelection.selectedRowId }) { secrets.copyRow(row) }
+                return true
+            }
+            return false
+        }
+        let navigatingResults = focused || focusedResult != nil
+        if navigatingResults, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
+            let ids = resultIDs
+            guard !ids.isEmpty else { return true }
+            let delta = event.keyCode == 125 ? 1 : -1
+            let index = selectedResult.flatMap { ids.firstIndex(of: $0) }
+            let next = index.map { min(max($0 + delta, 0), ids.count - 1) } ?? (delta > 0 ? 0 : ids.count - 1)
+            selectResult(ids[next])
+            if !editingText { focusedResult = ids[next] }
+            return true
+        }
+        if isRecordSelected, event.keyCode == 49,
+           (navigatingResults && modifiers == .option && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || modifiers.isEmpty && !editingText && focusedResult != nil) {
+            model.togglePreview(); return true
+        }
+        if navigatingResults, modifiers.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            if !event.isARepeat, let selectedResult {
+                switch selectedResult {
+                case .record(let key):
+                    if let hit = model.hits.first(where: { $0.key == key }) { openSource(hit) }
+                case .secret(let id): requestSecret(id)
+                }
+            }
+            return true
         }
         return false
+    }
+
+    private func secretTitleRow(_ item: SecretMetadata, model secrets: SecretsModel) -> some View {
+        let key = SearchResultSelection.secret(item.id)
+        let selected = selectedResult == key
+        return Button { requestSecret(item.id) } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.fill").accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title).font(.body)
+                    if let group = item.groupName, !group.isEmpty { Text(group).font(.caption) }
+                    if secrets.isLocked { Text("잠김 · Return으로 잠금 해제").font(.caption) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10).foregroundStyle(WorkLogTheme.text)
+            .background(selected ? WorkLogTheme.accentSoft : WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(selected ? WorkLogTheme.accent : WorkLogTheme.border, lineWidth: selected ? 2 : 1)
+            }
+        }
+        .buttonStyle(.plain).focused($focusedResult, equals: key)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(["Secret", item.title, item.groupName].compactMap { $0 }.joined(separator: ", ")))
+        .accessibilityValue(selected ? "선택됨" : "")
+        .accessibilityHint(secrets.isLocked ? "Return으로 잠금 해제 후 key 목록 열기" : "Return으로 key 목록 열기")
+        .worklogHelp("Secret key 목록 열기", keys: "Return")
+        .id(key)
     }
 
     private var queryField: some View {
@@ -153,16 +418,14 @@ import WorkLogCore
             Image(systemName: "magnifyingglass")
                 .font(.title3)
                 .foregroundStyle(focused ? WorkLogTheme.accent : WorkLogTheme.muted)
-            TextField("기록을 찾거나, 업무에 대해 질문하세요", text: $model.text)
-                .font(.body)
-                .textFieldStyle(.plain)
-                .focused($focused)
-                .accessibilityLabel("원문 검색 또는 AI 질문")
-                .accessibilityHint("↑↓로 결과 선택, ⌥Space 미리보기, Return 원문 열기")
+            SearchQueryField(text: $query, isFocused: $focused, allowsAIQuestion: scope != .secret)
+                .frame(minHeight: 22)
+                .accessibilityLabel(scope == .secret ? "Secret 제목 검색" : "통합 검색 또는 AI 질문")
+                .accessibilityHint("↑↓로 기록과 Secret 선택, Return 열기. Secret은 AI로 보내지 않습니다")
                 .worklogHelp("원문 검색", keys: "↑↓ 선택 · ⌥Space 미리보기 · Return 원문")
-            if !model.text.isEmpty {
+            if !query.isEmpty {
                 Button {
-                    model.text = ""
+                    query = ""
                     focused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -280,24 +543,28 @@ import WorkLogCore
     private var resultsHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("검색 결과 \(model.hits.count)건").font(.headline)
+                Text("검색 결과 \(resultIDs.count)건").font(.headline)
                 Spacer(minLength: 0)
-                if model.selectedHit != nil {
+                if isRecordSelected, model.selectedHit != nil {
                     Button { model.togglePreview() } label: { Label("미리보기", systemImage: "doc.text.viewfinder") }
                         .worklogHelp("미리보기", keys: "⌥Space · 결과 행 Space")
                 }
             }
-            if model.isAIAvailable {
+            if scope == .secret || secretSelected {
+                Label("Secret은 AI로 보내지 않습니다", systemImage: "lock.fill")
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+            }
+            if scope != .secret, model.isAIAvailable {
                 HStack {
-                    Button { if model.canAskAI { Task { await model.askAI() } } } label: {
+                    Button(action: askAI) {
                         Label("기록을 바탕으로 AI 답변", systemImage: "sparkles")
                     }
                     .buttonStyle(WorkLogButtonStyle())
-                    .disabled(!model.canAskAI)
+                    .disabled(scope == .secret || secretSelected || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.isAIAvailable || model.isAskingAI || !model.tagIds.isEmpty)
                     .worklogHelp("기록을 바탕으로 AI 답변", keys: "⌘Return")
                     if model.isAskingAI { ProgressView("답변 생성 중…").controlSize(.small) }
                 }
-            } else {
+            } else if scope != .secret {
                 Label("AI 미연결 · 원문 검색은 그대로 사용할 수 있습니다", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -306,19 +573,24 @@ import WorkLogCore
     }
 
     private var emptyResults: some View {
-        let kind: StateView.Kind = model.emptyMessage == nil ? .empty : .noResults
-        let action: (() -> Void)? = model.activeFilterCount > 0 ? { resetFilters() } : nil
-        return StateView(kind: kind,
-            title: model.emptyMessage ?? "찾을 기록을 입력하세요",
-            detail: model.emptyMessage == nil ? "메모·업무·진행 기록·리포트를 검색합니다. ↑↓로 선택하고 Return으로 원문을 여세요."
-                : "철자를 확인하거나 필터를 넓혀보세요.",
-            actionTitle: model.activeFilterCount > 0 ? "필터 초기화" : nil,
-            action: action)
+        let action: (() -> Void)?
+        let actionTitle: String?
+        if scope != .secret && model.activeFilterCount > 0 {
+            action = { resetFilters() }
+            actionTitle = "필터 초기화"
+        } else {
+            action = nil
+            actionTitle = nil
+        }
+        return StateView(kind: query.isEmpty ? StateView.Kind.empty : StateView.Kind.noResults,
+            title: query.isEmpty ? "찾을 기록이나 Secret 제목을 입력하세요" : "일치하는 검색 결과가 없습니다",
+            detail: "철자를 확인하거나 검색 범위·기록 필터를 넓혀보세요. Secret은 잠금 중에도 제목을 검색합니다.",
+            actionTitle: actionTitle, action: action)
     }
 
     private func resultRow(_ hit: SearchHit) -> some View {
-        let selected = model.selectedKey == hit.key
-        return Button { model.select(hit); openSource(hit) } label: {
+        let selected = selectedResult == .record(hit.key)
+        return Button { selectResult(.record(hit.key)); openSource(hit) } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: sourceIcon(hit.sourceType)).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
@@ -330,17 +602,17 @@ import WorkLogCore
                 Image(systemName: "arrow.up.right").accessibilityHidden(true)
             }
             .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundStyle(selected ? Color(nsColor: .alternateSelectedControlTextColor) : WorkLogTheme.text)
-            .background(selected ? Color(nsColor: .selectedContentBackgroundColor) : WorkLogTheme.surface,
+            .foregroundStyle(WorkLogTheme.text)
+            .background(selected ? WorkLogTheme.accentSoft : WorkLogTheme.surface,
                 in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(selected ? Color(nsColor: .selectedContentBackgroundColor) : WorkLogTheme.border,
+                    .strokeBorder(selected ? WorkLogTheme.accent : WorkLogTheme.border,
                         lineWidth: selected ? 2 : 1)
             }
         }
         .buttonStyle(.plain)
-        .focused($focusedResult, equals: hit.key)
+        .focused($focusedResult, equals: SearchResultSelection.record(hit.key))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(([sourceLabel(hit.sourceType)] + [hit.workDate?.iso].compactMap { $0 }
             + hit.projectNames + [hit.snippet]).joined(separator: ", ")))
@@ -365,8 +637,8 @@ import WorkLogCore
 
     private func highlightedSnippet(_ snippet: String) -> AttributedString {
         var text = AttributedString(snippet)
-        let query = model.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty, let range = text.range(of: query, options: [.caseInsensitive]) {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !needle.isEmpty, let range = text.range(of: needle, options: [.caseInsensitive]) {
             text[range].font = .body.bold()
         }
         return text

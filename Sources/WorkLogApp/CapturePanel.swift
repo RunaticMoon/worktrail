@@ -18,6 +18,81 @@ import Observation
     isCaptureActivity(model) ? model.candidates.filter { $0.kind == .project && !$0.isNew } : model.candidates
 }
 
+/// An explicit local key loop keeps mixed SwiftUI/AppKit controls in visual order.
+/// Popovers and the Secret editor retain their native key loops.
+@Observable @MainActor final class CaptureKeyboardNavigation {
+    var current: String?
+    var isPopoverPresented = false
+    @ObservationIgnored var tokenActions: [Bool: () -> Void] = [:]
+    @ObservationIgnored private var stops: [String: (order: Int, focus: () -> Void)] = [:]
+
+    func register(_ id: String, order: Int, focus: @escaping () -> Void) {
+        stops[id] = (order, focus)
+    }
+    func remove(_ id: String) { stops[id] = nil }
+    func focus(_ id: String) {
+        guard let stop = stops[id] else { return }
+        current = id
+        stop.focus()
+    }
+    func move(backwards: Bool) {
+        let ids = stops.keys.sorted {
+            let left = stops[$0]!.order, right = stops[$1]!.order
+            return left == right ? $0 < $1 : left < right
+        }
+        guard !ids.isEmpty else { return }
+        let index = current.flatMap { ids.firstIndex(of: $0) }
+        let next = index.map { ($0 + (backwards ? -1 : 1) + ids.count) % ids.count }
+            ?? (backwards ? ids.count - 1 : 0)
+        focus(ids[next])
+    }
+}
+
+@MainActor private struct CaptureControlFocus: ViewModifier {
+    let id: String
+    let order: Int
+    let action: (() -> Void)?
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
+    @Environment(\.isEnabled) private var isEnabled
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focused($focused)
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(focused ? Color(nsColor: .keyboardFocusIndicatorColor) : .clear, lineWidth: 2)
+                    .padding(-2).allowsHitTesting(false)
+            }
+            .id(id)
+            .onAppear { register() }
+            .onDisappear { navigation.remove(id) }
+            .onChange(of: isEnabled) { _, _ in register() }
+            .onChange(of: order) { _, _ in register() }
+            .onChange(of: focused) { _, value in
+                if value { navigation.current = id }
+            }
+            .onKeyPress(keys: [.return, .space], phases: [.down, .repeat]) { press in
+                guard isEnabled, let action,
+                      (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
+                      press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty else { return .ignored }
+                if press.phase == .down { action() }
+                return .handled
+            }
+    }
+    private func register() {
+        if isEnabled { navigation.register(id, order: order) { focused = true } }
+        else { navigation.remove(id) }
+    }
+}
+
+extension View {
+    @MainActor func captureFocus(_ id: String, order: Int, action: (() -> Void)? = nil) -> some View {
+        modifier(CaptureControlFocus(id: id, order: order, action: action))
+    }
+}
+
 @Observable @MainActor private final class CaptureSaveState {
     var isSaving = false
     var failedDraft: CaptureModel?
@@ -155,6 +230,10 @@ import Observation
 
     private func dismiss(restorePreviousApp: Bool = true) {
         panel.makeFirstResponder(nil)
+        panel.navigation = nil
+        panel.onDate = nil
+        panel.onStatus = nil
+        panel.onBackToActions = nil
         // orderOut alone keeps SecretCaptureView mounted. Replace the root first so
         // onDisappear preserves the encrypted draft and releases the capture owner.
         if let hosting = panel.contentView as? NSHostingView<AnyView> {
@@ -183,6 +262,10 @@ import Observation
     var isSaving: (() -> Bool)?
     /// false means the Secret editor must receive its own Command-Return shortcut.
     var onOrdinarySave: (() -> Bool)?
+    weak var navigation: CaptureKeyboardNavigation?
+    var onDate: (() -> Void)?
+    var onStatus: ((TaskStatus) -> Void)?
+    var onBackToActions: (() -> Void)?
     private var focusRequest = 0
     private var forwardingIME = false
     private var layoutTab: CaptureKind?
@@ -200,34 +283,58 @@ import Observation
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let isTypeShortcut = modifiers == [.command] && [18, 19, 20].contains(event.keyCode)
-        if hasMarkedText && (event.keyCode == 48 || event.keyCode == 53 || isReturn
-                             || event.keyCode == 125 || event.keyCode == 126 || isTypeShortcut) {
-            // Bypass key equivalents as well: a composed Command-Return must not save.
+        // Every custom shortcut defers to marked text, including Option-number and Command-Left.
+        if hasMarkedText {
             forwardingIME = true
             defer { forwardingIME = false }
             firstResponder?.keyDown(with: event)
             return
         }
-        if isSaving?() == true {
-            if event.keyCode == 48 || event.keyCode == 53 || isReturn || isTypeShortcut { return }
-        }
-        // Candidate commands are implemented by the body NSTextView, before the
-        // panel can consume Escape/Tab. A nil highlight leaves native Return intact.
+        if isSaving?() == true { return }
+        if navigation?.isPopoverPresented == true { super.sendEvent(event); return }
         if let editor = firstResponder as? CaptureNSTextView,
            editor.handleCandidateKey(event) { return }
         if isTypeShortcut {
             if !event.isARepeat {
-                onSelectTab?(event.keyCode == 18 ? .memo : event.keyCode == 19 ? .task : .secret)
+                switch event.keyCode {
+                case 18: onSelectTab?(.memo)
+                case 19: onSelectTab?(.task)
+                default: onSelectTab?(.secret)
+                }
             }
             return
         }
-        if event.keyCode == 48 && !modifiers.contains(.command) && !modifiers.contains(.control) {
-            if modifiers.contains(.option) {
-                if modifiers.contains(.shift) { selectPreviousKeyView(nil) }
-                else { selectNextKeyView(nil) }
-            } else if !event.isARepeat {
-                onCycleTab?(modifiers.contains(.shift))
+        if event.keyCode == 48 && (modifiers == [.control] || modifiers == [.control, .shift]) {
+            if !event.isARepeat { onCycleTab?(modifiers.contains(.shift)) }
+            return
+        }
+        if modifiers == [.option], let index = [18, 19, 20, 21, 23].firstIndex(of: event.keyCode),
+           let onStatus {
+            if !event.isARepeat { onStatus(TaskStatus.allCases[index]) }
+            return
+        }
+        if modifiers == [.command], event.keyCode == 2, let onDate {
+            if !event.isARepeat { onDate() }
+            return
+        }
+        if modifiers == [.command], event.keyCode == 123, firstResponder is CaptureNSTextView,
+           let onBackToActions {
+            if !event.isARepeat { onBackToActions() }
+            return
+        }
+        if modifiers == [.command, .shift], event.keyCode == 35 || event.keyCode == 17,
+           let navigation {
+            if !event.isARepeat {
+                navigation.focus(event.keyCode == 35 ? "project" : "tag")
+                // Button activation is supplied by the root shortcut callback below.
+                navigation.tokenActions[event.keyCode == 35]?()
             }
+            return
+        }
+        if event.keyCode == 48 && (modifiers.isEmpty || modifiers == [.shift]) {
+            if let navigation { navigation.move(backwards: modifiers.contains(.shift)) }
+            else if modifiers.contains(.shift) { selectPreviousKeyView(nil) }
+            else { selectNextKeyView(nil) }
             return
         }
         if event.keyCode == 53 && modifiers.isEmpty {
@@ -243,7 +350,7 @@ import Observation
     }
 
     override func cancelOperation(_ sender: Any?) {
-        guard !forwardingIME, !hasMarkedText, isSaving?() != true else { return }
+        guard !forwardingIME, !hasMarkedText, isSaving?() != true, navigation?.isPopoverPresented != true else { return }
         if let editor = firstResponder as? CaptureNSTextView, editor.dismissCandidatesIfShowing() { return }
         onEscape?()
     }
@@ -353,7 +460,9 @@ import Observation
     let secrets: SecretsModel
     let calendar: WorkCalendar
     let saveState: CaptureSaveState
+    @State private var navigation = CaptureKeyboardNavigation()
     @State private var dateExpanded = false
+    @State private var dateBeforeEditing: WorkDate?
     @Environment(\.colorSchemeContrast) private var contrast
     let onSave: () -> Void
     let onConfirmCompletion: () -> Void
@@ -413,7 +522,22 @@ import Observation
                               lineWidth: WorkLogTheme.outlineWidth(for: contrast))
                 .allowsHitTesting(false)
         }
-        .background(CaptureFocusAnchor(tab: session.tab))
+        .environment(navigation)
+        .background(CaptureFocusAnchor(tab: session.tab, navigation: session.isSecretTab ? nil : navigation,
+            onDate: dateHandler, onStatus: statusHandler, onBackToActions: backHandler))
+    }
+
+    private var dateHandler: (() -> Void)? {
+        guard session.activeDraft != nil else { return nil }
+        return { openDate() }
+    }
+    private var statusHandler: ((TaskStatus) -> Void)? {
+        guard session.tab == .task else { return nil }
+        return { status in selectStatus(status) }
+    }
+    private var backHandler: (() -> Void)? {
+        guard session.tab == .task else { return nil }
+        return { backToActions() }
     }
 
     private func workDate(draft: CaptureModel) -> some View {
@@ -428,29 +552,69 @@ import Observation
     @ViewBuilder private func dateContents(draft: CaptureModel, pastLabel: String) -> some View {
         if draft.isPastWorkDate {
             PastDateBadge(label: pastLabel, onReset: draft.resetWorkDateToToday)
+                .captureFocus("today", order: 101, action: draft.resetWorkDateToToday)
         } else if draft.isFutureWorkDate {
             HStack(spacing: 8) {
                 StatusBadge(label: draft.workDateLabel, systemImage: "clock", tone: .warning)
                 Button("오늘로", action: draft.resetWorkDateToToday)
+                    .captureFocus("today", order: 101, action: draft.resetWorkDateToToday)
                     .accessibilityLabel("업무일을 오늘로 변경")
                     .worklogHelp("업무일을 오늘로 변경")
             }
         } else {
             Text(draft.workDateLabel).font(.caption).foregroundStyle(WorkLogTheme.muted)
         }
-        Button { dateExpanded = true } label: {
+        Button(action: openDate) {
             Label("날짜 변경", systemImage: "calendar")
         }
         .font(.caption)
-        .worklogHelp("기록할 업무일 변경")
+        .captureFocus("date", order: 100, action: openDate)
+        .worklogHelp("업무일 변경 · ↑↓ 하루 · T 오늘 · Return 확정 · Esc 취소", keys: "⌘D")
         .popover(isPresented: $dateExpanded, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 12) {
-                WorkDatePicker(title: "업무일", value: Binding(
-                    get: { draft.workDate }, set: { draft.workDate = $0 }), calendar: calendar)
-                Button("완료") { dateExpanded = false }
-            }
-            .padding(16)
+            CaptureDateField(model: draft, calendar: calendar,
+                onConfirm: { dateBeforeEditing = nil; dateExpanded = false },
+                onCancel: cancelDate)
+                .padding(16)
         }
+        .onChange(of: dateExpanded) { _, expanded in
+            navigation.isPopoverPresented = expanded
+            if !expanded {
+                if let original = dateBeforeEditing { draft.workDate = original }
+                dateBeforeEditing = nil
+                DispatchQueue.main.async { navigation.focus("date") }
+            }
+        }
+    }
+
+    private func openDate() {
+        guard let draft = session.activeDraft, !saveState.isSaving,
+              draft.pendingCompletion == nil, !draft.isSubmitting else { return }
+        dateBeforeEditing = draft.workDate
+        navigation.isPopoverPresented = true
+        dateExpanded = true
+    }
+    private func cancelDate() {
+        if let original = dateBeforeEditing { session.activeDraft?.workDate = original }
+        dateBeforeEditing = nil
+        dateExpanded = false
+    }
+    private func selectStatus(_ status: TaskStatus) {
+        let draft = session.taskDraft
+        guard !draft.isSubmitting, draft.pendingCompletion == nil else { return }
+        if draft.taskSelection == .newTask { draft.initialStatus = status }
+        else if draft.availableStatusTargets().contains(status) {
+            draft.statusTarget = status
+            draft.taskAction = .changeStatus
+        } else { NSSound.beep() }
+    }
+    private func backToActions() {
+        let draft = session.taskDraft
+        let key: String
+        if draft.taskSelection == .newTask { key = "detail" }
+        else if draft.taskAction == .addActivity { key = "activity" }
+        else if let target = draft.statusTarget { key = "target:\(target.rawValue)" }
+        else { key = "activity" }
+        navigation.focus(key)
     }
 
     private var header: some View {
@@ -479,6 +643,7 @@ import Observation
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .captureFocus("close", order: 950, action: onDismiss)
             .accessibilityLabel("빠른 입력 닫기")
             .worklogHelp("닫기 (초안 보존)", keys: "Esc")
             .disabled(saveState.isSaving)
@@ -487,8 +652,15 @@ import Observation
 
     private func tab(_ kind: CaptureKind, title: String, symbol: String) -> some View {
         let selected = session.tab == kind
+        let hasDraft = kind == .secret ? secrets.hasUnsavedRows : session.hasDraft(kind)
         return Button { session.select(kind) } label: {
-            Label(title, systemImage: symbol)
+            HStack(spacing: 6) {
+                Label(title, systemImage: symbol)
+                if hasDraft {
+                    Circle().fill(WorkLogTheme.muted).frame(width: 4, height: 4)
+                        .accessibilityHidden(true)
+                }
+            }
                 .font(.callout.weight(selected ? .semibold : .medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
@@ -502,9 +674,11 @@ import Observation
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-        .disabled(saveState.isSaving || session.activeDraft?.pendingCompletion != nil)
         .worklogHelp("\(title) 입력", keys: kind == .memo ? "⌘1" : kind == .task ? "⌘2" : "⌘3")
-        .accessibilityLabel(title)
+        .captureFocus("tab:\(kind.rawValue)", order: 960 + (kind == .memo ? 0 : kind == .task ? 1 : 2),
+                      action: { session.select(kind) })
+        .disabled(saveState.isSaving || session.activeDraft?.pendingCompletion != nil)
+        .accessibilityLabel(hasDraft ? "\(title), 초안 있음" : title)
         .accessibilityValue(selected ? "선택됨" : "")
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
@@ -513,8 +687,10 @@ import Observation
         VStack(alignment: .leading, spacing: 8) {
             if saveState.failedDraft === draft {
                 ScrollView {
-                    RecoveryNotice(failed: "저장하지 못했습니다", preserved: "입력은 그대로 있습니다",
-                                   retryTitle: "다시 저장", retry: onSave)
+                    Text("저장하지 못했습니다 · 입력은 그대로 있습니다")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Button("다시 저장", action: onSave)
+                        .captureFocus("retrySave", order: 810, action: onSave)
                     if let error = draft.errorMessage {
                         Text(error).font(.caption).foregroundStyle(WorkLogTheme.muted)
                     }
@@ -546,19 +722,15 @@ import Observation
     }
 
     private var keyboardHints: some View {
-        HStack(spacing: 6) {
-            Keycap("↩").accessibilityHidden(true)
-            Text("줄바꿈")
-            Keycap("⌘↩").accessibilityHidden(true)
-            Text("저장")
-            Keycap("Esc").accessibilityHidden(true)
-            Text("닫기 (초안 보존)")
-        }
-        .font(.caption)
-        .foregroundStyle(WorkLogTheme.muted)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Return 줄바꿈, Command Return 저장, Escape 닫기. 닫아도 초안은 보존됩니다.")
-        .worklogHelp("Tab 유형 전환 · Option Tab 필드 이동 · 업무 목록 ↑↓ 선택 / ←→ 단계 이동")
+        Text(session.tab == .task
+             ? "⌘1–3 유형 · Tab 이동 · ⌥1–5 상태 · ⌘D 날짜 · ⌘↩ 저장 · Esc 닫기"
+             : "⌘1–3 유형 · Tab 이동 · ⌘D 날짜 · ⌘↩ 저장 · Esc 닫기")
+            .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(session.tab == .task
+                ? "Command 1, 2, 3 유형. Tab 이동. Option 1부터 5 상태. Command D 날짜. Command Return 저장. Escape 닫기, 초안 보존."
+                : "Command 1, 2, 3 유형. Tab 이동. Command D 날짜. Command Return 저장. Escape 닫기, 초안 보존.")
+            .worklogHelp("⌃Tab 유형 순환 · 본문 Return 줄바꿈 · ⌘← 동작으로 · ⌘⇧P 프로젝트 · ⌘⇧T 태그")
     }
 
     private func saveButton(draft: CaptureModel) -> some View {
@@ -573,6 +745,7 @@ import Observation
             }
         }
         .buttonStyle(WorkLogButtonStyle(prominent: true))
+        .captureFocus("save", order: 800, action: onSave)
         .disabled(saveState.isSaving || draft.isSubmitting || draft.pendingCompletion != nil)
         .accessibilityLabel("저장하고 이전 앱으로 돌아가기")
         .worklogHelp("저장하고 이전 앱으로 돌아가기", keys: "⌘Return")
@@ -593,12 +766,32 @@ import Observation
 /// Refocus after a tab switch, including switches made with the tab buttons.
 @MainActor private struct CaptureFocusAnchor: NSViewRepresentable {
     let tab: CaptureKind
-    func makeNSView(context: Context) -> NSView { NSView() }
+    let navigation: CaptureKeyboardNavigation?
+    let onDate: (() -> Void)?
+    let onStatus: ((TaskStatus) -> Void)?
+    let onBackToActions: (() -> Void)?
+    func makeNSView(context: Context) -> NSView { AnchorView() }
     func updateNSView(_ view: NSView, context: Context) {
-        guard context.coordinator.tab != tab || context.coordinator.window !== view.window else { return }
-        context.coordinator.tab = tab
-        context.coordinator.window = view.window
-        (view.window as? KeyboardPanel)?.requestDefaultFocus(for: tab)
+        let attach = { [weak view] in
+            guard let view, let panel = view.window as? KeyboardPanel else { return }
+            panel.navigation = navigation
+            panel.onDate = onDate
+            panel.onStatus = onStatus
+            panel.onBackToActions = onBackToActions
+            guard context.coordinator.tab != tab || context.coordinator.window !== panel else { return }
+            context.coordinator.tab = tab
+            context.coordinator.window = panel
+            panel.requestDefaultFocus(for: tab)
+        }
+        (view as? AnchorView)?.attach = attach
+        attach()
+    }
+    private final class AnchorView: NSView {
+        var attach: (() -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in self?.attach?() }
+        }
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator {
@@ -611,11 +804,9 @@ import Observation
     @Bindable var model: CaptureModel
     let onConfirmCompletion: () -> Void
     @State private var highlighted = "new"
-    @State private var visibleColumn = 0
-    @State private var actionsExpanded = false
     @State private var trackingExpanded = false
     @Environment(\.colorSchemeContrast) private var contrast
-    @FocusState private var focusedRow: String?
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
 
     private var keys: [String] { ["new"] + model.filteredTasks.map { "task:\($0.id)" } }
     private var isLocked: Bool { model.isSubmitting || model.pendingCompletion != nil }
@@ -636,13 +827,14 @@ import Observation
         return name.isEmpty ? "새 업무 만들기" : "‘\(name)’ 새 업무 만들기"
     }
     private var actionKeys: [String] {
-        if isNewTask {
-            return ["detail"] + (actionsExpanded ? TaskStatus.allCases.map { "initial:\($0.rawValue)" } : [])
-        }
-        return ["activity"] + (actionsExpanded ? ["status"] : [])
+        if isNewTask { return ["detail"] + TaskStatus.allCases.map { "initial:\($0.rawValue)" } }
+        return ["activity"] + TaskStatus.allCases.map { "target:\($0.rawValue)" }
     }
     private var selectedActionKey: String {
-        isNewTask ? "detail" : (model.taskAction == .addActivity ? "activity" : "status")
+        if isNewTask { return "detail" }
+        if model.taskAction == .addActivity { return "activity" }
+        if let target = model.statusTarget { return "target:\(target.rawValue)" }
+        return "activity"
     }
 
     var body: some View {
@@ -656,24 +848,22 @@ import Observation
                     detailColumn.padding(12).frame(maxWidth: .infinity)
                 }
             } else {
-                // A constrained screen uses the same three columns one at a time,
-                // preserving query, selection and draft when crossing the threshold.
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        stageButton(0, "업무 선택")
-                        stageButton(1, "동작")
-                        stageButton(2, model.pendingCompletion == nil ? "내용" : "완료 확인")
-                    }
-                    .padding(.horizontal, 12).padding(.top, 8)
-                    Group {
-                        switch visibleColumn {
-                        case 1: actionColumn
-                        case 2: detailColumn
-                        default: taskColumn
+                // Keep every control mounted in a short window: the key loop can
+                // cross columns without requiring a mouse-only stage switch.
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            taskColumn.frame(minHeight: 220)
+                            Divider()
+                            actionColumn.frame(minHeight: 260)
+                            Divider()
+                            detailColumn.frame(minHeight: 280)
                         }
+                        .padding(12)
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .onChange(of: navigation.current) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
                 }
             }
         }
@@ -686,40 +876,12 @@ import Observation
         }
         .onAppear {
             highlighted = selectedTaskKey
-            actionsExpanded = model.taskAction == .changeStatus && !isNewTask
-            if model.pendingCompletion != nil { visibleColumn = 2 }
-        }
-        .onChange(of: focusedRow) { _, row in
-            guard let row else { return }
-            if row == "new" || row.hasPrefix("task:") { visibleColumn = 0 }
-            else if row.hasPrefix("target:") || row == "cancelCompletion" { visibleColumn = 2 }
-            else { visibleColumn = 1 }
         }
         .onChange(of: model.pendingCompletion != nil) { _, pending in
-            if pending { visibleColumn = 2; focusedRow = "cancelCompletion" }
-        }
-    }
-
-    private func stageButton(_ column: Int, _ title: String) -> some View {
-        Button {
-            visibleColumn = column
-            switch column {
-            case 0: focusSearch()
-            case 1: focusedRow = selectedActionKey
-            default: focusDetail()
+            if pending {
+                DispatchQueue.main.async { navigation.focus("cancelCompletion") }
             }
-        } label: {
-            HStack(spacing: 6) {
-                Text(title)
-                if visibleColumn == column { Image(systemName: "checkmark").accessibilityHidden(true) }
-            }
-            .font(.callout)
-            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(WorkLogButtonStyle(prominent: visibleColumn == column))
-        .accessibilityValue(visibleColumn == column ? "선택됨" : "")
-        .worklogHelp("\(title) 단계로 이동")
-        .disabled(isLocked)
     }
 
     private var columnDivider: some View {
@@ -729,7 +891,7 @@ import Observation
     private func stepHeader(_ number: String, _ title: String) -> some View {
         HStack(spacing: 6) {
             Text(number).font(.caption).accessibilityHidden(true)
-                .foregroundStyle(WorkLogTheme.accent)
+                .foregroundStyle(WorkLogTheme.muted)
             Text(title).font(.callout.weight(.medium))
         }
         .padding(.bottom, 3)
@@ -759,7 +921,7 @@ import Observation
             Rectangle().fill(WorkLogTheme.border.opacity(0.7)).frame(height: 0.5)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    VStack(spacing: 2) {
                         ForEach(model.filteredTasks) { task in
                             taskRow(key: "task:\(task.id)", title: task.title,
                                     status: task.cachedStatus?.koreanLabel ?? "상태 없음")
@@ -773,6 +935,9 @@ import Observation
                     }
                 }
                 .onChange(of: highlighted) { _, key in proxy.scrollTo(key) }
+                .onChange(of: navigation.current) { _, id in
+                    if let id { proxy.scrollTo(id) }
+                }
             }
             Text("↑↓ 선택 · → 다음")
                 .font(.caption).foregroundStyle(WorkLogTheme.muted)
@@ -789,7 +954,9 @@ import Observation
                        selected: selectedTaskKey == key,
                        highlighted: highlighted == key && selectedTaskKey != key, forward: true)
         }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
+        .buttonStyle(.plain)
+        .captureFocus(key, order: 300 + (keys.firstIndex(of: key) ?? 0),
+                      action: { chooseTask(key, advance: true) })
         .worklogHelp("업무 선택 후 동작으로 이동", keys: "Return / →")
         .accessibilityLabel(status.map { "\(title), \($0)" } ?? title)
         .accessibilityValue(selectedTaskKey == key ? "선택됨" : "")
@@ -811,33 +978,37 @@ import Observation
     private var actionColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             stepHeader("02", "동작 선택")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if isNewTask {
-                        Toggle("완료한 일로 등록", isOn: $model.registersAsCompleted)
-                            .font(.callout)
-                            .worklogHelp("새 업무를 처음부터 완료 상태로 등록")
-                        actionRow(key: "detail", title: "내용 입력", symbol: "square.and.pencil")
-                    } else {
-                        actionRow(key: "activity", title: "진행 기록 추가", symbol: "text.badge.plus")
-                    }
-                    SectionDisclosure(title: isNewTask ? "등록 상태" : "상태 변경",
-                                      summary: isNewTask ? model.initialStatus.koreanLabel : "Task 전체 상태 변경",
-                                      isExpanded: $actionsExpanded) {
-                        VStack(spacing: 4) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        actionRow(key: isNewTask ? "detail" : "activity",
+                                  title: isNewTask ? "내용 입력" : "진행 기록 추가",
+                                  symbol: "square.and.pencil")
+                        Text(isNewTask ? "등록 상태" : "상태 변경")
+                            .font(.caption.weight(.medium)).foregroundStyle(WorkLogTheme.muted)
+                            .padding(.top, 4)
+                        ForEach(TaskStatus.allCases, id: \.self) { status in
                             if isNewTask {
-                                ForEach(TaskStatus.allCases, id: \.self) { status in
-                                    actionRow(key: "initial:\(status.rawValue)", title: status.koreanLabel,
-                                              symbol: statusSymbol(status))
-                                }
+                                actionRow(key: "initial:\(status.rawValue)", title: status.koreanLabel,
+                                          symbol: statusSymbol(status))
                             } else {
-                                actionRow(key: "status", title: "Task 전체 상태 변경", symbol: "arrow.triangle.2.circlepath")
+                                targetStatusRow(status)
                             }
                         }
+                        if isNewTask {
+                            Text("‘완료’를 고르면 완료한 일로 등록합니다.")
+                                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
+                    .padding(3)
+                }
+                .onChange(of: navigation.current) { _, id in
+                    if let id { proxy.scrollTo(id) }
                 }
             }
-            Text("← 이전 · → 내용").font(.caption).foregroundStyle(WorkLogTheme.muted)
+            Text("↑↓ 이동 · Space 선택 · → 내용")
+                .font(.caption).foregroundStyle(WorkLogTheme.muted)
         }
         .disabled(isLocked)
         .accessibilityElement(children: .contain)
@@ -845,21 +1016,27 @@ import Observation
     }
 
     private func actionRow(key: String, title: String, symbol: String) -> some View {
-        Button { chooseAction(key); focusDetail() } label: {
-            browserRow(title: title, symbol: symbol, selected: selectedActionKey == key || (isNewTask && key == "initial:\(model.initialStatus.rawValue)"), forward: true)
+        let selected = key.hasPrefix("initial:")
+            ? key == "initial:\(model.initialStatus.rawValue)" : selectedActionKey == key
+        return Button { chooseAction(key) } label: {
+            browserRow(title: title, symbol: symbol, selected: selected,
+                       highlighted: navigation.current == key)
         }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
-        .worklogHelp("동작 선택 후 내용으로 이동", keys: "Return / →")
-        .accessibilityValue(selectedActionKey == key || (isNewTask && key == "initial:\(model.initialStatus.rawValue)") ? "선택됨" : "")
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
+        .buttonStyle(.plain)
+        .captureFocus(key, order: 400 + (actionKeys.firstIndex(of: key) ?? 0),
+                      action: { chooseAction(key) })
+        .worklogHelp("선택 · → 본문", keys: "Space / Return")
+        .accessibilityValue(selected ? "선택됨" : "선택 안 됨")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
             guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
                   !isLocked else { return .ignored }
             if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
             switch press.key {
             case .upArrow: moveAction(-1)
             case .downArrow: moveAction(1)
-            case .leftArrow: focusedRow = keys.contains(selectedTaskKey) ? selectedTaskKey : "new"
-            case .rightArrow, .return: chooseAction(key); focusDetail()
+            case .leftArrow: navigation.focus(keys.contains(selectedTaskKey) ? selectedTaskKey : "new")
+            case .rightArrow: chooseAction(key); focusDetail()
             default: return .ignored
             }
             return .handled
@@ -869,30 +1046,56 @@ import Observation
     private var detailColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             stepHeader("03", model.pendingCompletion != nil ? "완료 확인" : "내용 및 저장")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if !isNewTask {
-                        Text(selectedTaskTitle)
-                            .font(.callout.weight(.medium)).lineLimit(2)
-                            .foregroundStyle(WorkLogTheme.muted)
-                    }
-                    if isNewTask {
-                        CaptureDraftEditor(model: model, label: "첫 줄은 업무명, 다음 줄은 진행 내용", showsTokens: true)
-                        SectionDisclosure(title: "프로젝트별 상태 관리",
-                                          summary: model.projectTrackingMode == .perProject ? "프로젝트별 추적" : "공통 상태",
-                                          isExpanded: $trackingExpanded) {
-                            Toggle("프로젝트별로 추적", isOn: Binding(
-                                get: { model.projectTrackingMode == .perProject },
-                                set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
-                                .font(.callout).disabled(model.isSubmitting)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !isNewTask {
+                            Text(selectedTaskTitle)
+                                .font(.callout.weight(.medium)).lineLimit(2)
+                                .foregroundStyle(WorkLogTheme.muted)
                         }
-                    } else if model.taskAction == .addActivity {
-                        CaptureDraftEditor(model: model, label: "진행 내용", showsTokens: true)
-                    } else {
-                        statusContent
+                        if isNewTask {
+                            CaptureDraftEditor(model: model, label: "첫 줄은 업무명, 다음 줄은 진행 내용", showsTokens: true)
+                            CaptureDisclosure(title: "프로젝트별 상태 관리", id: "tracking", order: 700,
+                                              summary: model.projectTrackingMode == .perProject ? "프로젝트별 추적" : "공통 상태",
+                                              isExpanded: $trackingExpanded) {
+                                Toggle("프로젝트별로 추적", isOn: Binding(
+                                    get: { model.projectTrackingMode == .perProject },
+                                    set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
+                                    .font(.callout)
+                                    .captureFocus("trackingToggle", order: 710, action: {
+                                        model.projectTrackingMode = model.projectTrackingMode == .perProject ? .shared : .perProject
+                                    })
+                                    .disabled(model.isSubmitting)
+                                    .onKeyPress(keys: [.upArrow], phases: .down) { press in
+                                        guard press.modifiers.isEmpty else { return .ignored }
+                                        navigation.focus("tracking"); return .handled
+                                    }
+                            }
+                        } else if model.taskAction == .addActivity {
+                            CaptureDraftEditor(model: model, label: "진행 내용", showsTokens: true)
+                        } else if model.pendingCompletion != nil {
+                            statusContent
+                        } else {
+                            Text("전체 업무 상태를 변경합니다. 내용을 입력하려면 ‘진행 기록 추가’를 고르세요.")
+                                .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("상태 선택 후 ⌘Return으로 저장")
+                                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                                .captureFocus("statusDetail", order: 500)
+                                .onKeyPress(keys: [.leftArrow], phases: .down) { press in
+                                    guard press.modifiers.isEmpty else { return .ignored }
+                                    navigation.focus(selectedActionKey); return .handled
+                                }
+                        }
                     }
+                    .padding(4)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(1)
+                .onChange(of: navigation.current) { _, id in
+                    if let id { proxy.scrollTo(id) }
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -917,49 +1120,43 @@ import Observation
                         model.cancelCompletion()
                         focusDetail()
                     }
-                    .focused($focusedRow, equals: "cancelCompletion")
+                    .captureFocus("cancelCompletion", order: 500, action: { model.cancelCompletion(); focusDetail() })
                     .worklogHelp("완료를 취소하고 입력 보존")
                     .accessibilityLabel("완료 확인 취소")
                     Button("그래도 완료", action: onConfirmCompletion)
+                        .captureFocus("confirmCompletion", order: 501, action: onConfirmCompletion)
                         .worklogHelp("남은 항목을 확인하고 Task 전체 완료")
                         .buttonStyle(WorkLogButtonStyle(prominent: true))
                         .disabled(model.isSubmitting)
                 }
             }
-        } else {
-            Text("변경할 상태").font(.callout.weight(.medium))
-            VStack(spacing: 3) {
-                ForEach(model.availableStatusTargets(), id: \.self) { status in
-                    targetStatusRow(status)
-                }
-            }
-            if model.availableStatusTargets().isEmpty {
-                Text("현재 상태에서 변경할 수 있는 상태가 없습니다.")
-                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
-            } else {
-                Text("상태를 고른 뒤 ⌘Return으로 저장하세요.")
-                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
-            }
         }
     }
 
     private func targetStatusRow(_ status: TaskStatus) -> some View {
-        Button { model.statusTarget = status } label: {
-            browserRow(title: status.koreanLabel, symbol: statusSymbol(status),
-                       selected: model.statusTarget == status)
+        let key = "target:\(status.rawValue)"
+        let allowed = model.availableStatusTargets().contains(status)
+        return Button { chooseAction(key) } label: {
+            browserRow(title: status.koreanLabel, subtitle: allowed ? nil : "변경 불가",
+                       symbol: statusSymbol(status),
+                       selected: model.taskAction == .changeStatus && model.statusTarget == status,
+                       highlighted: navigation.current == key)
         }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: "target:\(status.rawValue)")
-        .disabled(model.isSubmitting)
-        .accessibilityValue(model.statusTarget == status ? "선택됨" : "")
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .return], phases: [.down, .repeat]) { press in
+        .buttonStyle(.plain)
+        // Unavailable targets remain reachable so ↑↓ passes every status and announces why.
+        .captureFocus(key, order: 400 + (actionKeys.firstIndex(of: key) ?? 0), action: { chooseAction(key) })
+        .accessibilityValue(allowed ? (model.taskAction == .changeStatus && model.statusTarget == status ? "선택됨" : "선택 안 됨") : "현재 상태에서 변경 불가")
+        .accessibilityAddTraits(model.taskAction == .changeStatus && model.statusTarget == status ? [.isSelected] : [])
+        .worklogHelp("Task 전체 상태 선택", keys: "⌥\((TaskStatus.allCases.firstIndex(of: status) ?? 0) + 1)")
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
             guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
                   !isLocked else { return .ignored }
             if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
             switch press.key {
-            case .upArrow: moveTarget(-1, from: status)
-            case .downArrow: moveTarget(1, from: status)
-            case .leftArrow: focusedRow = selectedActionKey
-            case .return: model.statusTarget = status
+            case .upArrow: moveAction(-1)
+            case .downArrow: moveAction(1)
+            case .leftArrow: navigation.focus(keys.contains(selectedTaskKey) ? selectedTaskKey : "new")
+            case .rightArrow: chooseAction(key); focusDetail()
             default: return .ignored
             }
             return .handled
@@ -998,13 +1195,7 @@ import Observation
     }
 
     private func statusSymbol(_ status: TaskStatus) -> String {
-        switch status {
-        case .planned: return "circle.dashed"
-        case .inProgress: return "circle.lefthalf.filled"
-        case .onHold: return "pause.circle"
-        case .completed: return "checkmark.circle"
-        case .cancelled: return "xmark.circle"
-        }
+        status.badgeSymbol
     }
 
     private func moveTask(_ delta: Int, focusRow: Bool) {
@@ -1012,7 +1203,7 @@ import Observation
         let index = rows.firstIndex(of: highlighted) ?? 0
         let key = rows[min(max(index + delta, 0), rows.count - 1)]
         chooseTask(key, advance: false)
-        if focusRow { focusedRow = key }
+        if focusRow { navigation.focus(key) }
     }
 
     private func chooseTask(_ key: String, advance: Bool) {
@@ -1027,13 +1218,12 @@ import Observation
             if model.taskSelection != .existing(task.id) {
                 model.statusTarget = nil
                 model.taskAction = .addActivity
-                actionsExpanded = false
                 // A project scope from another task must not leak into this task.
                 for id in model.selectedProjectIds { model.removeProject(id) }
             }
             model.taskSelection = .existing(task.id)
         }
-        if advance { visibleColumn = 1; focusedRow = selectedActionKey }
+        if advance { navigation.focus(selectedActionKey) }
     }
 
     private func chooseAction(_ key: String) {
@@ -1041,43 +1231,30 @@ import Observation
         if isNewTask, let status = TaskStatus.allCases.first(where: { "initial:\($0.rawValue)" == key }) {
             model.initialStatus = status
         } else if !isNewTask {
-            model.taskAction = key == "status" ? .changeStatus : .addActivity
+            if key == "activity" { model.taskAction = .addActivity }
+            else if let status = model.availableStatusTargets().first(where: { "target:\($0.rawValue)" == key }) {
+                model.statusTarget = status
+                model.taskAction = .changeStatus
+            } else { NSSound.beep() }
         }
     }
 
     private func moveAction(_ delta: Int) {
         let rows = actionKeys
-        let index = rows.firstIndex(of: focusedRow ?? selectedActionKey) ?? 0
-        let key = rows[min(max(index + delta, 0), rows.count - 1)]
-        chooseAction(key)
-        focusedRow = key
-    }
-
-    private func moveTarget(_ delta: Int, from status: TaskStatus) {
-        let targets = model.availableStatusTargets()
-        guard !targets.isEmpty else { return }
-        let index = targets.firstIndex(of: status) ?? 0
-        let target = targets[min(max(index + delta, 0), targets.count - 1)]
-        model.statusTarget = target
-        focusedRow = "target:\(target.rawValue)"
+        let index = rows.firstIndex(of: navigation.current ?? selectedActionKey) ?? 0
+        navigation.focus(rows[min(max(index + delta, 0), rows.count - 1)])
     }
 
     private func focusDetail() {
-        visibleColumn = 2
         if !isNewTask && model.taskAction == .changeStatus {
-            if let target = model.statusTarget ?? model.availableStatusTargets().first {
-                focusedRow = "target:\(target.rawValue)"
-            }
-        } else {
-            focusedRow = nil
-            (NSApp.keyWindow as? KeyboardPanel)?.requestDraftFocus()
+            DispatchQueue.main.async { navigation.focus("statusDetail") }
+            return
         }
+        DispatchQueue.main.async { navigation.focus("body") }
     }
 
     private func focusSearch() {
-        visibleColumn = 0
-        focusedRow = nil
-        (NSApp.keyWindow as? KeyboardPanel)?.requestDefaultFocus(for: .task)
+        navigation.focus("search")
     }
 }
 
@@ -1095,6 +1272,7 @@ import Observation
     }
 
     @State private var relatedExpanded = false
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
     @Environment(\.colorSchemeContrast) private var contrast
     private var isActivity: Bool { isCaptureActivity(model) }
 
@@ -1113,12 +1291,13 @@ import Observation
                         .accessibilityHidden(true)
                 }
             }
+            .id("body")
             .frame(height: model.kind == .task ? 138 : 160)
             .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 7))
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
-                              lineWidth: WorkLogTheme.outlineWidth(for: contrast)))
+                .strokeBorder(navigation.current == "body" ? Color(nsColor: .keyboardFocusIndicatorColor) : WorkLogTheme.outlineColor(for: contrast),
+                              lineWidth: navigation.current == "body" ? 2 : WorkLogTheme.outlineWidth(for: contrast)))
             if !captureEditorCandidates(model).isEmpty {
                 candidateList
             }
@@ -1138,23 +1317,30 @@ import Observation
                 if !model.selectedProjectIds.isEmpty || (!isActivity && !model.selectedTagIds.isEmpty) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 6) {
                         ForEach(model.selectedProjectIds, id: \.self) { id in
-                            ChipView(label: "@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")",
-                                     onRemove: { model.removeProject(id) })
+                            Button { model.removeProject(id) } label: {
+                                Label("@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")", systemImage: "xmark.circle")
+                            }
+                            .captureFocus("removeProject:\(id)", order: 530 + (model.selectedProjectIds.firstIndex(of: id) ?? 0),
+                                          action: { model.removeProject(id) })
+                            .accessibilityLabel("\(model.projects.first { $0.id == id }?.name ?? "프로젝트") 연결 제거")
                         }
                         if !isActivity {
                             ForEach(model.selectedTagIds, id: \.self) { id in
-                                ChipView(label: "#\(model.tags.first { $0.id == id }?.name ?? "태그")",
-                                         onRemove: { model.removeTag(id) })
+                                Button { model.removeTag(id) } label: {
+                                    Label("#\(model.tags.first { $0.id == id }?.name ?? "태그")", systemImage: "xmark.circle")
+                                }
+                                .captureFocus("removeTag:\(id)", order: 560 + (model.selectedTagIds.firstIndex(of: id) ?? 0),
+                                              action: { model.removeTag(id) })
+                                .accessibilityLabel("\(model.tags.first { $0.id == id }?.name ?? "태그") 연결 제거")
                             }
                         }
                     }
                     .accessibilityLabel("선택된 프로젝트와 태그")
                 }
             }
-            SectionDisclosure(title: "관련 기록", summary: model.relatedRecords.isEmpty ? "선택 사항" : "\(model.relatedRecords.count)개 연결",
+            CaptureDisclosure(title: "관련 기록", id: "related", order: 600, summary: model.relatedRecords.isEmpty ? "선택 사항" : "\(model.relatedRecords.count)개 연결",
                               isExpanded: $relatedExpanded) {
-                RelatedRecordPicker(selection: $model.relatedRecords, search: model.searchRelated,
-                                    excluding: excluding, isDisabled: model.isSubmitting)
+                CaptureRelatedRecords(model: model, excluding: excluding)
             }
         }
         .disabled(model.isSubmitting)
@@ -1163,7 +1349,7 @@ import Observation
     private var candidateList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(captureEditorCandidates(model)) { candidate in
                         let highlighted = candidate.id == model.highlightedCandidate?.id
                         Button {
@@ -1189,16 +1375,30 @@ import Observation
                                               lineWidth: WorkLogTheme.outlineWidth(for: contrast)))
                         }
                         .buttonStyle(.plain)
+                        .captureFocus("candidate:\(candidate.id)",
+                            order: 501 + (captureEditorCandidates(model).firstIndex(of: candidate) ?? 0), action: {
+                                model.select(candidate)
+                                restoreEditorFocus()
+                            })
+                        .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat]) { press in
+                            guard press.modifiers.isEmpty else { return .ignored }
+                            model.moveCandidateHighlight(by: press.key == .upArrow ? -1 : 1)
+                            if let id = model.highlightedCandidate?.id { navigation.focus("candidate:\(id)") }
+                            return .handled
+                        }
                         .accessibilityValue(highlighted ? "강조됨" : "")
                         .worklogHelp("자동완성 선택", keys: "↑↓ / Return / Tab")
-                        .id(candidate.id)
+                        .id("candidate:\(candidate.id)")
                     }
                 }
             }
             .frame(maxHeight: 104)
             .accessibilityLabel("자동완성 후보, 위아래 이동, Return 또는 Tab 선택, Escape 후보 닫기")
-            .onChange(of: model.highlightedCandidate?.id) { _, id in
+            .onChange(of: navigation.current) { _, id in
                 if let id { proxy.scrollTo(id) }
+            }
+            .onChange(of: model.highlightedCandidate?.id) { _, id in
+                if let id { proxy.scrollTo("candidate:\(id)") }
             }
         }
     }
@@ -1212,9 +1412,291 @@ import Observation
 
 }
 
+/// Local disclosure headers are real buttons with a visible keyboard focus ring.
+@MainActor private struct CaptureDisclosure<Content: View>: View {
+    let title: String
+    let id: String
+    let order: Int
+    let summary: String
+    @Binding var isExpanded: Bool
+    let content: () -> Content
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
+
+    init(title: String, id: String, order: Int, summary: String,
+         isExpanded: Binding<Bool>, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title; self.id = id; self.order = order; self.summary = summary
+        self._isExpanded = isExpanded; self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { isExpanded.toggle() } label: {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.callout.weight(.medium))
+                        if !isExpanded {
+                            Text(summary).font(.caption).foregroundStyle(WorkLogTheme.muted)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .captureFocus(id, order: order, action: { isExpanded.toggle() })
+            .accessibilityLabel(title)
+            .accessibilityValue(isExpanded ? "펼침" : "접힘, \(summary)")
+            .worklogHelp("펼침/접힘", keys: "Space")
+            .onKeyPress(keys: [.downArrow, .upArrow], phases: .down) { press in
+                guard press.modifiers.isEmpty else { return .ignored }
+                if press.key == .downArrow && !isExpanded { isExpanded = true }
+                else { navigation.move(backwards: press.key == .upArrow) }
+                return .handled
+            }
+            if isExpanded { content().padding(.leading, 4) }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Inline recent/search rows avoid a second mouse-only control inside the disclosure.
+@MainActor private struct CaptureRelatedRecords: View {
+    @Bindable var model: CaptureModel
+    let excluding: Set<RecordReference>
+    @State private var query = ""
+    @State private var candidates: [RelatedRecordCandidate] = []
+    @State private var failed = false
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
+    @FocusState private var searchFocused: Bool
+
+    private func key(_ reference: RecordReference) -> String {
+        "related:\(reference.kind.rawValue):\(reference.id)"
+    }
+    private var rows: [RelatedRecordCandidate] {
+        var seen = Set<RecordReference>()
+        return (model.relatedRecords + candidates).filter {
+            !excluding.contains($0.reference) && seen.insert($0.reference).inserted
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("관련 기록 검색", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
+                .accessibilityLabel("관련 기록 검색")
+                .id("relatedSearch")
+                .onAppear {
+                    navigation.register("relatedSearch", order: 610) { searchFocused = true }
+                    reload()
+                }
+                .onDisappear { navigation.remove("relatedSearch") }
+                .onChange(of: searchFocused) { _, focused in
+                    if focused { navigation.current = "relatedSearch" }
+                }
+                .onChange(of: query) { _, _ in reload() }
+                .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                    guard canHandle(press) else { return .ignored }
+                    if press.key == .upArrow { navigation.focus("related") }
+                    else if let first = rows.first { navigation.focus(key(first.reference)) }
+                    return .handled
+                }
+            if failed {
+                Text("관련 기록을 불러오지 못했습니다. 입력은 보존됩니다.")
+                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                Button("다시 시도", action: reload)
+                    .captureFocus("relatedRetry", order: 611, action: reload)
+            } else if rows.isEmpty {
+                Text("일치하는 기록이 없습니다. 검색어를 바꿔보세요.")
+                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            }
+            ForEach(rows, id: \.reference) { candidate in
+                let selected = model.relatedRecords.contains { $0.reference == candidate.reference }
+                Button { toggle(candidate) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: selected ? "checkmark.square" : "square").accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(candidate.title).font(.callout)
+                            if let subtitle = candidate.subtitle {
+                                Text(subtitle).font(.caption).foregroundStyle(WorkLogTheme.muted)
+                            }
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(selected ? WorkLogTheme.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .captureFocus(key(candidate.reference), order: 620 + (rows.firstIndex(of: candidate) ?? 0),
+                              action: { toggle(candidate) })
+                .accessibilityValue(selected ? "선택됨" : "선택 안 됨")
+                .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat]) { press in
+                    guard canHandle(press) else { return .ignored }
+                    let index = rows.firstIndex(of: candidate) ?? 0
+                    if press.key == .upArrow && index == 0 { navigation.focus("relatedSearch") }
+                    else {
+                        let next = min(max(index + (press.key == .upArrow ? -1 : 1), 0), rows.count - 1)
+                        navigation.focus(key(rows[next].reference))
+                    }
+                    return .handled
+                }
+            }
+            Text("↑↓ 이동 · Space / Return 연결·해제")
+                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+        }
+    }
+    private func canHandle(_ press: KeyPress) -> Bool {
+        !model.isSubmitting && press.modifiers.isEmpty &&
+            (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true
+    }
+    private func reload() {
+        do { candidates = try model.searchRelated(query); failed = false }
+        catch { candidates = []; failed = true }
+    }
+    private func toggle(_ candidate: RelatedRecordCandidate) {
+        guard !model.isSubmitting else { return }
+        if model.relatedRecords.contains(where: { $0.reference == candidate.reference }) {
+            model.relatedRecords.removeAll { $0.reference == candidate.reference }
+        } else { model.relatedRecords.append(candidate) }
+    }
+}
+
+/// Edits a WorkDate using the injected calendar/Clock-backed model, never Date().
+@MainActor private struct CaptureDateField: View {
+    @Bindable var model: CaptureModel
+    let calendar: WorkCalendar
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    @State private var invalidDate = false
+    @State private var dateText: String
+
+    init(model: CaptureModel, calendar: WorkCalendar, onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.model = model; self.calendar = calendar
+        self.onConfirm = onConfirm; self.onCancel = onCancel
+        self._dateText = State(initialValue: model.workDate.iso)
+    }
+    private func confirm() {
+        guard let date = WorkDate(dateText) else { invalidDate = true; return }
+        model.workDate = date
+        onConfirm()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("업무일").font(.headline)
+            CaptureDateTextField(text: $dateText, model: model, calendar: calendar,
+                onConfirm: confirm, onCancel: onCancel,
+                onInvalid: { invalidDate = true })
+                .frame(width: 220, height: 28)
+            if invalidDate {
+                Text("날짜를 YYYY-MM-DD 형식으로 입력하세요.")
+                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            }
+            WorkDatePicker(title: "달력", value: Binding(
+                get: { WorkDate(dateText) ?? model.workDate },
+                set: { dateText = $0.iso }), calendar: calendar)
+            Text("↑↓ 하루 이동 · T 오늘 · Return 확정 · Esc 취소")
+                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            HStack {
+                Button("취소", action: onCancel)
+                Button("완료", action: confirm)
+            }
+        }
+        .onChange(of: dateText) { _, _ in invalidDate = false }
+        .onExitCommand {
+            if (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true { onCancel() }
+        }
+    }
+}
+
+@MainActor private struct CaptureDateTextField: NSViewRepresentable {
+    @Binding var text: String
+    let model: CaptureModel
+    let calendar: WorkCalendar
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    let onInvalid: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSTextField {
+        let field = DateTextField()
+        field.stringValue = text
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.focusRingType = .exterior
+        field.delegate = context.coordinator
+        field.setAccessibilityLabel("업무일, YYYY-MM-DD")
+        field.setAccessibilityHelp("위아래 하루 이동, T 오늘, Return 확정, Escape 취소")
+        return field
+    }
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text && (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
+            field.stringValue = text
+        }
+    }
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: CaptureDateTextField
+        init(_ parent: CaptureDateTextField) { self.parent = parent }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard !textView.hasMarkedText(),
+                  NSApp.currentEvent?.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty != false else { return false }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                parent.onCancel(); return true
+            }
+            guard let field = control as? NSTextField else { return false }
+            switch commandSelector {
+            case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveDown(_:)):
+                let base = WorkDate(field.stringValue) ?? parent.model.workDate
+                let delta = commandSelector == #selector(NSResponder.moveUp(_:)) ? 1 : -1
+                parent.model.workDate = parent.calendar.adding(days: delta, to: base)
+                field.stringValue = parent.model.workDate.iso
+                parent.text = field.stringValue
+                field.selectText(nil)
+            case #selector(NSResponder.insertNewline(_:)):
+                guard NSApp.currentEvent?.isARepeat != true else { return true }
+                guard let date = WorkDate(field.stringValue) else { parent.onInvalid(); return true }
+                parent.text = date.iso
+                parent.onConfirm()
+            default: return false
+            }
+            return true
+        }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField,
+                  (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
+            if field.stringValue.lowercased().contains("t") {
+                parent.model.resetWorkDateToToday()
+                field.stringValue = parent.model.workDate.iso
+                parent.text = field.stringValue
+                field.selectText(nil)
+            }
+            parent.text = field.stringValue
+        }
+    }
+    private final class DateTextField: NSTextField {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.window?.makeFirstResponder(self)
+                self.selectText(nil)
+            }
+        }
+    }
+}
+
 /// Search-field commands stay local and defer to the input method during composition.
 @MainActor private struct CaptureTaskSearchField: NSViewRepresentable {
     @Binding var text: String
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
     @Environment(\.isEnabled) private var isEnabled
     let isDisabled: Bool
     let onMove: (Int) -> Void
@@ -1236,6 +1718,13 @@ import Observation
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
         field.isEnabled = !isDisabled && isEnabled
+        (field as? CaptureTaskSearchTextField)?.navigation = navigation
+        if field.isEnabled {
+            navigation.register("search", order: 200) { [weak field] in
+                guard let field else { return }
+                field.window?.makeFirstResponder(field)
+            }
+        } else { navigation.remove("search") }
         if field.stringValue != text && (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
             field.stringValue = text
         }
@@ -1267,7 +1756,18 @@ import Observation
     }
 }
 
-@MainActor private final class CaptureTaskSearchTextField: NSTextField {}
+@MainActor private final class CaptureTaskSearchTextField: NSTextField {
+    weak var navigation: CaptureKeyboardNavigation?
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { navigation?.current = "search" }
+        return accepted
+    }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { navigation?.remove("search") }
+        super.viewWillMove(toWindow: newWindow)
+    }
+}
 
 /// Plain Return remains native text insertion; shortcuts are exclusively panel-owned.
 @MainActor private struct CaptureTextEditor: NSViewRepresentable {
@@ -1275,6 +1775,7 @@ import Observation
     @Binding var selectionRange: NSRange?
     let model: CaptureModel
     let label: String
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
     @Environment(\.isEnabled) private var isEnabled
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -1309,6 +1810,13 @@ import Observation
         context.coordinator.parent = self
         guard let editor = context.coordinator.editor else { return }
         editor.model = model
+        editor.navigation = navigation
+        if isEnabled && !model.isSubmitting {
+            navigation.register("body", order: 500) { [weak editor] in
+                guard let editor else { return }
+                editor.window?.makeFirstResponder(editor)
+            }
+        } else { navigation.remove("body") }
         editor.isEditable = isEnabled && !model.isSubmitting
         editor.font = NSFont.preferredFont(forTextStyle: .body, options: [:])
         editor.setAccessibilityLabel(label)
@@ -1342,6 +1850,16 @@ import Observation
 /// key equivalents. Standard editing and unaccepted Return remain AppKit-owned.
 @MainActor private final class CaptureNSTextView: NSTextView {
     weak var model: CaptureModel?
+    weak var navigation: CaptureKeyboardNavigation?
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { navigation?.current = "body" }
+        return accepted
+    }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { navigation?.remove("body") }
+        super.viewWillMove(toWindow: newWindow)
+    }
 
     @discardableResult func handleCandidateKey(_ event: NSEvent) -> Bool {
         guard !hasMarkedText(), isEditable, let model, !model.isSubmitting,

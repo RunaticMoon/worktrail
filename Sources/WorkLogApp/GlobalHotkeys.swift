@@ -1,11 +1,31 @@
 #if os(macOS)
 import Carbon
 import Foundation
+import SwiftUI
+import Observation
 import WorkLogCore
 
 enum GlobalHotkeyError: Error {
     case handlerInstallFailed(OSStatus)
     case registrationFailed(OSStatus)
+}
+
+/// Session-only diagnostics. No query, title, key or value is stored or logged.
+struct HotkeyDiagnostic: Equatable, Sendable {
+    var registrationText = "등록되지 않음"
+    var recentPressText: String?
+    var lastFailure: String?
+}
+
+private struct HotkeyDiagnosticsKey: EnvironmentKey {
+    static let defaultValue: [HotkeyAction: HotkeyDiagnostic] = [:]
+}
+
+extension EnvironmentValues {
+    var hotkeyDiagnostics: [HotkeyAction: HotkeyDiagnostic] {
+        get { self[HotkeyDiagnosticsKey.self] }
+        set { self[HotkeyDiagnosticsKey.self] = newValue }
+    }
 }
 
 /// Carbon refs are stored in a nonisolated box so `deinit` can release them
@@ -18,13 +38,18 @@ private final class CarbonHotkeyState: @unchecked Sendable {
 /// Carbon registration avoids event-monitor/accessibility permissions. Unknown combinations fail visibly.
 /// The event handler is installed lazily once per instance and removed by `shutdown`/`deinit`,
 /// so repeated binding swaps never accumulate handlers.
-@MainActor final class GlobalHotkeys: HotkeyRegistrar {
+@Observable @MainActor final class GlobalHotkeys: HotkeyRegistrar {
     private static let signature: OSType = 0x574C4F47 // 'WLOG'
 
-    private let handlers: [HotkeyAction: () -> Void]
-    private let state = CarbonHotkeyState()
+    @ObservationIgnored private let handlers: [HotkeyAction: () -> Void]
+    @ObservationIgnored private let state = CarbonHotkeyState()
+    @ObservationIgnored private let clock: any WorkLogCore.Clock
+    @ObservationIgnored private let timeZone: TimeZone
+    private(set) var diagnostics: [HotkeyAction: HotkeyDiagnostic] = [:]
 
-    init(handlers: [HotkeyAction: () -> Void]) {
+    init(clock: any WorkLogCore.Clock, timeZone: TimeZone, handlers: [HotkeyAction: () -> Void]) {
+        self.clock = clock
+        self.timeZone = timeZone
         self.handlers = handlers
     }
 
@@ -32,22 +57,40 @@ private final class CarbonHotkeyState: @unchecked Sendable {
     /// call leaves nothing registered for that action.
     func register(_ binding: HotkeyBinding, for action: HotkeyAction) throws {
         unregister(action)
-        try installHandlerIfNeeded()
-        var ref: EventHotKeyRef?
-        let status = RegisterEventHotKey(
-            UInt32(binding.key.macVirtualKeyCode),
-            Self.carbonModifiers(binding.modifiers),
-            EventHotKeyID(signature: Self.signature, id: action.hotKeyID),
-            GetApplicationEventTarget(), 0, &ref)
-        guard status == noErr, let ref else {
-            throw GlobalHotkeyError.registrationFailed(status)
+        do {
+            try installHandlerIfNeeded()
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                UInt32(binding.key.macVirtualKeyCode),
+                Self.carbonModifiers(binding.modifiers),
+                EventHotKeyID(signature: Self.signature, id: action.hotKeyID),
+                GetApplicationEventTarget(), 0, &ref)
+            guard status == noErr, let ref else { throw GlobalHotkeyError.registrationFailed(status) }
+            state.registrations[action] = ref
+            var diagnostic = diagnostics[action] ?? HotkeyDiagnostic()
+            diagnostic.registrationText = "등록됨"
+            diagnostics[action] = diagnostic
+        } catch {
+            let code: OSStatus
+            switch error {
+            case GlobalHotkeyError.handlerInstallFailed(let status): code = status
+            case GlobalHotkeyError.registrationFailed(let status): code = status
+            default: code = OSStatus(paramErr)
+            }
+            var diagnostic = diagnostics[action] ?? HotkeyDiagnostic()
+            diagnostic.registrationText = "등록 실패: 다른 앱이 사용 중일 수 있음 (OSStatus \(code))"
+            diagnostic.lastFailure = diagnostic.registrationText
+            diagnostics[action] = diagnostic
+            throw error
         }
-        state.registrations[action] = ref
     }
 
     func unregister(_ action: HotkeyAction) {
         if let ref = state.registrations.removeValue(forKey: action) {
             UnregisterEventHotKey(ref)
+            var diagnostic = diagnostics[action] ?? HotkeyDiagnostic()
+            diagnostic.registrationText = "등록되지 않음 · 단축키 녹화 또는 변경 중"
+            diagnostics[action] = diagnostic
         }
     }
 
@@ -56,6 +99,7 @@ private final class CarbonHotkeyState: @unchecked Sendable {
     func shutdown() {
         for ref in state.registrations.values { UnregisterEventHotKey(ref) }
         state.registrations.removeAll()
+        diagnostics = [:]
         if let handler = state.handler {
             RemoveEventHandler(handler)
             state.handler = nil
@@ -93,6 +137,13 @@ private final class CarbonHotkeyState: @unchecked Sendable {
 
     private func dispatch(_ id: UInt32) {
         guard let action = HotkeyAction.allCases.first(where: { $0.hotKeyID == id }) else { return }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "HH:mm:ss"
+        var diagnostic = diagnostics[action] ?? HotkeyDiagnostic()
+        diagnostic.recentPressText = "최근 눌림: \(formatter.string(from: clock.now()))"
+        diagnostics[action] = diagnostic
         handlers[action]?()
     }
 
