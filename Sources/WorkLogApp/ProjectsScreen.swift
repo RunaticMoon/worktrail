@@ -22,18 +22,36 @@ import WorkLogCore
                     actionTitle: "기록 추가 ⌘N", action: onCapture)
             } else {
                 GeometryReader { geometry in
-                    if geometry.size.width >= 800 {
-                        HStack(spacing: 16) {
-                            projectList.frame(width: 240)
-                            Divider()
-                            projectTasks
+                    Group {
+                        if geometry.size.width >= 800 {
+                            HStack(spacing: 16) {
+                                projectList.frame(width: 240)
+                                Divider()
+                                projectTasks
+                            }
+                        } else if showsProjectTasks, model.selectedProjectId != nil {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Button("프로젝트 목록", systemImage: "chevron.left") { showsProjectTasks = false }
+                                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                                projectTasks
+                            }
+                        } else { projectList }
+                    }
+                    .onChange(of: showsProjectTasks) { _, showingTasks in
+                        guard geometry.size.width < 800 else { return }
+                        // Apply focus after the destination list enters the view hierarchy.
+                        DispatchQueue.main.async {
+                            guard geometry.size.width < 800, showsProjectTasks == showingTasks else { return }
+                            if showingTasks {
+                                guard model.selectedProjectId != nil else { return }
+                                projectsFocused = false
+                                tasksFocused = !model.tasks.isEmpty
+                            } else {
+                                tasksFocused = false
+                                projectsFocused = true
+                            }
                         }
-                    } else if showsProjectTasks, model.selectedProjectId != nil {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Button("프로젝트 목록", systemImage: "chevron.left") { showsProjectTasks = false }
-                            projectTasks
-                        }
-                    } else { projectList }
+                    }
                 }
             }
             Spacer(minLength: 0)
