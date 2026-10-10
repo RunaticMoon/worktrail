@@ -54,6 +54,9 @@ osascript -l JavaScript scripts/maclab/capture-search-flow.js --action search
 # 검색 핫키와 별개로 ⌘F 진입 이후 동선만 검증할 때 명시적으로 선택한다.
 osascript -l JavaScript scripts/maclab/capture-search-flow.js --action search --search-open command-f
 
+# native AX로 many fixture의 '메모' 결과에서 Down 12회·원문 왕복을 검사한다.
+osascript -l JavaScript scripts/maclab/search-roundtrip.js --fixture many
+
 # 기본 Memo·기본 창 크기이며 입력창이 닫힌 상태에서 실행한다.
 osascript -l JavaScript scripts/maclab/capture-shortcut.js
 
@@ -67,6 +70,8 @@ osascript -l JavaScript scripts/maclab/verify-ui.js --phase after --fixture many
 ```
 
 검색 helper는 가짜 Memo를 방향키·Return으로 열고 Esc로 돌아와 검색어·선택·노출된 스크롤 위치를 비교한다. `command-f` 모드는 `entryMethod`로 구분되며 전역 검색 핫키 성공을 뜻하지 않는다. ⌘N helper는 660×500 입력창, 본문 포커스, 추가 주 창이 생기지 않았는지를 확인하고 스크린샷을 위해 입력창을 열어 둔다. 다음 동선 전에 Esc로 닫는다.
+
+`search-roundtrip.js`는 System Events의 결과 탐색 문제를 피하도록 native AX로 검색어·선택·원문 시트를 검사한다. 실제 Mac에서 동일한 native AX 왕복 동작은 확인했지만, 저장된 이 파일 전체의 재실행은 아직 미검증이다. 검색어와 선택 보존만 판정하며 수치 스크롤 위치 보존을 주장하지 않는다. 기존 검색어가 비어 있거나 가짜 검색어 `메모`일 때만 입력을 진행한다.
 
 Task는 가짜 진행 기록 추가, 보고서는 편집·저장·계획 확인·복사, Secret은 검색·복사·부분 편집을 검사한다. 자동 spec에 포함된 동선과 수동으로 실행한 helper 결과를 따로 기록한다. 단계별 실행 옵션은 각 파일 상단에 있다.
 
