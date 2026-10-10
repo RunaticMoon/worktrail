@@ -1,0 +1,246 @@
+{
+  "version": 1,
+  "name": "ui-edge-cases",
+  "purpose": "Empty few many synthetic records at actual supported window sizes and remaining interactions",
+  "artifact": {
+    "path": ".build/maclab/ui-review.tar",
+    "format": "tar",
+    "app_bundle_path": "WorkLogReview.app",
+    "expected_bundle_id": "dev.worklog.UIReview"
+  },
+  "prepare": [
+    {
+      "id": "build-after",
+      "kind": "exec",
+      "purpose": "after SwiftUI build, isolated fixture only",
+      "before": "Remote test session available",
+      "after": "Inspect exit code and evidence",
+      "argv": [
+        "/bin/bash",
+        "scripts/maclab/build-remote.sh",
+        "after"
+      ],
+      "timeout_seconds": 600
+    }
+  ],
+  "cases": [
+    {
+      "id": "fixture-sizes",
+      "purpose": "Fake data amount and resize review",
+      "steps": [
+        {
+          "id": "launch-empty",
+          "kind": "exec",
+          "purpose": "Fresh empty fake fixture",
+          "before": "No review process running",
+          "after": "New isolated fixture",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "empty"
+          ],
+          "timeout_seconds": 20
+        },
+        {
+          "id": "empty-960-resize",
+          "kind": "osascript",
+          "purpose": "empty-960-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {960,640}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "empty-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "empty-960",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "empty-1280-resize",
+          "kind": "osascript",
+          "purpose": "empty-1280-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {1280,800}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "empty-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "empty-1280",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "empty-1440-resize",
+          "kind": "osascript",
+          "purpose": "empty-1440-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {1440,875}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "empty-1440",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "empty-1440",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "quit-few",
+          "kind": "osascript",
+          "purpose": "quit-few",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "tell application \"System Events\" to tell process \"WorkLogApp\" to keystroke \"q\" using command down\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "launch-few",
+          "kind": "exec",
+          "purpose": "Fresh few fake fixture",
+          "before": "No review process running",
+          "after": "New isolated fixture",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "few"
+          ],
+          "timeout_seconds": 20
+        },
+        {
+          "id": "few-960-resize",
+          "kind": "osascript",
+          "purpose": "few-960-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {960,640}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "few-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "few-960",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "few-1280-resize",
+          "kind": "osascript",
+          "purpose": "few-1280-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {1280,800}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "few-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "few-1280",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "few-1440-resize",
+          "kind": "osascript",
+          "purpose": "few-1440-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {1440,875}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "few-1440",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "few-1440",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "quit-many",
+          "kind": "osascript",
+          "purpose": "quit-many",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "tell application \"System Events\" to tell process \"WorkLogApp\" to keystroke \"q\" using command down\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "launch-many",
+          "kind": "exec",
+          "purpose": "Fresh many fake fixture",
+          "before": "No review process running",
+          "after": "New isolated fixture",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "many"
+          ],
+          "timeout_seconds": 20
+        },
+        {
+          "id": "many-1280-resize",
+          "kind": "osascript",
+          "purpose": "many-1280-resize",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "delay 2\ntell application \"System Events\" to tell process \"WorkLogApp\"\nset frontmost to true\nset position of window 1 to {0,25}\nset size of window 1 to {1280,800}\nend tell\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "many-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "many-1280",
+          "before": "Requested fixture and size open",
+          "after": "Review actual content layout"
+        },
+        {
+          "id": "visible",
+          "kind": "osascript",
+          "purpose": "visible",
+          "before": "Fake review app only",
+          "after": "Inspect UI separately",
+          "script": "tell application \"System Events\" to return exists window 1 of process \"WorkLogApp\"",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "visible-assert",
+          "kind": "assert",
+          "purpose": "Fixture windows displayed; visual review separately",
+          "before": "Visibility checked",
+          "after": "Result recorded",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "visible",
+            "equals": true,
+            "before_screenshot": "empty-960",
+            "after_screenshot": "many-1280"
+          }
+        }
+      ]
+    }
+  ],
+  "collect": [],
+  "explore": {
+    "hold_s": 900
+  }
+}

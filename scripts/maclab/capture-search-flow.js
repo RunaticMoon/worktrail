@@ -160,6 +160,11 @@ function captureEditor(element) {
 function searchField(element) {
     return role(element) === 'AXTextField' && label(element).indexOf('원문 검색') >= 0;
 }
+function syntheticResultLabel(text) {
+    // Search highlights may split the query with markup in the accessible label.
+    // Require every distinctive token rather than a contiguous display string.
+    return ['Maclab', '회귀', '메모'].every(function (token) { return text.indexOf(token) >= 0; });
+}
 function sourceSheet(process, owner) {
     var items = owner ? [owner] : windows(process);
     for (var index = 0; index < items.length; index += 1) {
@@ -278,20 +283,22 @@ function run(args) {
     // Wait for the debounced local index result, then navigate with the keyboard.
     waitFor(function () {
         return findElement(search.window, function (element) {
-            return role(element) === 'AXButton' && label(element).indexOf(REVIEW_QUERY) >= 0;
+            return role(element) === 'AXButton' && syntheticResultLabel(label(element));
         });
     }, 'saved synthetic Memo appears in local search results');
     events.keyCode(125);
     var selected = waitFor(function () { return selectedResult(search.window); }, 'Down Arrow selects a local search result');
     var selectionBefore = label(selected);
-    requireState(selectionBefore.indexOf(REVIEW_QUERY) >= 0, 'Selected result does not match the synthetic query; refusing to open unrelated content.');
+    requireState(syntheticResultLabel(selectionBefore), 'Selected result does not match the synthetic query; refusing to open unrelated content.');
     var rowFrameBefore = geometry(selected);
     var barsBefore = scrollbarSnapshot(search.window);
     var queryBefore = textValue(search.element);
     events.keyCode(36);
     var sheet = waitFor(function () { return sourceSheet(process, search.window); }, 'Return opens the saved source sheet');
     var sourceMatches = Boolean(findElement(sheet, function (element) {
-        return role(element) === 'AXStaticText' && label(element).indexOf(REVIEW_QUERY) >= 0;
+        if (role(element) !== 'AXStaticText') return false;
+        var value = textValue(element);
+        return (value !== null && value.indexOf(REVIEW_QUERY) >= 0) || label(element).indexOf(REVIEW_QUERY) >= 0;
     }));
     requireState(sourceMatches, 'The opened source sheet did not expose the synthetic Memo text through Accessibility.');
     events.keyCode(53);
