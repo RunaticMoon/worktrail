@@ -39,7 +39,7 @@ import Observation
         self.secrets = secrets
         self.calendar = calendar
         self.onSaved = onSaved
-        panel = KeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 540),
+        panel = KeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 500),
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self
@@ -50,7 +50,7 @@ import Observation
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        panel.contentMinSize = NSSize(width: 520, height: 440)
+        panel.contentMinSize = NSSize(width: 520, height: 420)
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.isSaving = { [weak self] in self?.saveState.isSaving == true }
@@ -186,8 +186,7 @@ import Observation
     private var focusRequest = 0
     private var forwardingIME = false
     private var layoutTab: CaptureKind?
-    private var ordinarySize = NSSize(width: 620, height: 540)
-    private var taskSize = NSSize(width: 920, height: 540)
+    private var preferredSize = NSSize(width: 660, height: 500)
     override var canBecomeKey: Bool { true }
 
     private var hasMarkedText: Bool {
@@ -221,13 +220,9 @@ import Observation
             }
             return
         }
-        if event.keyCode == 48 && !modifiers.contains(.command) && !modifiers.contains(.control) {
-            if modifiers.contains(.option) {
-                if modifiers.contains(.shift) { selectPreviousKeyView(nil) }
-                else { selectNextKeyView(nil) }
-            } else if !event.isARepeat {
-                onCycleTab?(modifiers.contains(.shift))
-            }
+        // Tab follows native field/cell navigation. Type switching stays explicit.
+        if event.keyCode == 48 && modifiers.contains(.control) && !modifiers.contains(.command) {
+            if !event.isARepeat { onCycleTab?(modifiers.contains(.shift)) }
             return
         }
         if event.keyCode == 53 && modifiers.isEmpty {
@@ -248,41 +243,24 @@ import Observation
         onEscape?()
     }
 
-    /// Keep the three task columns readable, and remember each layout's resized size.
+    /// All capture types share a user-resizable window; switching never changes its size.
     func prepareLayout(for tab: CaptureKind, opening: Bool = false) {
-        let isTask = tab == .task
-        if let layoutTab, (layoutTab == .task) == isTask, !opening { return }
-        rememberLayoutSize()
+        if layoutTab != nil, frame.width >= 520, frame.height >= 420 { preferredSize = frame.size }
         layoutTab = tab
-        let minimum = NSSize(width: isTask ? 800 : 520, height: 440)
-        let preferred = isTask ? taskSize : ordinarySize
-        var target = NSRect(x: frame.minX, y: frame.maxY - preferred.height,
-                            width: max(preferred.width, minimum.width),
-                            height: max(preferred.height, minimum.height))
-        let targetScreen = opening
-            ? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? screen ?? NSScreen.main
-            : screen ?? NSScreen.main
+        guard opening else { return }
+        let minimum = NSSize(width: 520, height: 420)
+        var target = NSRect(x: frame.minX, y: frame.maxY - preferredSize.height,
+                            width: max(preferredSize.width, minimum.width),
+                            height: max(preferredSize.height, minimum.height))
+        let targetScreen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? screen ?? NSScreen.main
         if let visible = targetScreen?.visibleFrame {
             target.size.width = min(target.width, visible.width)
             target.size.height = min(target.height, visible.height)
             target.origin.x = min(max(target.minX, visible.minX), visible.maxX - target.width)
             target.origin.y = min(max(target.minY, visible.minY), visible.maxY - target.height)
         }
-        contentMinSize = NSSize(width: min(minimum.width, target.width),
-                                height: min(minimum.height, target.height))
+        contentMinSize = NSSize(width: min(minimum.width, target.width), height: min(minimum.height, target.height))
         setFrame(target, display: isVisible)
-    }
-
-    private func rememberLayoutSize() {
-        guard let layoutTab else { return }
-        // A screen-constrained frame must not replace the user's preferred size.
-        if layoutTab == .task {
-            if frame.width >= 800 { taskSize.width = frame.width }
-            if frame.height >= 440 { taskSize.height = frame.height }
-        } else {
-            if frame.width >= 520 { ordinarySize.width = frame.width }
-            if frame.height >= 440 { ordinarySize.height = frame.height }
-        }
     }
 
     func requestDraftFocus() {
@@ -362,19 +340,22 @@ import Observation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
-            HStack(spacing: 6) {
-                tab(.memo, title: "메모", symbol: "square.and.pencil")
-                tab(.task, title: "업무", symbol: "checkmark.circle")
-                tab(.secret, title: "Secret", symbol: "lock")
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    tab(.memo, title: "메모", symbol: "square.and.pencil")
+                    tab(.task, title: "업무", symbol: "checkmark.circle")
+                    tab(.secret, title: "Secret", symbol: "lock")
+                }
+                Spacer(minLength: 4)
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .overlay(CaptureWindowDragArea())
+                Button(action: onDismiss) { Image(systemName: "xmark").frame(width: 24, height: 24) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("빠른 입력 닫기")
+                    .worklogHelp("닫기 (초안 보존)", keys: "Esc")
+                    .disabled(saveState.isSaving)
             }
-            .padding(3)
-            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
+            .padding(.horizontal, 16).padding(.vertical, 10)
 
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
             VStack(alignment: .leading, spacing: 10) {
@@ -383,17 +364,15 @@ import Observation
                 }
                 switch session.tab {
                 case .memo:
-                    ScrollView {
-                        CaptureDraftEditor(model: session.memoDraft, label: "무엇을 기록할까요?", showsTokens: true)
-                            .padding(1)
-                    }
+                    CaptureDraftEditor(model: session.memoDraft, label: "메모 본문", showsTokens: true,
+                                       fillsAvailableSpace: true)
                 case .task:
                     CaptureTaskContent(model: session.taskDraft, onConfirmCompletion: onConfirmCompletion)
                 case .secret:
                     SecretCaptureView(model: secrets, onSaved: onSecretSaved, onCancel: onDismiss)
                 }
             }
-            .padding(14)
+            .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .disabled(saveState.isSaving)
 
@@ -453,52 +432,16 @@ import Observation
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 9) {
-            HStack(spacing: 9) {
-                Image(systemName: "bolt.fill")
-                    .accessibilityHidden(true)
-                    .font(.headline)
-                    .foregroundStyle(WorkLogTheme.accent)
-                    .frame(width: 30, height: 30)
-                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("빠른 기록").font(.headline)
-                    Text("WORKLOG").font(.caption2.weight(.semibold))
-                        .tracking(2).foregroundStyle(WorkLogTheme.muted)
-                }
-                Spacer(minLength: 0)
-            }
-            .overlay(CaptureWindowDragArea())
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(WorkLogTheme.muted)
-                    .frame(width: 28, height: 28)
-                    .background(WorkLogTheme.elevated, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("빠른 입력 닫기")
-            .worklogHelp("닫기 (초안 보존)", keys: "Esc")
-            .disabled(saveState.isSaving)
-        }
-    }
-
     private func tab(_ kind: CaptureKind, title: String, symbol: String) -> some View {
         let selected = session.tab == kind
         return Button { session.select(kind) } label: {
             Label(title, systemImage: symbol)
                 .font(.callout.weight(selected ? .semibold : .medium))
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .foregroundStyle(selected ? WorkLogTheme.text : WorkLogTheme.muted)
                 .background(selected ? WorkLogTheme.surface : .clear,
                             in: RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(selected ? WorkLogTheme.border : .clear)
-                }
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
@@ -547,18 +490,13 @@ import Observation
 
     private var keyboardHints: some View {
         HStack(spacing: 6) {
-            Keycap("↩").accessibilityHidden(true)
-            Text("줄바꿈")
-            Keycap("⌘↩").accessibilityHidden(true)
-            Text("저장")
-            Keycap("Esc").accessibilityHidden(true)
-            Text("닫기 (초안 보존)")
+            Text("Esc 닫기 · 초안 보존")
         }
         .font(.caption)
         .foregroundStyle(WorkLogTheme.muted)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Return 줄바꿈, Command Return 저장, Escape 닫기. 닫아도 초안은 보존됩니다.")
-        .worklogHelp("Tab 유형 전환 · Option Tab 필드 이동 · 업무 목록 ↑↓ 선택 / ←→ 단계 이동")
+        .worklogHelp("Tab 필드 이동 · ⌘1/2/3 유형 전환 · 업무 검색 ↑↓ 선택 / Return 입력")
     }
 
     private func saveButton(draft: CaptureModel) -> some View {
@@ -611,11 +549,9 @@ import Observation
     @Bindable var model: CaptureModel
     let onConfirmCompletion: () -> Void
     @State private var highlighted = "new"
-    @State private var visibleColumn = 0
-    @State private var actionsExpanded = false
+    @State private var choosingTask = true
     @State private var trackingExpanded = false
-    @Environment(\.colorSchemeContrast) private var contrast
-    @FocusState private var focusedRow: String?
+    @FocusState private var cancelFocused: Bool
 
     private var keys: [String] { ["new"] + model.filteredTasks.map { "task:\($0.id)" } }
     private var isLocked: Bool { model.isSubmitting || model.pendingCompletion != nil }
@@ -629,455 +565,175 @@ import Observation
         return model.tasks.first { $0.id == id }?.title ?? "선택한 업무"
     }
     private var newTaskLabel: String {
-        if !model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "새 업무 만들기 (작성 중인 내용 유지)"
-        }
         let name = model.taskQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? "새 업무 만들기" : "‘\(name)’ 새 업무 만들기"
     }
-    private var actionKeys: [String] {
-        if isNewTask {
-            return ["detail"] + (actionsExpanded ? TaskStatus.allCases.map { "initial:\($0.rawValue)" } : [])
-        }
-        return ["activity"] + (actionsExpanded ? ["status"] : [])
-    }
-    private var selectedActionKey: String {
-        isNewTask ? "detail" : (model.taskAction == .addActivity ? "activity" : "status")
-    }
 
     var body: some View {
-        GeometryReader { geometry in
-            if geometry.size.width >= 880 {
-                HStack(alignment: .top, spacing: 0) {
-                    taskColumn.padding(12).frame(width: 240)
-                    columnDivider
-                    actionColumn.padding(12).frame(width: 200)
-                    columnDivider
-                    detailColumn.padding(12).frame(maxWidth: .infinity)
-                }
-            } else {
-                // A constrained screen uses the same three columns one at a time,
-                // preserving query, selection and draft when crossing the threshold.
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        stageButton(0, "업무 선택")
-                        stageButton(1, "동작")
-                        stageButton(2, model.pendingCompletion == nil ? "내용" : "완료 확인")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if choosingTask {
+                    taskPicker
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(selectedTaskTitle).font(.body.weight(.semibold))
+                            .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                        Button("업무 변경") {
+                            choosingTask = true
+                            DispatchQueue.main.async { (NSApp.keyWindow as? KeyboardPanel)?.requestDefaultFocus(for: .task) }
+                        }
+                        .controlSize(.small).disabled(isLocked)
                     }
-                    .padding(.horizontal, 12).padding(.top, 8)
-                    Group {
-                        switch visibleColumn {
-                        case 1: actionColumn
-                        case 2: detailColumn
-                        default: taskColumn
+                }
+                if model.pendingCompletion != nil {
+                    completionConfirmation
+                } else {
+                    if isNewTask {
+                        HStack(spacing: 12) {
+                            Picker("등록 상태", selection: $model.initialStatus) {
+                                ForEach(TaskStatus.allCases, id: \.self) { Text($0.koreanLabel).tag($0) }
+                            }.fixedSize()
+                            Spacer(minLength: 0)
+                        }
+                        .controlSize(.small)
+                    } else {
+                        Picker("업무 동작", selection: Binding(
+                            get: { model.taskAction == .changeStatus },
+                            set: { model.taskAction = $0 ? .changeStatus : .addActivity })) {
+                            Text("진행 기록 추가").tag(false)
+                            Text("전체 상태 변경").tag(true)
+                        }
+                        .pickerStyle(.segmented).fixedSize()
+                    }
+                    if !isNewTask && model.taskAction == .changeStatus {
+                        statusContent
+                    } else {
+                        CaptureDraftEditor(model: model,
+                            label: isNewTask ? "첫 줄은 업무명, 다음 줄은 진행 내용" : "진행 내용", showsTokens: true)
+                        if isNewTask {
+                            DisclosureGroup("프로젝트별 상태 관리", isExpanded: $trackingExpanded) {
+                                Toggle("프로젝트별로 추적", isOn: Binding(
+                                    get: { model.projectTrackingMode == .perProject },
+                                    set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
+                                    .font(.callout).padding(.top, 8)
+                            }.font(.caption).foregroundStyle(WorkLogTheme.muted)
                         }
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
+            .padding(1)
         }
-        .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8)
-            .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
-                          lineWidth: WorkLogTheme.outlineWidth(for: contrast)))
         .onChange(of: model.taskQuery) { _, _ in
             highlighted = keys.contains(selectedTaskKey) ? selectedTaskKey : "new"
         }
-        .onAppear {
-            highlighted = selectedTaskKey
-            actionsExpanded = model.taskAction == .changeStatus && !isNewTask
-            if model.pendingCompletion != nil { visibleColumn = 2 }
-        }
-        .onChange(of: focusedRow) { _, row in
-            guard let row else { return }
-            if row == "new" || row.hasPrefix("task:") { visibleColumn = 0 }
-            else if row.hasPrefix("target:") || row == "cancelCompletion" { visibleColumn = 2 }
-            else { visibleColumn = 1 }
-        }
+        .onAppear { highlighted = selectedTaskKey }
         .onChange(of: model.pendingCompletion != nil) { _, pending in
-            if pending { visibleColumn = 2; focusedRow = "cancelCompletion" }
+            if pending { cancelFocused = true }
         }
     }
 
-    private func stageButton(_ column: Int, _ title: String) -> some View {
-        Button {
-            visibleColumn = column
-            switch column {
-            case 0: focusSearch()
-            case 1: focusedRow = selectedActionKey
-            default: focusDetail()
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Text(title)
-                if visibleColumn == column { Image(systemName: "checkmark").accessibilityHidden(true) }
-            }
-            .font(.callout)
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(WorkLogButtonStyle(prominent: visibleColumn == column))
-        .accessibilityValue(visibleColumn == column ? "선택됨" : "")
-        .worklogHelp("\(title) 단계로 이동")
-        .disabled(isLocked)
-    }
-
-    private var columnDivider: some View {
-        Rectangle().fill(WorkLogTheme.border.opacity(0.7)).frame(width: 0.5)
-    }
-
-    private func stepHeader(_ number: String, _ title: String) -> some View {
-        HStack(spacing: 6) {
-            Text(number).font(.caption).accessibilityHidden(true)
-                .foregroundStyle(WorkLogTheme.accent)
-            Text(title).font(.callout.weight(.medium))
-        }
-        .padding(.bottom, 3)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var taskColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            stepHeader("01", "업무 검색 또는 새 업무 이름")
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .accessibilityHidden(true)
-                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
-                CaptureTaskSearchField(text: $model.taskQuery, isDisabled: isLocked,
-                    onMove: { moveTask($0, focusRow: false) },
-                    onSelect: { chooseTask(highlighted, advance: true) })
-                    .frame(minHeight: 24)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 5))
-            if !keys.contains(selectedTaskKey) {
-                Label(selectedTaskTitle, systemImage: "checkmark")
-                    .font(.caption).lineLimit(2).foregroundStyle(WorkLogTheme.text)
-                    .accessibilityLabel("현재 선택한 업무: \(selectedTaskTitle). 검색 결과 밖에 있습니다.")
-            }
-            taskRow(key: "new", title: newTaskLabel, status: nil)
-            Rectangle().fill(WorkLogTheme.border.opacity(0.7)).frame(height: 0.5)
+    private var taskPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CaptureTaskSearchField(text: $model.taskQuery, isDisabled: isLocked,
+                onMove: moveTask, onSelect: { chooseTask(highlighted) })
+                .frame(height: 28)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 0) {
+                        taskRow(key: "new", title: newTaskLabel, status: nil)
                         ForEach(model.filteredTasks) { task in
                             taskRow(key: "task:\(task.id)", title: task.title,
-                                    status: task.cachedStatus?.koreanLabel ?? "상태 없음")
-                                .id("task:\(task.id)")
-                        }
-                        if model.filteredTasks.isEmpty {
-                            Text("검색된 업무가 없어요.\n위에서 새 업무를 만드세요.")
-                                .font(.caption).foregroundStyle(WorkLogTheme.muted)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                                    status: task.cachedStatus?.koreanLabel)
                         }
                     }
                 }
+                .frame(height: min(CGFloat(keys.count) * 36, 132))
                 .onChange(of: highlighted) { _, key in proxy.scrollTo(key) }
             }
-            Text("↑↓ 선택 · → 다음")
-                .font(.caption).foregroundStyle(WorkLogTheme.muted)
         }
         .disabled(isLocked)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("1단계 업무 선택")
     }
 
     private func taskRow(key: String, title: String, status: String?) -> some View {
-        Button { chooseTask(key, advance: true) } label: {
-            browserRow(title: title, subtitle: status,
-                       symbol: key == "new" ? "plus" : "checklist",
-                       selected: selectedTaskKey == key,
-                       highlighted: highlighted == key && selectedTaskKey != key, forward: true)
-        }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
-        .worklogHelp("업무 선택 후 동작으로 이동", keys: "Return / →")
-        .accessibilityLabel(status.map { "\(title), \($0)" } ?? title)
-        .accessibilityValue(selectedTaskKey == key ? "선택됨" : "")
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
-            guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
-                  !isLocked else { return .ignored }
-            if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
-            switch press.key {
-            case .upArrow: moveTask(-1, focusRow: true)
-            case .downArrow: moveTask(1, focusRow: true)
-            case .leftArrow: focusSearch()
-            case .rightArrow, .return: chooseTask(key, advance: true)
-            default: return .ignored
+        Button { chooseTask(key) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: key == "new" ? "plus" : "checklist").accessibilityHidden(true)
+                    .foregroundStyle(WorkLogTheme.muted).frame(width: 16)
+                Text(title).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                if let status { Text(status).font(.caption).foregroundStyle(WorkLogTheme.muted) }
+                Image(systemName: "return").font(.caption).accessibilityHidden(true)
+                    .foregroundStyle(highlighted == key ? WorkLogTheme.accent : .clear)
             }
-            return .handled
+            .font(.callout).padding(.horizontal, 8).padding(.vertical, 8)
+            .background(highlighted == key ? WorkLogTheme.accentSoft : .clear,
+                        in: RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
         }
-    }
-
-    private var actionColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            stepHeader("02", "동작 선택")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if isNewTask {
-                        Toggle("완료한 일로 등록", isOn: $model.registersAsCompleted)
-                            .font(.callout)
-                            .worklogHelp("새 업무를 처음부터 완료 상태로 등록")
-                        actionRow(key: "detail", title: "내용 입력", symbol: "square.and.pencil")
-                    } else {
-                        actionRow(key: "activity", title: "진행 기록 추가", symbol: "text.badge.plus")
-                    }
-                    SectionDisclosure(title: isNewTask ? "등록 상태" : "상태 변경",
-                                      summary: isNewTask ? model.initialStatus.koreanLabel : "Task 전체 상태 변경",
-                                      isExpanded: $actionsExpanded) {
-                        VStack(spacing: 4) {
-                            if isNewTask {
-                                ForEach(TaskStatus.allCases, id: \.self) { status in
-                                    actionRow(key: "initial:\(status.rawValue)", title: status.koreanLabel,
-                                              symbol: statusSymbol(status))
-                                }
-                            } else {
-                                actionRow(key: "status", title: "Task 전체 상태 변경", symbol: "arrow.triangle.2.circlepath")
-                            }
-                        }
-                    }
-                }
-            }
-            Text("← 이전 · → 내용").font(.caption).foregroundStyle(WorkLogTheme.muted)
-        }
-        .disabled(isLocked)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("2단계 동작 선택")
-    }
-
-    private func actionRow(key: String, title: String, symbol: String) -> some View {
-        Button { chooseAction(key); focusDetail() } label: {
-            browserRow(title: title, symbol: symbol, selected: selectedActionKey == key || (isNewTask && key == "initial:\(model.initialStatus.rawValue)"), forward: true)
-        }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: key)
-        .worklogHelp("동작 선택 후 내용으로 이동", keys: "Return / →")
-        .accessibilityValue(selectedActionKey == key || (isNewTask && key == "initial:\(model.initialStatus.rawValue)") ? "선택됨" : "")
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
-            guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
-                  !isLocked else { return .ignored }
-            if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
-            switch press.key {
-            case .upArrow: moveAction(-1)
-            case .downArrow: moveAction(1)
-            case .leftArrow: focusedRow = keys.contains(selectedTaskKey) ? selectedTaskKey : "new"
-            case .rightArrow, .return: chooseAction(key); focusDetail()
-            default: return .ignored
-            }
-            return .handled
-        }
-    }
-
-    private var detailColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            stepHeader("03", model.pendingCompletion != nil ? "완료 확인" : "내용 및 저장")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if !isNewTask {
-                        Text(selectedTaskTitle)
-                            .font(.callout.weight(.medium)).lineLimit(2)
-                            .foregroundStyle(WorkLogTheme.muted)
-                    }
-                    if isNewTask {
-                        CaptureDraftEditor(model: model, label: "첫 줄은 업무명, 다음 줄은 진행 내용", showsTokens: true)
-                        SectionDisclosure(title: "프로젝트별 상태 관리",
-                                          summary: model.projectTrackingMode == .perProject ? "프로젝트별 추적" : "공통 상태",
-                                          isExpanded: $trackingExpanded) {
-                            Toggle("프로젝트별로 추적", isOn: Binding(
-                                get: { model.projectTrackingMode == .perProject },
-                                set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
-                                .font(.callout).disabled(model.isSubmitting)
-                        }
-                    } else if model.taskAction == .addActivity {
-                        CaptureDraftEditor(model: model, label: "진행 내용", showsTokens: true)
-                    } else {
-                        statusContent
-                    }
-                }
-                .padding(1)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("3단계 내용 및 저장")
+        .buttonStyle(.plain)
+        .accessibilityValue(highlighted == key ? "선택됨" : "")
+        .worklogHelp("선택하고 바로 내용 입력", keys: "↑↓ 선택 · Return 입력")
+        .id(key)
     }
 
     @ViewBuilder private var statusContent: some View {
+        let targets = model.availableStatusTargets()
+        if targets.isEmpty {
+            Text("현재 상태에서 변경할 수 있는 상태가 없습니다.").font(.callout)
+        } else {
+            Picker("변경할 전체 상태", selection: $model.statusTarget) {
+                Text("상태 선택").tag(Optional<TaskStatus>.none)
+                ForEach(targets, id: \.self) { Text($0.koreanLabel).tag(Optional($0)) }
+            }
+            .fixedSize().disabled(model.isSubmitting)
+            Text("프로젝트별 상태와 체크리스트는 따로 유지됩니다.")
+                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+        }
+    }
+
+    @ViewBuilder private var completionConfirmation: some View {
         if let check = model.pendingCompletion {
             VStack(alignment: .leading, spacing: 8) {
-                Text("남은 항목이 있어요. 그래도 완료할까요?")
-                    .font(.callout.weight(.medium))
-                ForEach(check.remainingChecklist) { item in
-                    Label(item.text, systemImage: "square").font(.caption)
-                }
+                Text("남은 항목이 있어요. 그래도 완료할까요?").font(.body.weight(.semibold))
+                ForEach(check.remainingChecklist) { Label($0.text, systemImage: "square").font(.callout) }
                 ForEach(check.unfinishedProjects.indices, id: \.self) { index in
                     let project = check.unfinishedProjects[index]
                     Text("\(model.projects.first { $0.id == project.projectId }?.name ?? "프로젝트") · \(project.status.koreanLabel)")
-                        .font(.caption)
+                        .font(.callout)
                 }
-                HStack(spacing: 6) {
-                    Button("취소") {
-                        model.cancelCompletion()
-                        focusDetail()
-                    }
-                    .focused($focusedRow, equals: "cancelCompletion")
-                    .worklogHelp("완료를 취소하고 입력 보존")
-                    .accessibilityLabel("완료 확인 취소")
+                HStack(spacing: 8) {
+                    Button("취소") { model.cancelCompletion() }
+                        .focused($cancelFocused).accessibilityLabel("완료 확인 취소")
                     Button("그래도 완료", action: onConfirmCompletion)
-                        .worklogHelp("남은 항목을 확인하고 Task 전체 완료")
-                        .buttonStyle(WorkLogButtonStyle(prominent: true))
-                        .disabled(model.isSubmitting)
+                        .buttonStyle(WorkLogButtonStyle(prominent: true)).disabled(model.isSubmitting)
                 }
             }
-        } else {
-            Text("변경할 상태").font(.callout.weight(.medium))
-            VStack(spacing: 3) {
-                ForEach(model.availableStatusTargets(), id: \.self) { status in
-                    targetStatusRow(status)
-                }
-            }
-            if model.availableStatusTargets().isEmpty {
-                Text("현재 상태에서 변경할 수 있는 상태가 없습니다.")
-                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
-            } else {
-                Text("상태를 고른 뒤 ⌘Return으로 저장하세요.")
-                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
-            }
         }
     }
 
-    private func targetStatusRow(_ status: TaskStatus) -> some View {
-        Button { model.statusTarget = status } label: {
-            browserRow(title: status.koreanLabel, symbol: statusSymbol(status),
-                       selected: model.statusTarget == status)
-        }
-        .buttonStyle(.plain).focusable().focused($focusedRow, equals: "target:\(status.rawValue)")
-        .disabled(model.isSubmitting)
-        .accessibilityValue(model.statusTarget == status ? "선택됨" : "")
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .return], phases: [.down, .repeat]) { press in
-            guard press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
-                  !isLocked else { return .ignored }
-            if press.phase == .repeat && press.key != .upArrow && press.key != .downArrow { return .handled }
-            switch press.key {
-            case .upArrow: moveTarget(-1, from: status)
-            case .downArrow: moveTarget(1, from: status)
-            case .leftArrow: focusedRow = selectedActionKey
-            case .return: model.statusTarget = status
-            default: return .ignored
-            }
-            return .handled
-        }
-    }
-
-    private func browserRow(title: String, subtitle: String? = nil, symbol: String,
-                            selected: Bool, highlighted: Bool = false, forward: Bool = false) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: symbol).font(.callout)
-                .accessibilityHidden(true)
-                .foregroundStyle(selected ? WorkLogTheme.text : WorkLogTheme.muted)
-                .frame(width: 15)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.callout.weight(selected ? .medium : .regular))
-                    .lineLimit(2).multilineTextAlignment(.leading)
-                if let subtitle {
-                    Text(subtitle).font(.caption).foregroundStyle(WorkLogTheme.muted)
-                }
-            }
-            Spacer(minLength: 2)
-            if forward || selected {
-                Image(systemName: forward ? "chevron.right" : "checkmark")
-                    .font(.caption)
-                    .foregroundStyle(selected ? WorkLogTheme.accent : WorkLogTheme.muted.opacity(0.5))
-                    .accessibilityHidden(true)
-            }
-        }
-        .padding(.horizontal, 7).padding(.vertical, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? WorkLogTheme.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5)
-            .strokeBorder(highlighted ? WorkLogTheme.outlineColor(for: contrast) : .clear,
-                          lineWidth: WorkLogTheme.outlineWidth(for: contrast)))
-        .contentShape(Rectangle())
-    }
-
-    private func statusSymbol(_ status: TaskStatus) -> String {
-        switch status {
-        case .planned: return "circle.dashed"
-        case .inProgress: return "circle.lefthalf.filled"
-        case .onHold: return "pause.circle"
-        case .completed: return "checkmark.circle"
-        case .cancelled: return "xmark.circle"
-        }
-    }
-
-    private func moveTask(_ delta: Int, focusRow: Bool) {
+    private func moveTask(_ delta: Int) {
         let rows = keys
         let index = rows.firstIndex(of: highlighted) ?? 0
-        let key = rows[min(max(index + delta, 0), rows.count - 1)]
-        chooseTask(key, advance: false)
-        if focusRow { focusedRow = key }
+        highlighted = rows[min(max(index + delta, 0), rows.count - 1)]
     }
 
-    private func chooseTask(_ key: String, advance: Bool) {
+    private func chooseTask(_ key: String) {
         guard !isLocked else { return }
         highlighted = key
         if key == "new" {
             model.taskSelection = .newTask
-            if advance, model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 model.text = model.taskQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         } else if let task = model.filteredTasks.first(where: { "task:\($0.id)" == key }) {
             if model.taskSelection != .existing(task.id) {
                 model.statusTarget = nil
                 model.taskAction = .addActivity
-                actionsExpanded = false
-                // A project scope from another task must not leak into this task.
                 for id in model.selectedProjectIds { model.removeProject(id) }
             }
             model.taskSelection = .existing(task.id)
         }
-        if advance { visibleColumn = 1; focusedRow = selectedActionKey }
-    }
-
-    private func chooseAction(_ key: String) {
-        guard !isLocked else { return }
-        if isNewTask, let status = TaskStatus.allCases.first(where: { "initial:\($0.rawValue)" == key }) {
-            model.initialStatus = status
-        } else if !isNewTask {
-            model.taskAction = key == "status" ? .changeStatus : .addActivity
-        }
-    }
-
-    private func moveAction(_ delta: Int) {
-        let rows = actionKeys
-        let index = rows.firstIndex(of: focusedRow ?? selectedActionKey) ?? 0
-        let key = rows[min(max(index + delta, 0), rows.count - 1)]
-        chooseAction(key)
-        focusedRow = key
-    }
-
-    private func moveTarget(_ delta: Int, from status: TaskStatus) {
-        let targets = model.availableStatusTargets()
-        guard !targets.isEmpty else { return }
-        let index = targets.firstIndex(of: status) ?? 0
-        let target = targets[min(max(index + delta, 0), targets.count - 1)]
-        model.statusTarget = target
-        focusedRow = "target:\(target.rawValue)"
-    }
-
-    private func focusDetail() {
-        visibleColumn = 2
-        if !isNewTask && model.taskAction == .changeStatus {
-            if let target = model.statusTarget ?? model.availableStatusTargets().first {
-                focusedRow = "target:\(target.rawValue)"
-            }
-        } else {
-            focusedRow = nil
-            (NSApp.keyWindow as? KeyboardPanel)?.requestDraftFocus()
-        }
-    }
-
-    private func focusSearch() {
-        visibleColumn = 0
-        focusedRow = nil
-        (NSApp.keyWindow as? KeyboardPanel)?.requestDefaultFocus(for: .task)
+        choosingTask = false
+        (NSApp.keyWindow as? KeyboardPanel)?.requestDraftFocus()
     }
 }
 
@@ -1085,6 +741,12 @@ import Observation
     @Bindable var model: CaptureModel
     let label: String
     let showsTokens: Bool
+    var fillsAvailableSpace = false
+    private var editorHeight: CGFloat {
+        let lines = model.text.split(separator: "\n", omittingEmptySubsequences: false)
+            .reduce(0) { $0 + max(1, ($1.count + 65) / 66) }
+        return min(320, max(120, CGFloat(lines) * 20 + 24))
+    }
     private var placeholder: String {
         if model.kind == .memo { return "회의에서 나눈 이야기, 해결한 문제, 떠오른 아이디어…" }
         return isActivity ? "진행한 일과 다음에 할 일을 적어주세요…" : "업무명과 진행 내용을 적어주세요…"
@@ -1095,12 +757,15 @@ import Observation
     }
 
     @State private var relatedExpanded = false
+    @State private var tokensExpanded = false
     @Environment(\.colorSchemeContrast) private var contrast
     private var isActivity: Bool { isCaptureActivity(model) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(label).font(.callout.weight(.medium)).foregroundStyle(WorkLogTheme.text)
+            if model.kind != .memo {
+                Text(label).font(.caption).foregroundStyle(WorkLogTheme.muted)
+            }
             ZStack(alignment: .topLeading) {
                 CaptureTextEditor(text: $model.text, selectionRange: $model.selectionRange, model: model, label: label)
                 if model.text.isEmpty {
@@ -1113,7 +778,8 @@ import Observation
                         .accessibilityHidden(true)
                 }
             }
-            .frame(height: model.kind == .task ? 138 : 160)
+            .frame(minHeight: fillsAvailableSpace ? 120 : editorHeight,
+                   maxHeight: fillsAvailableSpace ? .infinity : editorHeight)
             .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 7))
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7)
@@ -1130,34 +796,87 @@ import Observation
                         CaptureTokenPicker(model: model, kind: .tag, allowsCreation: true,
                                            onClose: restoreEditorFocus)
                     }
+                    Spacer(minLength: 4)
+                    relatedPickerButton
                 }
                 if isActivity {
                     Text(model.selectedProjectIds.isEmpty ? "공통 진행 기록" : "선택한 프로젝트의 진행 기록")
                         .font(.caption).foregroundStyle(WorkLogTheme.muted)
                 }
-                if !model.selectedProjectIds.isEmpty || (!isActivity && !model.selectedTagIds.isEmpty) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 6) {
-                        ForEach(model.selectedProjectIds, id: \.self) { id in
-                            ChipView(label: "@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")",
-                                     onRemove: { model.removeProject(id) })
+                if !selectedTokenNames.isEmpty {
+                    Button { tokensExpanded = true } label: {
+                        HStack(spacing: 6) {
+                            Text(selectedTokenNames.joined(separator: " · ")).lineLimit(1)
+                            Text("\(selectedTokenNames.count)개 연결").fixedSize()
+                            Image(systemName: "chevron.down").accessibilityHidden(true)
+                        }.font(.caption).foregroundStyle(WorkLogTheme.muted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("프로젝트와 태그 연결 관리: \(selectedTokenNames.joined(separator: ", "))")
+                    .popover(isPresented: $tokensExpanded) { selectedTokens }
+                    .onChange(of: tokensExpanded) { _, expanded in if !expanded { restoreEditorFocus() } }
+                }
+            } else {
+                relatedPickerButton
+            }
+
+        }
+        .disabled(model.isSubmitting)
+    }
+
+    private var selectedTokenNames: [String] {
+        model.selectedProjectIds.map { id in "@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")" }
+            + (isActivity ? [] : model.selectedTagIds.map { id in "#\(model.tags.first { $0.id == id }?.name ?? "태그")" })
+    }
+
+    private var selectedTokens: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("연결한 프로젝트와 태그").font(.headline)
+                Spacer()
+                Button("완료") { tokensExpanded = false }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(model.selectedProjectIds, id: \.self) { id in
+                        HStack {
+                            Text("@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("연결 해제") { model.removeProject(id) }.controlSize(.small)
                         }
-                        if !isActivity {
-                            ForEach(model.selectedTagIds, id: \.self) { id in
-                                ChipView(label: "#\(model.tags.first { $0.id == id }?.name ?? "태그")",
-                                         onRemove: { model.removeTag(id) })
+                    }
+                    if !isActivity {
+                        ForEach(model.selectedTagIds, id: \.self) { id in
+                            HStack {
+                                Text("#\(model.tags.first { $0.id == id }?.name ?? "태그")")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button("연결 해제") { model.removeTag(id) }.controlSize(.small)
                             }
                         }
                     }
-                    .accessibilityLabel("선택된 프로젝트와 태그")
+                }.font(.callout)
+            }.frame(maxHeight: 240)
+        }.padding(16).frame(width: 400)
+    }
+
+    private var relatedPickerButton: some View {
+        Button { relatedExpanded = true } label: {
+            Label(model.relatedRecords.isEmpty ? "관련 기록" : "관련 기록 \(model.relatedRecords.count)개",
+                  systemImage: "link").font(.caption)
+        }
+        .buttonStyle(.plain).foregroundStyle(WorkLogTheme.muted)
+        .popover(isPresented: $relatedExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("관련 기록").font(.headline)
+                    Spacer()
+                    Button("완료") { relatedExpanded = false }
                 }
-            }
-            SectionDisclosure(title: "관련 기록", summary: model.relatedRecords.isEmpty ? "선택 사항" : "\(model.relatedRecords.count)개 연결",
-                              isExpanded: $relatedExpanded) {
                 RelatedRecordPicker(selection: $model.relatedRecords, search: model.searchRelated,
                                     excluding: excluding, isDisabled: model.isSubmitting)
-            }
+            }.padding(16).frame(width: 420)
         }
-        .disabled(model.isSubmitting)
+        .onChange(of: relatedExpanded) { _, expanded in if !expanded { restoreEditorFocus() } }
     }
 
     private var candidateList: some View {
@@ -1230,7 +949,7 @@ import Observation
         field.font = NSFont.preferredFont(forTextStyle: .callout, options: [:])
         field.delegate = context.coordinator
         field.setAccessibilityLabel("업무 검색 또는 새 업무 이름")
-        field.setAccessibilityHelp("위아래 화살표로 업무를 고르고 Return으로 동작 선택 단계로 이동합니다.")
+        field.setAccessibilityHelp("위아래 화살표로 업무를 고르고 Return으로 선택하고 바로 내용을 입력합니다.")
         return field
     }
     func updateNSView(_ field: NSTextField, context: Context) {
@@ -1280,6 +999,7 @@ import Observation
     func makeNSView(context: Context) -> NSScrollView {
         let editor = CaptureNSTextView()
         editor.isRichText = false
+        editor.allowsUndo = true
         editor.focusRingType = .exterior
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.font = NSFont.preferredFont(forTextStyle: .body, options: [:])

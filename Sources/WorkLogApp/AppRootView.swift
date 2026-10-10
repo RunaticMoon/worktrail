@@ -68,24 +68,11 @@ struct AppRootView: View {
                         .frame(maxWidth: 540)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let environment = controller.environment {
-                    HStack(spacing: 0) {
-                        sidebar.frame(width: controller.sidebarExpanded ? 216 : 60)
-                        Divider()
-                        VStack(spacing: 0) {
-                            workspaceHeader
-                            Divider()
-                            if let notice = controller.notice {
-                                HStack(alignment: .top, spacing: 8) {
-                                    InlineNotice(message: notice)
-                                    Button { controller.dismissNotice() } label: { Image(systemName: "xmark") }
-                                        .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
-                                }.padding(12)
-                            }
-                            GeometryReader { contentGeometry in
-                                destination(environment, contentWidth: contentGeometry.size.width)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            }
-                        }
+                    HSplitView {
+                        sidebar.frame(minWidth: controller.sidebarExpanded ? 180 : 52,
+                                      idealWidth: controller.sidebarExpanded ? 200 : 52,
+                                      maxWidth: controller.sidebarExpanded ? 280 : 52)
+                        workspace(environment)
                     }
                     .worklogAnimation(.easeInOut(duration: 0.18), value: controller.sidebarExpanded)
                     .sheet(isPresented: Binding(get: { controller.selectedTaskId != nil },
@@ -119,6 +106,22 @@ struct AppRootView: View {
         }
     }
 
+    private func workspace(_ environment: AppEnvironment) -> some View {
+        VStack(spacing: 0) {
+            workspaceHeader
+            Divider()
+            if let notice = controller.notice {
+                HStack(alignment: .top, spacing: 8) {
+                    InlineNotice(message: notice)
+                    Button { controller.dismissNotice() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
+                }.padding(12)
+            }
+            destination(environment)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }.frame(minWidth: 500)
+    }
+
     private var taskNames: [String: String] {
         Dictionary(uniqueKeysWithValues: (controller.taskList?.rows ?? []).map { ($0.id, $0.title) })
     }
@@ -142,13 +145,13 @@ struct AppRootView: View {
             .buttonStyle(WorkLogButtonStyle(prominent: true))
             .accessibilityLabel("빠른 입력").worklogHelp("빠른 입력", keys: "⌘N")
             ScrollView {
-                VStack(spacing: 4) { ForEach(SidebarRoute.primary) { navigationButton($0, auxiliary: false) } }
+                VStack(spacing: 2) {
+                    ForEach(SidebarRoute.primary) { navigationButton($0, auxiliary: false) }
+                    Divider().padding(.vertical, 8)
+                    ForEach(SidebarRoute.secondary) { navigationButton($0, auxiliary: true) }
+                }
             }
-            Spacer(minLength: 0)
-            Divider()
-            ScrollView {
-                VStack(spacing: 2) { ForEach(SidebarRoute.secondary) { navigationButton($0, auxiliary: true) } }
-            }.frame(maxHeight: 220)
+
         }
         .padding(controller.sidebarExpanded ? 12 : 8)
         .background(WorkLogTheme.surface)
@@ -169,13 +172,13 @@ struct AppRootView: View {
             .font(auxiliary ? .callout : .body)
             .foregroundStyle(WorkLogTheme.text)
             .padding(.horizontal, controller.sidebarExpanded ? 8 : 0)
-            .padding(.vertical, auxiliary ? 6 : 10)
+            .padding(.vertical, auxiliary ? 6 : 8)
             .frame(maxWidth: .infinity, alignment: controller.sidebarExpanded ? .leading : .center)
             .background(selectedRoute == route ? WorkLogTheme.accentSoft : Color.clear,
                         in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
-        .buttonStyle(WorkLogButtonStyle())
+        .buttonStyle(.plain)
         .accessibilityLabel(Text(route.purpose.map { "\(route.title), \($0)" } ?? route.title))
         .accessibilityAddTraits(selectedRoute == route ? .isSelected : [])
         .worklogHelp(route.purpose.map { "\(route.title) · \($0)" } ?? route.title, keys: route.shortcut)
@@ -196,7 +199,7 @@ struct AppRootView: View {
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
-    @ViewBuilder private func destination(_ environment: AppEnvironment, contentWidth: CGFloat) -> some View {
+    @ViewBuilder private func destination(_ environment: AppEnvironment) -> some View {
         switch selectedRoute {
         case .day:
             if let day = controller.day {
@@ -205,7 +208,7 @@ struct AppRootView: View {
                         let asOf: WorkDate? = day.box?.isPast == true ? day.selectedDate : nil
                         controller.openTask(id, asOf: asOf)
                     }, projectNames: Dictionary(uniqueKeysWithValues: (controller.projects?.projects ?? []).map { ($0.id, $0.name) }),
-                    contentWidth: contentWidth, detailDismissalRevision: detailDismissalRevision)
+                    detailDismissalRevision: detailDismissalRevision)
             }
         case .tasks:
             if let tasks = controller.taskList {

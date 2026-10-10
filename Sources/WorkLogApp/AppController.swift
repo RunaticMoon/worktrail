@@ -46,19 +46,8 @@ import WorkLogCore
         guard !didStart else { return }; didStart = true
         clearRegistrations()
         do {
-            let paths = AppPaths.standard()
-            let settings = try SettingsStore(fileURL: paths.settingsFile).load()
-            var provider: AIProvider?
-            if settings.aiEnabled {
-                let candidate = CodexAppServerProvider(config: CodexProviderConfig(
-                    executablePath: settings.codexExecutablePath, stagingRoot: paths.aiJobsDirectory))
-                let capabilities = await candidate.checkCapabilities()
-                if capabilities.installed && capabilities.protocolCompatible { provider = candidate }
-                else { notice = "AI 연결을 사용할 수 없습니다. 기록과 원문 검색은 정상 동작합니다." }
-            }
-            let env = try AppEnvironment.open(AppEnvironmentOptions(paths: paths,
-                keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier),
-                authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider))
+            let env = try await openEnvironment()
+            let settings = env.settings
             environment = env
             captureSession = CaptureSessionModel(environment: env)
             graph = GraphModel(environment: env)
@@ -97,6 +86,27 @@ import WorkLogCore
             clearRegistrations()
             startupError = "WorkLog 저장소를 열지 못했습니다. 저장소 권한과 설정 파일을 확인하고 다시 시도하세요."
         }
+    }
+
+    private func openEnvironment() async throws -> AppEnvironment {
+        #if DEBUG
+        if let fixture = try UITestFixture.requested() {
+            return try await fixture.makeEnvironment()
+        }
+        #endif
+        let paths = AppPaths.standard()
+        let settings = try SettingsStore(fileURL: paths.settingsFile).load()
+        var provider: AIProvider?
+        if settings.aiEnabled {
+            let candidate = CodexAppServerProvider(config: CodexProviderConfig(
+                executablePath: settings.codexExecutablePath, stagingRoot: paths.aiJobsDirectory))
+            let capabilities = await candidate.checkCapabilities()
+            if capabilities.installed && capabilities.protocolCompatible { provider = candidate }
+            else { notice = "AI 연결을 사용할 수 없습니다. 기록과 원문 검색은 정상 동작합니다." }
+        }
+        return try AppEnvironment.open(AppEnvironmentOptions(paths: paths,
+            keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier),
+            authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider))
     }
 
     func retryStart() async { didStart = false; startupError = nil; await start() }

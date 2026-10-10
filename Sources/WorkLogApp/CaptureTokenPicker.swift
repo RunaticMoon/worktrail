@@ -44,9 +44,10 @@ import WorkLogCore
             highlighted = options.first(where: { !$0.isNew })?.id
             isPresented = true
         } label: {
-            Text(kind == .project ? "@ 프로젝트" : "# 태그").font(.callout)
+            Text(kind == .project ? "@ 프로젝트" : "# 태그").font(.caption)
         }
         .buttonStyle(.bordered)
+        .controlSize(.small)
         .worklogHelp("\(title) 검색 및 선택")
         .accessibilityHint("검색 가능한 목록을 엽니다. 본문은 바뀌지 않습니다.")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) { pickerContent }

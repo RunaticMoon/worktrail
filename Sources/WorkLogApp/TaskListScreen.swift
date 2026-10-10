@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import WorkLogCore
 
@@ -10,11 +11,15 @@ import WorkLogCore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScreenHeader(title: "업무", purpose: "업무의 현재 상태와 진행 기록") {
+            ScreenHeader(title: "업무", purpose: "") {
                 Button(action: onCapture) { ShortcutLabel(title: "업무 기록 추가", keys: "⌘N") }
             }
-            TextField("업무 이름으로 찾기", text: $model.query)
-                .textFieldStyle(.roundedBorder).accessibilityLabel("업무 이름 검색")
+            HStack(spacing: 12) {
+                TextField("업무 이름으로 찾기", text: $model.query)
+                    .textFieldStyle(.roundedBorder).accessibilityLabel("업무 이름 검색")
+                Text("\(model.filteredRows.count)개").font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    .monospacedDigit().fixedSize()
+            }
             if let error = model.errorMessage {
                 RecoveryNotice(failed: error, preserved: "저장된 업무와 검색어는 그대로입니다.", retry: { model.load() })
             } else if model.rows.isEmpty {
@@ -35,19 +40,21 @@ import WorkLogCore
                     }
                     .listStyle(.inset)
                     .onKeyPress(keys: [.return], phases: .down) { press in
-                        guard press.modifiers.isEmpty else { return .ignored }
+                        guard press.modifiers.isEmpty,
+                              (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
                         guard let selection else { return .ignored }
                         onOpen(selection)
                         return .handled
                     }
                     .onAppear { if let selection { proxy.scrollTo(selection) } }
                 }
-                Button("선택한 업무 상세 열기") { if let selection { onOpen(selection) } }
-                    .disabled(selection == nil).worklogHelp("선택한 업무 상세 열기", keys: "Return")
-                Text("↑↓ 선택 · Return 또는 더블클릭으로 상세 열기")
-                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                HStack(spacing: 12) {
+                    Button("선택한 업무 열기") { if let selection { onOpen(selection) } }
+                        .disabled(selection == nil).worklogHelp("선택한 업무 상세 열기", keys: "Return")
+                    Text("↑↓ 선택 · Return 열기")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                }
             }
-            Spacer(minLength: 0)
         }
         .padding(WorkLogTheme.contentInset)
         .onAppear { model.load() }
@@ -57,31 +64,44 @@ import WorkLogCore
     }
 
     private func taskRow(_ row: TaskListRow) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(row.title).font(.headline).fixedSize(horizontal: false, vertical: true)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { badges(row) }
-                VStack(alignment: .leading, spacing: 8) { badges(row) }
-            }
-            if !row.projectNames.isEmpty {
-                Text(projectLabel(row.projectNames)).font(.callout).foregroundStyle(WorkLogTheme.muted)
-                    .help(row.projectNames.joined(separator: " · "))
-                    .accessibilityLabel(Text("프로젝트: " + row.projectNames.joined(separator: ", ")))
-            }
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(row.title).font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !row.projectNames.isEmpty || row.dueLabel != nil || row.isInThisWeekPlan {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { metadata(row) }
+                        VStack(alignment: .leading, spacing: 4) { metadata(row) }
+                    }
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Text(row.status?.koreanLabel ?? "상태 없음")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(row.status == .inProgress ? WorkLogTheme.accent : WorkLogTheme.muted)
+                .frame(width: 56, alignment: .trailing)
+                .accessibilityLabel("Task 전체 상태: \(row.status?.koreanLabel ?? "상태 없음")")
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 7)
         .accessibilityElement(children: .combine)
         .accessibilityHint("Return으로 업무 상세 열기")
     }
 
-    @ViewBuilder private func badges(_ row: TaskListRow) -> some View {
-        if let status = row.status { TaskStatusBadge(status: status) }
-        else { StatusBadge(label: "상태 없음", systemImage: "questionmark.circle", tone: .neutral) }
-        if let due = row.dueLabel {
-            StatusBadge(label: due, systemImage: row.isOverdue ? "exclamationmark.triangle" : "calendar",
-                        tone: row.isOverdue ? .warning : .neutral)
+    @ViewBuilder private func metadata(_ row: TaskListRow) -> some View {
+        if !row.projectNames.isEmpty {
+            Text(projectLabel(row.projectNames))
+                .lineLimit(1)
+                .help(row.projectNames.joined(separator: " · "))
+                .accessibilityLabel(Text("프로젝트: " + row.projectNames.joined(separator: ", ")))
         }
-        if row.isInThisWeekPlan { ChipView(label: "이번 주", systemImage: "calendar.badge.clock") }
+        if let due = row.dueLabel {
+            Label(due, systemImage: row.isOverdue ? "exclamationmark.triangle" : "calendar")
+                .foregroundStyle(row.isOverdue ? WorkLogTheme.text : WorkLogTheme.muted)
+                .fixedSize()
+        }
+        if row.isInThisWeekPlan {
+            Label("이번 주 계획", systemImage: "calendar.badge.clock").fixedSize()
+        }
     }
 
     private func projectLabel(_ names: [String]) -> String {

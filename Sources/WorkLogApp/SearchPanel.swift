@@ -110,10 +110,8 @@ import WorkLogCore
                     Image(systemName: "magnifyingglass")
                         .font(.callout).fontWeight(.semibold)
                         .foregroundStyle(WorkLogTheme.accent)
-                        .frame(width: 28, height: 28)
-                        .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
-                    Text("WorkLog").font(.headline)
-                    Text("/ 검색").font(.callout).foregroundStyle(WorkLogTheme.muted)
+                        .accessibilityHidden(true)
+                    Text("검색").font(.callout.weight(.semibold))
                     Spacer()
                     Keycap("esc")
                 }
@@ -206,7 +204,7 @@ import WorkLogCore
 
     private func focusSearchField(in root: Any?, depth: Int = 0) -> Bool {
         guard depth < 40, let element = root as? NSAccessibilityProtocol else { return false }
-        if element.accessibilityLabel() == "원문 검색 또는 AI 질문" || element.accessibilityLabel() == "Secret 제목 검색" {
+        if element.accessibilityLabel() == "원문 검색" || element.accessibilityLabel() == "Secret 제목 검색" {
             element.setAccessibilityFocused(true)
             return true
         }

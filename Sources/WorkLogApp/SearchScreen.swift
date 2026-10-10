@@ -23,6 +23,8 @@ import WorkLogCore
     @State private var useDates = false
     @State private var filterError: String?
     @State private var filtersExpanded = false
+    @State private var aiExpanded = false
+    @State private var sourceOpenedFromQuery = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -31,6 +33,7 @@ import WorkLogCore
                 Text(isPanel ? "Secret (⌘2)" : "Secret").tag(SearchScope.secret)
             }
             .pickerStyle(.segmented)
+            .frame(width: 220)
             .worklogHelp(isPanel ? "검색 범위 · ⌘1 기록 · ⌘2 Secret" : "검색 범위 · Tab으로 포커스한 뒤 화살표로 전환")
             if scope == .records {
                 recordSearch
@@ -41,13 +44,16 @@ import WorkLogCore
                     detail: "검색 패널 또는 Secret 화면에서 제목을 검색하세요.")
             }
         }
-        .padding(WorkLogTheme.contentInset)
+        .padding(16)
         .background(WorkLogTheme.canvas)
         .tint(WorkLogTheme.accent)
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
         .onChange(of: scope) { _, _ in focused = scope == .records }
-        .sheet(isPresented: Binding(get: { source != nil }, set: { if !$0 { source = nil } })) {
+        .sheet(isPresented: Binding(get: { source != nil }, set: { if !$0 { source = nil } }), onDismiss: {
+            if sourceOpenedFromQuery { focused = true }
+            else { focusedResult = model.selectedKey }
+        }) {
             SourceRecordSheet(bodyText: sourceBody, error: sourceError, snippet: source?.snippet ?? "",
                 sourceTitle: source.map { sourceLabel($0.sourceType) } ?? "기록",
                 workDate: source?.workDate, onClose: { source = nil })
@@ -57,38 +63,36 @@ import WorkLogCore
     private var recordSearch: some View {
         VStack(alignment: .leading, spacing: 12) {
             queryField
+            filterControls
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        filterControls
-                        resultsHeader
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         if model.errorMessage != nil {
                             RecoveryNotice(failed: "검색하지 못했습니다", preserved: "입력과 필터는 그대로입니다",
                                 retryTitle: "다시 검색", retry: { model.search() })
                         }
-                        if model.isAIAvailable, let message = model.aiMessage {
-                            Label(message, systemImage: "info.circle")
-                                .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        if !model.tagIds.isEmpty {
-                            Text("태그 필터는 원문 검색에만 적용됩니다.")
-                                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                        if aiExpanded || model.answer != nil {
+                            DisclosureGroup("기록 기반 AI 답변", isExpanded: $aiExpanded) {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    if model.isAskingAI { ProgressView("답변 생성 중…").controlSize(.small) }
+                                    if let message = model.aiMessage {
+                                        Text(message).font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                    }
+                                    if let answer = model.answer { answerView(answer) }
+                                }.padding(.vertical, 12)
+                            }
+                            .padding(.bottom, 12)
                         }
                         if model.isSearching { ProgressView("원문 검색 중…") }
                         if model.hits.isEmpty && !model.isSearching && model.errorMessage == nil {
                             emptyResults
                         }
                         ForEach(model.hits, id: \.key) { hit in resultRow(hit).id(hit.key) }
-                        if let answer = model.answer { answerView(answer) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(1)
                 }
                 .onChange(of: model.selectedKey) { _, key in
                     if let key { proxy.scrollTo(key) }
-                }
-                .onChange(of: source) { _, hit in
-                    if hit == nil, let key = model.selectedKey { proxy.scrollTo(key) }
                 }
                 .onChange(of: model.hits) { _, _ in
                     if let key = model.selectedKey { proxy.scrollTo(key) }
@@ -96,7 +100,8 @@ import WorkLogCore
                 .onAppear { if let key = model.selectedKey { proxy.scrollTo(key) } }
             }
             if model.isPreviewVisible, let hit = model.selectedHit {
-                ScrollView { preview(hit) }.frame(maxHeight: 160)
+                Divider()
+                ScrollView { preview(hit) }.frame(maxHeight: 140)
             }
         }
         .onAppear {
@@ -126,6 +131,7 @@ import WorkLogCore
         if isPanel, modifiers == .command, event.keyCode == 18 { scope = .records; return true }
         if isPanel, modifiers == .command, event.keyCode == 19 { scope = .secret; return true }
         guard scope == .records, source == nil else { return false }
+        if modifiers == .command, event.keyCode == 3 { focused = true; return true }
         let navigatingResults = focused || focusedResult != nil
         if navigatingResults, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
             model.moveSelection(by: event.keyCode == 125 ? 1 : -1)
@@ -140,7 +146,7 @@ import WorkLogCore
         }
         if event.keyCode == 36 || event.keyCode == 76 {
             if modifiers == .command {
-                if model.canAskAI { Task { await model.askAI() } }
+                askAI()
                 return true
             }
             if navigatingResults, modifiers.isEmpty, let hit = model.selectedHit { openSource(hit); return true }
@@ -153,11 +159,11 @@ import WorkLogCore
             Image(systemName: "magnifyingglass")
                 .font(.title3)
                 .foregroundStyle(focused ? WorkLogTheme.accent : WorkLogTheme.muted)
-            TextField("기록을 찾거나, 업무에 대해 질문하세요", text: $model.text)
+            TextField("메모, 업무, 진행 기록 검색", text: $model.text)
                 .font(.body)
                 .textFieldStyle(.plain)
                 .focused($focused)
-                .accessibilityLabel("원문 검색 또는 AI 질문")
+                .accessibilityLabel("원문 검색")
                 .accessibilityHint("↑↓로 결과 선택, ⌥Space 미리보기, Return 원문 열기")
                 .worklogHelp("원문 검색", keys: "↑↓ 선택 · ⌥Space 미리보기 · Return 원문")
             if !model.text.isEmpty {
@@ -176,96 +182,90 @@ import WorkLogCore
                 .accessibilityHidden(true)
         }
         .padding(12)
-        .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius))
+        .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 8))
         .overlay {
-            RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius)
+            RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(focused ? WorkLogTheme.accent.opacity(0.6) : WorkLogTheme.border, lineWidth: 1)
         }
     }
 
     private var filterControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Button { filtersExpanded.toggle() } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "slider.horizontal.3")
-                        Text("필터")
-                        if model.activeFilterCount > 0 {
-                            Text(model.activeFilterCount.formatted())
-                                .font(.caption2).fontWeight(.semibold)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(WorkLogTheme.accentSoft, in: Capsule())
-                        }
-                        Image(systemName: filtersExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2).fontWeight(.semibold)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(model.activeFilterCount > 0 ? WorkLogTheme.accent : WorkLogTheme.muted)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("필터, \(model.activeFilterCount)개 적용 중"))
-                .accessibilityValue(filtersExpanded ? "펼쳐짐" : "접힘")
-                .worklogHelp("검색 필터 펼치기")
-                if model.activeFilterCount > 0 {
-                    Button("필터 초기화", action: resetFilters)
-                        .font(.caption)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(WorkLogTheme.muted)
-                }
-                Spacer(minLength: 0)
-                Label("원문 검색", systemImage: "doc.text.magnifyingglass")
-                    .font(.caption2)
-                    .foregroundStyle(WorkLogTheme.muted)
+        HStack(spacing: 12) {
+            Text("결과 \(model.hits.count)건").font(.callout).foregroundStyle(WorkLogTheme.muted)
+            Button { filtersExpanded.toggle() } label: {
+                Label(model.activeFilterCount == 0 ? "필터" : "필터 \(model.activeFilterCount)",
+                      systemImage: "line.3.horizontal.decrease")
             }
-            if filtersExpanded {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Picker("유형", selection: Binding(get: { model.types?.first?.rawValue ?? "all" }, set: {
-                            model.types = SearchSourceType(rawValue: $0).map { Set([$0]) }
-                            model.search()
-                        })) {
-                            Text("전체").tag("all")
-                            ForEach(SearchSourceType.allCases, id: \.self) { Text(sourceLabel($0)).tag($0.rawValue) }
-                        }
-                        Picker("프로젝트", selection: Binding(get: { model.projectIds.first ?? "" }, set: {
-                            model.projectIds = $0.isEmpty ? [] : [$0]
-                            model.search()
-                        })) {
-                            Text("전체").tag("")
-                            ForEach(projects) { Text($0.name).tag($0.id) }
-                        }
-                        Picker("태그", selection: Binding(get: { model.tagIds.first ?? "" }, set: {
-                            model.tagIds = $0.isEmpty ? [] : [$0]
-                            model.search()
-                        })) {
-                            Text("전체").tag("")
-                            ForEach(tags) { Text($0.name).tag($0.id) }
-                        }
-                    }
-                    .controlSize(.small)
-                    Toggle("기간 지정", isOn: $useDates)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .font(.caption)
-                        .onChange(of: useDates) { _, _ in applyDates() }
-                    if useDates, let start = filterStart, let end = filterEnd {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 12) {
-                                dateFilters(start: start, end: end)
-                            }
-                            VStack(alignment: .leading, spacing: 10) {
-                                dateFilters(start: start, end: end)
-                            }
-                        }
-                    }
-                    if let filterError { InlineNotice(message: filterError) }
+            .popover(isPresented: $filtersExpanded, arrowEdge: .bottom) { filterPopover }
+            .accessibilityValue("\(model.activeFilterCount)개 적용 중")
+            .worklogHelp("유형 · 프로젝트 · 태그 · 기간 필터")
+            if model.activeFilterCount > 0 {
+                Button("초기화", action: resetFilters).font(.caption)
+            }
+            Spacer(minLength: 0)
+            if model.selectedHit != nil {
+                Button { model.togglePreview() } label: {
+                    Label(model.isPreviewVisible ? "미리보기 닫기" : "미리보기", systemImage: "doc.text.viewfinder")
                 }
-                .worklogCard(padding: 14)
-            } else if let filterError {
-                InlineNotice(message: filterError)
+                .worklogHelp("미리보기", keys: "⌥Space · 결과 행 Space")
+            }
+            if model.isAIAvailable {
+                Button(action: askAI) { Label("AI 질문", systemImage: "sparkles") }
+                    .disabled(!model.canAskAI)
+                    .worklogHelp(model.tagIds.isEmpty ? "입력한 질문에 기록을 근거로 답변" : "AI 질문은 태그 필터를 해제한 뒤 실행", keys: "⌘Return")
             }
         }
-        .padding(.horizontal, 2)
+        .controlSize(.small)
+        .buttonStyle(.borderless)
+    }
+
+    private var filterPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("검색 필터").font(.headline)
+                Spacer()
+                Button("완료") { filtersExpanded = false }
+            }
+            Picker("유형", selection: Binding(get: { model.types?.first?.rawValue ?? "all" }, set: {
+                model.types = SearchSourceType(rawValue: $0).map { Set([$0]) }
+                model.search()
+            })) {
+                Text("전체").tag("all")
+                ForEach(SearchSourceType.allCases, id: \.self) { Text(sourceLabel($0)).tag($0.rawValue) }
+            }
+            Picker("프로젝트", selection: Binding(get: { model.projectIds.first ?? "" }, set: {
+                model.projectIds = $0.isEmpty ? [] : [$0]
+                model.search()
+            })) {
+                Text("전체").tag("")
+                ForEach(projects) { Text($0.name).tag($0.id) }
+            }
+            Picker("태그", selection: Binding(get: { model.tagIds.first ?? "" }, set: {
+                model.tagIds = $0.isEmpty ? [] : [$0]
+                model.search()
+            })) {
+                Text("전체").tag("")
+                ForEach(tags) { Text($0.name).tag($0.id) }
+            }
+            Toggle("기간 지정", isOn: $useDates)
+                .onChange(of: useDates) { _, _ in applyDates() }
+            if useDates, let start = filterStart, let end = filterEnd {
+                dateFilters(start: start, end: end)
+            }
+            if let filterError { InlineNotice(message: filterError) }
+            if !model.tagIds.isEmpty {
+                Text("태그 필터는 로컬 원문 검색에 적용됩니다.").font(.caption).foregroundStyle(WorkLogTheme.muted)
+            }
+            if model.activeFilterCount > 0 { Button("필터 초기화", action: resetFilters) }
+        }
+        .controlSize(.small)
+        .padding(16).frame(width: 360)
+    }
+
+    private func askAI() {
+        guard model.canAskAI else { return }
+        aiExpanded = true
+        Task { await model.askAI() }
     }
 
     @ViewBuilder private func dateFilters(start: WorkDate, end: WorkDate) -> some View {
@@ -275,34 +275,6 @@ import WorkLogCore
         WorkDatePicker(title: "종료일 포함", value: Binding(get: { filterEnd ?? end }, set: {
             filterEnd = $0; applyDates()
         }), calendar: environment.calendar)
-    }
-
-    private var resultsHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("검색 결과 \(model.hits.count)건").font(.headline)
-                Spacer(minLength: 0)
-                if model.selectedHit != nil {
-                    Button { model.togglePreview() } label: { Label("미리보기", systemImage: "doc.text.viewfinder") }
-                        .worklogHelp("미리보기", keys: "⌥Space · 결과 행 Space")
-                }
-            }
-            if model.isAIAvailable {
-                HStack {
-                    Button { if model.canAskAI { Task { await model.askAI() } } } label: {
-                        Label("기록을 바탕으로 AI 답변", systemImage: "sparkles")
-                    }
-                    .buttonStyle(WorkLogButtonStyle())
-                    .disabled(!model.canAskAI)
-                    .worklogHelp("기록을 바탕으로 AI 답변", keys: "⌘Return")
-                    if model.isAskingAI { ProgressView("답변 생성 중…").controlSize(.small) }
-                }
-            } else {
-                Label("AI 미연결 · 원문 검색은 그대로 사용할 수 있습니다", systemImage: "info.circle")
-                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
     }
 
     private var emptyResults: some View {
@@ -321,23 +293,25 @@ import WorkLogCore
         return Button { model.select(hit); openSource(hit) } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: sourceIcon(hit.sourceType)).accessibilityHidden(true)
+                    .foregroundStyle(WorkLogTheme.muted).frame(width: 18).padding(.top, 2)
                 VStack(alignment: .leading, spacing: 6) {
-                    hitMetadata(hit)
                     Text(highlightedSnippet(hit.snippet)).font(.body).lineLimit(3)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    hitMetadata(hit).foregroundStyle(WorkLogTheme.muted)
                 }
-                Image(systemName: "arrow.up.right").accessibilityHidden(true)
+                Image(systemName: "chevron.right").font(.caption).accessibilityHidden(true)
+                    .foregroundStyle(WorkLogTheme.muted).padding(.top, 2)
             }
-            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundStyle(selected ? Color(nsColor: .alternateSelectedControlTextColor) : WorkLogTheme.text)
-            .background(selected ? Color(nsColor: .selectedContentBackgroundColor) : WorkLogTheme.surface,
-                in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(selected ? Color(nsColor: .selectedContentBackgroundColor) : WorkLogTheme.border,
-                        lineWidth: selected ? 2 : 1)
+            .padding(.horizontal, 10).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(WorkLogTheme.text)
+            .background(selected ? WorkLogTheme.accentSoft : .clear)
+            .overlay(alignment: .bottom) { Divider() }
+            .overlay(alignment: .leading) {
+                if selected { Rectangle().fill(WorkLogTheme.accent).frame(width: 3) }
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focused($focusedResult, equals: hit.key)
@@ -378,7 +352,7 @@ import WorkLogCore
             hitMetadata(hit)
             Text(hit.snippet).font(.body).textSelection(.enabled)
             Button("원문 열기") { openSource(hit) }.worklogHelp("원문 열기", keys: "Return")
-        }.frame(maxWidth: .infinity, alignment: .leading).worklogCard()
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
     }
 
     private func answerView(_ answer: GroundedAnswer) -> some View {
@@ -414,8 +388,7 @@ import WorkLogCore
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .worklogCard(padding: 18)
-        .padding(.top, 6)
+        .padding(.vertical, 8)
     }
 
     private func resetFilters() {
@@ -435,6 +408,7 @@ import WorkLogCore
     }
 
     private func openSource(_ hit: SearchHit) {
+        sourceOpenedFromQuery = focused
         source = hit; sourceBody = nil; sourceError = nil
         do {
             switch hit.sourceType {
@@ -478,15 +452,14 @@ import WorkLogCore
                 Image(systemName: "doc.text")
                     .font(.title3)
                     .foregroundStyle(WorkLogTheme.accent)
-                    .frame(width: 44, height: 44)
-                    .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("저장된 원문").font(.title3).fontWeight(.semibold)
                     Text("\(sourceTitle) · \(workDate?.iso ?? "날짜 없음")")
                         .font(.caption).foregroundStyle(WorkLogTheme.muted)
                 }
                 Spacer()
-                Button("닫기", action: onClose)
+                Button("검색으로 돌아가기", action: onClose)
                     .buttonStyle(WorkLogButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
@@ -512,7 +485,6 @@ import WorkLogCore
                         .textSelection(.enabled)
                         .padding(10)
                     }
-                    .worklogCard(padding: 0)
                     .onAppear { proxy.scrollTo("match", anchor: .top) }
                 }
             }

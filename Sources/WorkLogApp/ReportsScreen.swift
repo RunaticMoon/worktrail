@@ -67,6 +67,9 @@ private struct ReportWorkspace: View {
     @State private var copyFailed = false
     @State private var retryAction: RetryAction = .load
     @State private var isPreparingScreen = false
+    @State private var planExpanded = false
+    @State private var quizExpanded = false
+    @State private var writingOptionsExpanded = false
 
     private enum RetryAction { case load, generate, save, confirm, apply, propose, createEvaluation }
     private var isWeekly: Bool { family == .submission }
@@ -75,30 +78,65 @@ private struct ReportWorkspace: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ScreenHeader(title: title, purpose: isWeekly ? "팀 제출용" : "성과평가용 상세 기록")
-                    if model.family != family {
-                        familyTransitionNotice
-                    } else {
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(title).font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                        Text(isWeekly ? "팀 제출용" : "성과평가용 상세 기록")
+                            .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    }
+                    if model.family == family {
                         if isWeekly { submissionControls } else { performanceControls }
-                        templateControls
-                        if let pending = model.pendingRegeneration { regenerationNotice(pending) }
-                        if let error = model.errorMessage {
-                            RecoveryNotice(failed: error, preserved: "기록과 저장한 보고서 버전은 그대로 보존됩니다.",
-                                           retryTitle: retryTitle, retry: { retry() })
-                                .disabled(model.isGenerating)
+                        if let version = model.version {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 12) {
+                                    versionControls(version)
+                                    Spacer(minLength: 8)
+                                    reportActions
+                                }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 12) { versionControls(version) }
+                                    HStack(spacing: 8) { reportActions }
+                                }
+                            }
                         }
-                        if model.isGenerating {
-                            StateView(kind: .loading, title: "보고서 초안 생성 중…",
-                                      detail: "현재 본문과 계획은 계속 확인할 수 있습니다.")
-                        }
-                        workLayout(width: geometry.size.width)
                     }
                 }
-                .frame(maxWidth: 1200, alignment: .leading)
-                .padding(WorkLogTheme.contentInset)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, WorkLogTheme.contentInset)
+                .padding(.vertical, 12)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if model.family != family {
+                            familyTransitionNotice
+                        } else {
+                            if let pending = model.pendingRegeneration { regenerationNotice(pending) }
+                            if let error = model.errorMessage {
+                                RecoveryNotice(failed: error, preserved: "기록과 저장한 보고서 버전은 그대로 보존됩니다.",
+                                               retryTitle: retryTitle, retry: { retry() })
+                                    .disabled(model.isGenerating)
+                            }
+                            if model.isGenerating {
+                                HStack(spacing: 8) {
+                                    ProgressView().controlSize(.small)
+                                    Text("보고서 초안 생성 중…").font(.callout)
+                                }
+                            }
+                            reportBody(editorHeight: min(600, max(240, geometry.size.height - 252)))
+                            weeklySupport
+                            if let version = model.version {
+                                reviewDetails(version)
+                                evidenceDetails
+                            }
+                            Divider()
+                            generationControls
+                            templateControls
+                        }
+                    }
+                    .frame(maxWidth: 1120, alignment: .leading)
+                    .padding(WorkLogTheme.contentInset)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .navigationTitle(title)
@@ -114,78 +152,95 @@ private struct ReportWorkspace: View {
         .onChange(of: model.performanceDate) { _, _ in if !isWeekly { loadSelection() } }
         .onChange(of: model.periodType) { _, _ in if !isWeekly { loadSelection() } }
         .onChange(of: model.evaluationPeriodId) { _, _ in if !isWeekly { loadSelection() } }
+        .onChange(of: model.reportDate) { _, _ in if isWeekly { quiz?.reset() } }
         .onChange(of: model.version?.id) { _, _ in copyFailed = false }
         .onChange(of: model.pendingRegeneration?.id) { _, _ in comparisonExpanded = false }
         .onChange(of: plan?.items) { _, _ in model.checkStale() }
         .onChange(of: quiz?.recorded) { _, _ in model.checkStale() }
     }
 
-    private func workLayout(width: CGFloat) -> some View {
-        // Sidebar consumes part of the window. Use the actual content width, not the screen size.
-        // AnyLayout preserves the editor, plan selection and question drafts on resize.
-        let horizontal = isWeekly && width >= 940
-        let layout: AnyLayout = horizontal
-            ? AnyLayout(HStackLayout(alignment: .top, spacing: 16))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
-        return layout {
-            reportBody.frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
-            if isWeekly, let plan, let quiz {
-                VStack(alignment: .leading, spacing: 16) {
-                    PlanScreen(model: plan, calendar: calendar, embedded: true)
-                    Divider()
-                    QuizCard(model: quiz, reportDate: model.reportDate)
+    @ViewBuilder private var weeklySupport: some View {
+        if isWeekly, let plan, let quiz {
+            Divider()
+            DisclosureGroup(isExpanded: $planExpanded) {
+                PlanScreen(model: plan, calendar: calendar, embedded: true)
+                    .padding(.top, 12)
+            } label: {
+                HStack(spacing: 8) {
+                    Text("이번 주 계획 검토").font(.body.weight(.medium))
+                    Text("확정 \(plan.confirmed.count) · 후보 \(plan.candidates.count)")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
-                .frame(width: horizontal ? 340 : nil, alignment: .leading)
-                .frame(maxWidth: horizontal ? 340 : .infinity, alignment: .leading)
+            }
+            DisclosureGroup(isExpanded: $quizExpanded) {
+                QuizCard(model: quiz, reportDate: model.reportDate)
+                    .padding(.top, 12)
+            } label: {
+                HStack(spacing: 8) {
+                    Text("성과 보충 질문").font(.body.weight(.medium))
+                    Text(quiz.remainingCount > 0 ? "선택 사항 · \(quiz.remainingCount)개 남음" : "선택 사항")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                }
             }
         }
     }
 
     private var submissionControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(model.previousPeriodLabel)
-            Text(model.planPeriodLabel)
-            WorkDatePicker(title: "보고 주 선택", value: Binding(
-                get: { model.reportDate }, set: { date in
-                    let week = Periods(calendar: calendar).weekStart(containing: date)
-                    guard week != model.submissionPeriods.plan.start else { return }
-                    model.reportDate = week
-                    Task { await prepareScreen() }
-                }), calendar: calendar)
-                .frame(maxWidth: 400).disabled(selectionLocked || isPreparingScreen)
-            Text("공통 업무는 한 번만 묶고, 사용자 확정 계획만 예정에 포함합니다.")
-                .font(.callout).foregroundStyle(WorkLogTheme.muted)
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) { submissionSelection }
+                VStack(alignment: .leading, spacing: 8) { submissionSelection }
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) { submissionRanges }
+                VStack(alignment: .leading, spacing: 4) { submissionRanges }
+            }
         }
-        .fixedSize(horizontal: false, vertical: true)
+    }
+    @ViewBuilder private var submissionSelection: some View {
+        WorkDatePicker(title: "보고 주", value: Binding(
+            get: { model.reportDate }, set: { date in
+                let week = Periods(calendar: calendar).weekStart(containing: date)
+                guard week != model.submissionPeriods.plan.start else { return }
+                model.reportDate = week
+                Task { await prepareScreen() }
+            }), calendar: calendar)
+            .disabled(selectionLocked || isPreparingScreen)
+        reportHistory
+    }
+    @ViewBuilder private var submissionRanges: some View {
+        Text("실적 \(KoreanDateLabel.range(model.submissionPeriods.previous, calendar: calendar, includeYear: true))")
+            .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            .help("지난주 실제 활동과 일요일 종료 상태")
+        Text("계획 \(KoreanDateLabel.range(model.submissionPeriods.plan, calendar: calendar, includeYear: true))")
+            .font(.caption).foregroundStyle(WorkLogTheme.muted)
+            .help("사용자가 확정한 이번 주 계획 · 착수나 완료와 별개")
     }
 
     private var templateControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { templateActions }
-                VStack(alignment: .leading, spacing: 8) { templateActions }
-            }
-            SectionDisclosure(title: "작성 옵션", summary: model.useAI && model.isAIAvailable ? "AI로 다시 쓰기" : "기록 기반 초안",
-                              isExpanded: $writingOptionsExpanded) {
+        DisclosureGroup(isExpanded: $writingOptionsExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { templateActions }
+                    VStack(alignment: .leading, spacing: 8) { templateActions }
+                }
                 Toggle("AI로 다시 쓰기", isOn: $model.useAI)
                     .disabled(!model.isAIAvailable || model.isGenerating)
                     .worklogHelp("다음 초안을 AI로 다시 작성")
                 if !model.isAIAvailable {
-                    StateView(kind: .aiUnavailable, title: "AI에 연결되어 있지 않습니다",
-                              detail: "기록 기반 초안과 편집·복사·확정은 그대로 사용할 수 있습니다.")
+                    Text("AI 연결 없음 · 기록 기반 초안을 사용할 수 있습니다.")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
                 if let version = model.version {
                     Text("작성: \(version.generator == "deterministic" ? "기록 기반" : "AI 초안")" + (version.aiModel.map { " · \($0)" } ?? ""))
                         .font(.caption).foregroundStyle(WorkLogTheme.muted)
                 }
                 if let status = model.aiJobStatus { Text("AI 상태: \(status.rawValue)").font(.caption) }
-            }
-            if !model.isAIAvailable && !writingOptionsExpanded {
-                Text("AI 연결 없음 · 기록 기반 초안 사용 가능").font(.caption).foregroundStyle(WorkLogTheme.muted)
-            }
+            }.padding(.top, 8)
+        } label: {
+            Text("양식·작성 옵션").font(.callout)
         }
     }
-    @State private var writingOptionsExpanded = false
 
     @ViewBuilder private var templateActions: some View {
         Text("양식: \(model.templateLabel ?? "활성 양식 없음")").font(.callout)
@@ -196,35 +251,31 @@ private struct ReportWorkspace: View {
         }
     }
 
-    private var reportBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let version = model.version {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { versionControls(version) }
-                    VStack(alignment: .leading, spacing: 8) { versionControls(version) }
-                }
+    private func reportBody(editorHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if model.version != nil {
                 if model.hasChanges {
-                    StatusBadge(label: "저장하지 않은 변경", systemImage: "pencil.circle", tone: .warning)
-                    Text("본문을 저장하거나 되돌린 뒤 확정·버전 선택·재생성을 진행하세요.")
+                    Label("저장하지 않은 변경 · 저장 후 확정할 수 있습니다", systemImage: "pencil.circle")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
                 if model.canEdit {
-                    TextEditor(text: $model.content).font(.body).frame(minHeight: 380)
-                        .worklogCard(padding: 8)
+                    TextEditor(text: $model.content)
+                        .font(.system(size: 14))
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .frame(height: editorHeight)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(WorkLogTheme.border).allowsHitTesting(false))
                         .accessibilityLabel("\(title) 본문 편집")
                         .accessibilityHint("문장을 수정한 뒤 Command S로 저장하세요.")
                 } else {
                     Text(model.content.isEmpty ? "본문이 비어 있습니다." : model.content)
-                        .font(.body).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
-                        .worklogCard()
+                        .font(.system(size: 14)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(.vertical, 8)
                 }
                 if let reason = model.readOnlyReason {
                     Label(reason, systemImage: "lock").font(.callout).foregroundStyle(WorkLogTheme.muted)
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { reportActions }
-                    VStack(alignment: .leading, spacing: 8) { reportActions }
                 }
                 if let status = model.statusMessage {
                     Label(status, systemImage: "checkmark.circle").font(.callout)
@@ -235,41 +286,36 @@ private struct ReportWorkspace: View {
                                    retryTitle: "다시 복사", retry: { copyReport() })
                 }
                 if model.isStale {
-                    Label("원본이 변경되었습니다. 새 초안을 만들면 최신 기록·계획을 반영합니다.", systemImage: "arrow.clockwise")
-                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Label("원본 변경됨 · 새 초안에서 최신 기록·계획을 반영할 수 있습니다.", systemImage: "arrow.clockwise")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                generationControls
-                reviewDetails(version)
-                evidenceDetails
-            } else {
-                if !model.isGenerating && model.errorMessage == nil {
-                    StateView(kind: .empty, title: "검토할 초안이 없습니다",
-                              detail: isWeekly ? "지난주 기록과 이번 주 확정 계획으로 초안을 준비합니다." : "기간을 선택하고 초안을 만드세요. 생성은 직접 실행할 때 시작합니다.",
-                              actionTitle: "초안 만들기", action: { generate() })
-                }
-                generationControls
+            } else if !model.isGenerating && model.errorMessage == nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("이 기간에 저장한 보고서가 없습니다.").font(.body.weight(.medium))
+                    Text(isWeekly ? "지난주 기록과 이번 주 확정 계획으로 초안을 준비합니다." : "기간을 선택하고 아래에서 초안을 만드세요.")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                }.padding(.vertical, 24)
             }
-            reportHistory
         }
     }
 
     @ViewBuilder private func versionControls(_ version: ReportVersion) -> some View {
-        StatusBadge(label: model.stateLabel, systemImage: stateSymbol(version.state), tone: stateTone(version.state))
         Picker("버전", selection: Binding(get: { version.id }, set: { model.selectVersion($0) })) {
             ForEach(model.versions) { row in Text("v\(row.version) · \(stateTitle(row.state))").tag(row.id) }
-        }.fixedSize(horizontal: false, vertical: true).disabled(selectionLocked)
+        }.frame(width: 150).disabled(selectionLocked)
     }
 
     @ViewBuilder private var reportActions: some View {
-        Button { copyReport() } label: { ShortcutLabel(title: "보고서 복사", keys: "⇧⌘C") }
+        Button("본문 복사") { copyReport() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
-        Button { retryAction = .save; model.saveEdits() } label: { ShortcutLabel(title: "저장", keys: "⌘S") }
+        Button("저장") { retryAction = .save; model.saveEdits() }
             .keyboardShortcut("s", modifiers: .command).disabled(!model.canEdit || !model.hasChanges)
             .worklogHelp("본문 변경 저장", keys: "⌘S")
         Button("되돌리기") { model.discardEdits() }.disabled(!model.hasChanges)
             .worklogHelp("마지막 저장 본문으로 되돌리기")
-        Button("확정") { retryAction = .confirm; model.confirm() }
+        Button("보고서 확정") { retryAction = .confirm; model.confirm() }
             .disabled(!model.canEdit || model.hasChanges)
             .worklogHelp("현재 버전을 확정본으로 보존합니다. 이후 수정은 새 버전으로 남습니다")
     }
@@ -300,7 +346,7 @@ private struct ReportWorkspace: View {
                 Text("새 초안을 적용하려면 현재 편집 내용을 먼저 저장하거나 되돌리세요.").font(.callout)
             }
             if comparisonExpanded { ReportDiffView(pendingDiff: model.pendingDiff) }
-        }.worklogCard()
+        }.padding(.vertical, 8)
     }
     @ViewBuilder private var pendingActions: some View {
         Button(comparisonExpanded ? "비교 접기" : "변경 비교") { comparisonExpanded.toggle() }
@@ -355,39 +401,74 @@ private struct ReportWorkspace: View {
 
     @ViewBuilder private var reportHistory: some View {
         if !model.visibleReports.isEmpty {
-            Picker("이전 보고서", selection: Binding(get: { model.report?.id ?? "" }, set: { model.selectReport($0) })) {
+            Picker("저장한 보고서", selection: Binding(get: { model.report?.id ?? "" }, set: { id in
+                model.selectReport(id)
+                if isWeekly { syncPlan() }
+            })) {
                 Text("보고서 선택").tag("")
                 ForEach(model.visibleReports) { report in
                     Text("\(periodTitle(report.periodType)) · \(KoreanDateLabel.range(report.range, calendar: calendar))").tag(report.id)
                 }
-            }.disabled(selectionLocked).worklogHelp("이전 기간의 보고서 선택")
+            }.frame(maxWidth: 360).disabled(selectionLocked).worklogHelp("이전 기간의 보고서 선택")
         }
     }
 
     private var performanceControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("집계 방식", selection: Binding(get: { model.evaluationPeriodId != nil }, set: { evaluation in
-                model.evaluationPeriodId = evaluation ? model.evaluationPeriods.first?.id : nil
-            })) {
-                Text("일·주·월·분기").tag(false)
-                Text("평가 기간").tag(true)
-            }.pickerStyle(.segmented).disabled(selectionLocked || model.evaluationPeriods.isEmpty)
-            if model.evaluationPeriodId == nil {
-                Picker("기간 유형", selection: $model.periodType) {
-                    ForEach([PeriodType.daily, .weekly, .monthly, .quarterly], id: \.self) { type in Text(periodTitle(type)).tag(type) }
-                }.disabled(selectionLocked)
-                WorkDatePicker(title: "기간에 포함할 날짜", value: $model.performanceDate, calendar: calendar).disabled(selectionLocked)
-            } else {
-                Picker("평가 기간", selection: $model.evaluationPeriodId) {
-                    ForEach(model.evaluationPeriods) { period in
-                        Text(KoreanDateLabel.range(period.range, calendar: calendar)).tag(Optional(period.id))
-                    }
-                }.disabled(selectionLocked)
+        VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { performanceSelection }
+                VStack(alignment: .leading, spacing: 8) { performanceSelection }
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    reportHistory
+                    evaluationDisclosure
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    reportHistory
+                    evaluationDisclosure
+                }
             }
             if let report = model.report { ReportRangeLabel(title: "집계 기간", range: report.range) }
-            DisclosureGroup("새 평가 기간 만들기") { evaluationForm.padding(.top, 8) }
         }
     }
+    @ViewBuilder private var performanceSelection: some View {
+        Picker("기간 유형", selection: Binding(get: {
+            model.evaluationPeriodId == nil ? model.periodType : .yearly
+        }, set: { type in
+            if type == .yearly { model.evaluationPeriodId = model.evaluationPeriods.first?.id }
+            else { model.evaluationPeriodId = nil; model.periodType = type }
+        })) {
+            ForEach([PeriodType.daily, .weekly, .monthly, .quarterly], id: \.self) { type in
+                Text(periodTitle(type)).tag(type)
+            }
+            Text("평가 기간").tag(PeriodType.yearly).disabled(model.evaluationPeriods.isEmpty)
+        }.frame(width: 160).disabled(selectionLocked)
+        if model.evaluationPeriodId == nil {
+            WorkDatePicker(title: "기준일", value: $model.performanceDate, calendar: calendar).disabled(selectionLocked)
+        } else {
+            Picker("평가 기간", selection: $model.evaluationPeriodId) {
+                ForEach(model.evaluationPeriods) { period in
+                    Text(KoreanDateLabel.range(period.range, calendar: calendar)).tag(Optional(period.id))
+                }
+            }.frame(maxWidth: 360).disabled(selectionLocked)
+        }
+    }
+    private var evaluationDisclosure: some View {
+        Button("평가 기간 만들기") { evaluationPresented.toggle() }
+            .disabled(selectionLocked)
+            .popover(isPresented: $evaluationPresented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("새 평가 기간").font(.headline)
+                        Spacer()
+                        Button("닫기") { evaluationPresented = false }
+                    }
+                    evaluationForm
+                }.padding(16).frame(width: 420)
+            }
+    }
+    @State private var evaluationPresented = false
     private var evaluationForm: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("직전 확정 평가 기간 다음 날부터", isOn: $model.deriveEvaluationStart)
@@ -397,7 +478,15 @@ private struct ReportWorkspace: View {
             if let proposal = model.proposal {
                 ReportRangeLabel(title: "제안 기간", range: proposal.range)
                 ForEach(proposal.warnings, id: \.self) { InlineNotice(message: $0) }
-                Button("이 기간 저장") { retryAction = .createEvaluation; model.createEvaluation() }
+                Button("이 기간 저장") {
+                    retryAction = .createEvaluation
+                    model.createEvaluation()
+                    if model.errorMessage == nil { evaluationPresented = false }
+                }
+            }
+            if let error = model.errorMessage {
+                Text(error).font(.callout).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }.disabled(selectionLocked)
     }
@@ -469,12 +558,6 @@ private struct ReportWorkspace: View {
         case .propose: model.proposeEvaluation()
         case .createEvaluation: model.createEvaluation()
         }
-    }
-    private func stateSymbol(_ state: ReportVersionState) -> String {
-        switch state { case .draft: return "doc.text"; case .edited: return "pencil.circle"; case .confirmed: return "checkmark.seal"; case .superseded: return "clock.arrow.circlepath" }
-    }
-    private func stateTone(_ state: ReportVersionState) -> StatusTone {
-        switch state { case .draft: return .neutral; case .edited: return .info; case .confirmed: return .success; case .superseded: return .neutral }
     }
     private func stateTitle(_ state: ReportVersionState) -> String {
         switch state { case .draft: return "초안"; case .edited: return "수정본"; case .confirmed: return "확정본"; case .superseded: return "이전 버전" }

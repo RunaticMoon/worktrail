@@ -1,0 +1,554 @@
+{
+  "version": 1,
+  "name": "ui-review",
+  "purpose": "Content-first UI comparison with isolated fake records; GUI visibility assertions are smoke checks, screenshots require review.",
+  "artifact": {
+    "path": ".build/maclab/ui-review.tar",
+    "format": "tar",
+    "app_bundle_path": "WorkLogReview.app",
+    "expected_bundle_id": "dev.worklog.UIReview"
+  },
+  "prepare": [
+    {
+      "id": "build-before",
+      "kind": "exec",
+      "purpose": "before SwiftUI build, isolated fixture only",
+      "before": "Remote test session available",
+      "after": "Inspect exit code and evidence",
+      "argv": [
+        "/bin/bash",
+        "scripts/maclab/build-remote.sh",
+        "before"
+      ],
+      "timeout_seconds": 600
+    },
+    {
+      "id": "build-after",
+      "kind": "exec",
+      "purpose": "after SwiftUI build, isolated fixture only",
+      "before": "Remote test session available",
+      "after": "Inspect exit code and evidence",
+      "argv": [
+        "/bin/bash",
+        "scripts/maclab/build-remote.sh",
+        "after"
+      ],
+      "timeout_seconds": 600
+    }
+  ],
+  "cases": [
+    {
+      "id": "before-layout",
+      "purpose": "before screenshots across sizes and routes",
+      "steps": [
+        {
+          "id": "before-launch",
+          "kind": "exec",
+          "purpose": "Launch before with synthetic data",
+          "before": "Remote test session available",
+          "after": "Inspect exit code and evidence",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "Before.app",
+            "--args",
+            "--ui-test-fixture",
+            "many"
+          ],
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-day-1280-open",
+          "kind": "osascript",
+          "purpose": "day-1280-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-day-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-day-960-open",
+          "kind": "osascript",
+          "purpose": "day-960-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-day-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-960 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-day-1440-open",
+          "kind": "osascript",
+          "purpose": "day-1440-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1440, 875}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-day-1440",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-1440 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-tasks-open",
+          "kind": "osascript",
+          "purpose": "tasks-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"2\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-tasks-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "tasks-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-weekly-open",
+          "kind": "osascript",
+          "purpose": "weekly-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"4\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-weekly-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "weekly-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-performance-open",
+          "kind": "osascript",
+          "purpose": "performance-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"5\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-performance-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "performance-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-secret-open",
+          "kind": "osascript",
+          "purpose": "secret-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"6\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-secret-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "secret-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-capture-open",
+          "kind": "osascript",
+          "purpose": "capture-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"n\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-capture",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "capture UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-capture-close",
+          "kind": "osascript",
+          "purpose": "capture-close",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "tell application \"System Events\" to key code 53\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-ax-sweep",
+          "kind": "exec",
+          "purpose": "Record actual window sizes and visible control bounds across five routes",
+          "before": "No modal sheet is open",
+          "after": "Inspect returned bounds, excluded scroll descendants, and screenshot separately",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/verify-ui.js",
+            "--phase",
+            "before",
+            "--fixture",
+            "many"
+          ],
+          "timeout_seconds": 90
+        },
+        {
+          "id": "before-visibility",
+          "kind": "osascript",
+          "purpose": "visibility",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "tell application \"System Events\"\nreturn exists window 1 of process \"WorkLogApp\"\nend tell",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "before-visible-end",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "visible-end UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "before-visible-assert",
+          "kind": "assert",
+          "purpose": "App window exists after navigation; visual quality is reviewed separately",
+          "before": "Window existence query ran",
+          "after": "Boolean assertion recorded",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "before-visibility",
+            "equals": true,
+            "before_screenshot": "before-day-1280",
+            "after_screenshot": "before-visible-end"
+          }
+        },
+        {
+          "id": "before-quit",
+          "kind": "osascript",
+          "purpose": "quit",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "tell application \"System Events\" to keystroke \"q\" using command down\ndelay 2",
+          "timeout_seconds": 30
+        }
+      ]
+    },
+    {
+      "id": "after-layout",
+      "purpose": "after screenshots across sizes and routes",
+      "steps": [
+        {
+          "id": "after-launch",
+          "kind": "exec",
+          "purpose": "Launch after with synthetic data",
+          "before": "Remote test session available",
+          "after": "Inspect exit code and evidence",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "many"
+          ],
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-day-1280-open",
+          "kind": "osascript",
+          "purpose": "day-1280-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-day-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-day-960-open",
+          "kind": "osascript",
+          "purpose": "day-960-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-day-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-960 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-day-1440-open",
+          "kind": "osascript",
+          "purpose": "day-1440-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1440, 875}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-day-1440",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-1440 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-tasks-open",
+          "kind": "osascript",
+          "purpose": "tasks-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"2\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-tasks-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "tasks-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-weekly-open",
+          "kind": "osascript",
+          "purpose": "weekly-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"4\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-weekly-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "weekly-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-performance-open",
+          "kind": "osascript",
+          "purpose": "performance-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"5\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-performance-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "performance-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-secret-open",
+          "kind": "osascript",
+          "purpose": "secret-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"6\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-secret-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "secret-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-tasks-small-open",
+          "kind": "osascript",
+          "purpose": "tasks-small-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"2\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-tasks-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "tasks-960 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-weekly-small-open",
+          "kind": "osascript",
+          "purpose": "weekly-small-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"4\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-weekly-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "weekly-960 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-performance-small-open",
+          "kind": "osascript",
+          "purpose": "performance-small-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"5\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-performance-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "performance-960 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-secret-small-open",
+          "kind": "osascript",
+          "purpose": "secret-small-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"6\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-secret-960",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "secret-960 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-capture-open",
+          "kind": "osascript",
+          "purpose": "capture-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {960, 640}\n end tell\n keystroke \"n\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-capture",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "capture UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-capture-close",
+          "kind": "osascript",
+          "purpose": "capture-close",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "tell application \"System Events\" to key code 53\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-ax-sweep",
+          "kind": "exec",
+          "purpose": "Record actual window sizes and visible control bounds across five routes",
+          "before": "No modal sheet is open",
+          "after": "Inspect returned bounds, excluded scroll descendants, and screenshot separately",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/verify-ui.js",
+            "--phase",
+            "after",
+            "--fixture",
+            "many"
+          ],
+          "timeout_seconds": 90
+        },
+        {
+          "id": "after-visibility",
+          "kind": "osascript",
+          "purpose": "visibility",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "tell application \"System Events\"\nreturn exists window 1 of process \"WorkLogApp\"\nend tell",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-visible-end",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "visible-end UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-visible-assert",
+          "kind": "assert",
+          "purpose": "App window exists after navigation; visual quality is reviewed separately",
+          "before": "Window existence query ran",
+          "after": "Boolean assertion recorded",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "after-visibility",
+            "equals": true,
+            "before_screenshot": "after-day-1280",
+            "after_screenshot": "after-visible-end"
+          }
+        }
+      ]
+    }
+  ],
+  "collect": [],
+  "explore": {
+    "hold_s": 900
+  }
+}
