@@ -117,9 +117,11 @@ struct AppRootView: View {
                         .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
                 }.padding(12)
             }
-            destination(environment)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }.frame(minWidth: 500)
+            GeometryReader { viewport in
+                destination(environment)
+                    .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+            }
+        }.frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var taskNames: [String: String] {

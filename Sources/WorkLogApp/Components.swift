@@ -118,9 +118,11 @@ struct ScreenHeader<Trailing: View>: View {
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(WorkLogTheme.text)
                 .accessibilityAddTraits(.isHeader)
-            Text(purpose)
-                .font(.callout)
-                .foregroundStyle(WorkLogTheme.muted)
+            if !purpose.isEmpty {
+                Text(purpose)
+                    .font(.callout)
+                    .foregroundStyle(WorkLogTheme.muted)
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .layoutPriority(1)
