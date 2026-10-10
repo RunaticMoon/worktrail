@@ -18,6 +18,7 @@ import WorkLogCore
     @State private var confirmsDiscardDraft = false
     @State private var titleFocusRequest = 0
     @State private var isActive = false
+    @State private var showsTitlePicker = false
 
     private var canUseEditor: Bool {
         !model.isLocked && model.canEdit(from: .main) && !model.hasRecoverableDraft
@@ -25,7 +26,7 @@ import WorkLogCore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScreenHeader(title: "Secret", purpose: "로컬 보관함 · 제목 검색 후 값 복사") {
+            ScreenHeader(title: "Secret", purpose: "") {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { headerActions }
                     VStack(alignment: .leading, spacing: 8) { headerActions }
@@ -43,15 +44,20 @@ import WorkLogCore
                 Button("초안 버리기…", role: .destructive) { confirmsDiscardDraft = true }
             }
             GeometryReader { geometry in
-                if geometry.size.width < 740 {
-                    VStack(spacing: 12) {
-                        titleList.frame(height: 190)
+                if !hasDetail {
+                    titleList
+                } else if geometry.size.width < 700 {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button("보관함 목록", systemImage: "list.bullet") { showsTitlePicker.toggle() }
+                            .popover(isPresented: $showsTitlePicker, arrowEdge: .bottom) {
+                                titleList.padding(12).frame(width: 320, height: 380)
+                            }
                         detail
                     }
                 } else {
                     HSplitView {
-                        titleList.frame(minWidth: 190, idealWidth: 240, maxWidth: 300)
-                        detail.frame(minWidth: 400)
+                        titleList.frame(minWidth: 170, idealWidth: 220, maxWidth: 280)
+                        detail.frame(minWidth: 360)
                     }
                 }
             }
@@ -114,15 +120,17 @@ import WorkLogCore
     }
 
     @ViewBuilder private var headerActions: some View {
-        StatusBadge(label: model.isLocked ? "잠김" : "잠금 해제됨",
-                    systemImage: model.isLocked ? "lock.fill" : "lock.open", tone: .neutral)
+        Label(model.isLocked ? "잠김" : "로컬 보관함", systemImage: model.isLocked ? "lock.fill" : "lock.open")
+            .font(.callout).foregroundStyle(WorkLogTheme.muted)
         Button("새 Secret", systemImage: "plus") { requestNew() }
             .worklogHelp("새 Secret 입력")
             .disabled(model.isUnlocking || model.hasRecoverableDraft || (!model.isLocked && !model.canEdit(from: .main)))
         Button("휴지통", systemImage: "trash") { showsTrash = true }
             .worklogHelp("Secret 휴지통 열기")
             .disabled(!canUseEditor)
-        if !model.isLocked {
+        if model.isLocked {
+            Button("잠금 해제", systemImage: "lock.open") { unlock() }.disabled(model.isUnlocking)
+        } else {
             Button("지금 잠금", systemImage: "lock") { model.lock() }.worklogHelp("Secret 보관함 잠금")
         }
     }
@@ -143,30 +151,34 @@ import WorkLogCore
                 }
                 Spacer(minLength: 0)
             } else {
-                List {
+                List(selection: Binding(get: { selectedTitleId }, set: { id in
+                    guard let item = model.titles.first(where: { $0.id == id }) else { return }
+                    showsTitlePicker = false
+                    if model.isLocked { lockedSelection = item; newAfterUnlock = false }
+                    else { navigate(to: item) }
+                })) {
                     ForEach(model.titles) { item in
-                        Button {
-                            if model.isLocked { lockedSelection = item; newAfterUnlock = false }
-                            else { navigate(to: item) }
-                        } label: {
-                            HStack(alignment: .top, spacing: 8) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.title).fixedSize(horizontal: false, vertical: true)
-                                    if let group = item.groupName { Text(group).font(.caption).foregroundStyle(WorkLogTheme.muted) }
-                                }
-                                Spacer(minLength: 0)
-                                if selectedTitleId == item.id {
-                                    Image(systemName: "checkmark").accessibilityLabel("선택됨")
-                                }
-                            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).font(.body.weight(.medium))
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let group = item.groupName {
+                                Text(group).font(.callout).foregroundStyle(WorkLogTheme.muted)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(selectedTitleId == item.id ? WorkLogTheme.accentSoft : Color.clear)
-                        .disabled(model.isUnlocking || model.hasRecoverableDraft || (!model.isLocked && !model.canEdit(from: .main)))
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                        .tag(item.id)
+                        .accessibilityElement(children: .combine)
                     }
                 }
+                .listStyle(.plain)
+                .disabled(model.isUnlocking || model.hasRecoverableDraft || (!model.isLocked && !model.canEdit(from: .main)))
             }
         }
+    }
+
+    private var hasDetail: Bool {
+        model.isEditing || model.selectedId != nil || lockedSelection != nil || newAfterUnlock ||
+            (!model.isLocked && !model.canEdit(from: .main))
     }
 
     private var selectedTitleId: String? { model.isLocked ? lockedSelection?.id : model.selectedId }
@@ -188,29 +200,30 @@ import WorkLogCore
                 if model.acquireEditor(.main) { resumeLockedSelection() }
             }).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else if model.isEditing {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    SecretEditorView(model: model, host: .main, keyboardMode: .cellNavigation,
-                                     onSave: { save() }, titleFocusRequest: titleFocusRequest,
-                                     onMoveToTrash: { confirmsTrash = true }, onCancel: requestCancel)
-                    versionHistory
-                }.padding(12).disabled(model.hasRecoverableDraft)
-            }
+            VStack(alignment: .leading, spacing: 12) {
+                SecretEditorView(model: model, host: .main, keyboardMode: .cellNavigation,
+                                 onSave: { save() }, titleFocusRequest: titleFocusRequest,
+                                 onMoveToTrash: { confirmsTrash = true }, onCancel: requestCancel)
+            }.padding(.leading, 8).disabled(model.hasRecoverableDraft)
         } else if model.selectedId != nil {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ScreenHeader(title: model.title, purpose: model.groupName.isEmpty ? "Secret 조회" : model.groupName) {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 8) { viewerActions }
-                            VStack(alignment: .leading, spacing: 8) { viewerActions }
-                        }
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.title).font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !model.groupName.isEmpty {
+                        Text(model.groupName).font(.callout).foregroundStyle(WorkLogTheme.muted)
                     }
-                    SecretViewerTable(model: model)
-                    versionHistory
-                    Button("휴지통으로 이동…", role: .destructive) { confirmsTrash = true }
-                        .worklogHelp("항목과 이전 버전을 휴지통으로 이동")
-                }.padding(12).disabled(model.hasRecoverableDraft)
-            }
+                    HStack(spacing: 8) { viewerActions }
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SecretViewerTable(model: model)
+                        versionHistory
+                        Button("휴지통으로 이동…", role: .destructive) { confirmsTrash = true }
+                            .worklogHelp("항목과 이전 버전을 휴지통으로 이동")
+                    }
+                }
+            }.padding(.leading, 8).disabled(model.hasRecoverableDraft)
         } else {
             StateView(kind: .empty, title: "제목을 선택하세요", detail: "항목을 열고 행을 클릭하면 값을 복사합니다.")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

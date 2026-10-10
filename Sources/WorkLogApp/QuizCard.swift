@@ -10,8 +10,7 @@ struct QuizCard: View {
     private enum RetryAction { case generate, record(String, SupplementOutcome) }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("성과 보충 질문").font(.headline).accessibilityAddTraits(.isHeader)
-            Text("질문은 선택 사항입니다. 모두 건너뛰어도 보고서를 복사·확정할 수 있습니다.")
+            Text("답변 없이도 보고서를 복사·확정할 수 있습니다.")
                 .font(.callout).foregroundStyle(WorkLogTheme.muted).fixedSize(horizontal: false, vertical: true)
             Text("답변은 성과 근거로 기록되며, 팀 제출용 본문에 자동으로 들어가지 않습니다.")
                 .font(.caption).foregroundStyle(WorkLogTheme.muted).fixedSize(horizontal: false, vertical: true)
@@ -19,10 +18,14 @@ struct QuizCard: View {
                 .disabled(!model.canGenerate || model.remainingCount > 0)
                 .worklogHelp("기록에서 보충할 성과 질문 생성 · 남은 질문 처리 후 다시 생성 가능")
             if !model.isAvailable {
-                StateView(kind: .aiUnavailable, title: "AI 연결 없음", detail: "질문 생성은 나중에 사용할 수 있습니다. 보고서는 계속 편집·복사·확정할 수 있습니다.")
+                Text("AI 연결 후 질문을 생성할 수 있습니다.")
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
             if model.isGenerating {
-                StateView(kind: .loading, title: "보충 질문 생성 중…", detail: "보고서 복사와 계획 검토는 계속할 수 있습니다.")
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("보충 질문 생성 중…").font(.callout)
+                }
             }
             if let message = model.message {
                 if isFailure(message) {
@@ -70,7 +73,7 @@ struct QuizCard: View {
                 HStack(spacing: 8) { actions(question) }
                 VStack(alignment: .leading, spacing: 8) { actions(question) }
             }
-        }.worklogCard()
+        }.padding(.vertical, 4)
     }
     @ViewBuilder private func actions(_ question: QuizQuestion) -> some View {
         Button("답변 기록") { record(question.id, outcome: .answered) }

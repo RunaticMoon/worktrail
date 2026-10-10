@@ -40,10 +40,14 @@ enum WorkLogEntryPoint {
                 }.keyboardShortcut("s", modifiers: [.control, .command])
                     .disabled(controller.isPanelKeyWindow)
             }
-            CommandGroup(after: .newItem) {
+            CommandGroup(replacing: .newItem) {
                 Button("빠른 입력") { controller.showCapture() }.keyboardShortcut("n", modifiers: .command)
                     .disabled(controller.isPanelKeyWindow)
                 Button("검색") { controller.showSearch() }.keyboardShortcut("f", modifiers: .command)
+                    .disabled(controller.isPanelKeyWindow)
+                Divider()
+                Button("새 창") { controller.openMainWindow?() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(controller.isPanelKeyWindow)
             }
         }

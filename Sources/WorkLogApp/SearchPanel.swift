@@ -125,10 +125,8 @@ import WorkLogCore
                     Image(systemName: "magnifyingglass")
                         .font(.callout).fontWeight(.semibold)
                         .foregroundStyle(WorkLogTheme.accent)
-                        .frame(width: 28, height: 28)
-                        .background(WorkLogTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
-                    Text("WorkLog").font(.headline)
-                    Text("/ 검색").font(.callout).foregroundStyle(WorkLogTheme.muted)
+                        .accessibilityHidden(true)
+                    Text("검색").font(.callout.weight(.semibold))
                     Spacer()
                     Keycap("esc")
                 }
@@ -303,7 +301,7 @@ import WorkLogCore
         field.isBordered = false
         field.drawsBackground = false
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
-        field.setAccessibilityLabel(allowsAIQuestion ? "통합 검색 또는 AI 질문" : "Secret 제목 검색")
+        field.setAccessibilityLabel(allowsAIQuestion ? "원문 검색" : "Secret 제목 검색")
         field.setAccessibilityHelp("↑↓ 결과 선택 · Return 열기 · Secret은 AI로 보내지 않습니다")
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.delegate = context.coordinator
@@ -313,7 +311,7 @@ import WorkLogCore
     func updateNSView(_ field: SearchQueryTextField, context: Context) {
         context.coordinator.parent = self
         field.placeholderString = allowsAIQuestion ? "기록·Secret 제목을 찾거나, 업무에 대해 질문하세요" : "Secret 제목·그룹명을 찾으세요"
-        field.setAccessibilityLabel(allowsAIQuestion ? "통합 검색 또는 AI 질문" : "Secret 제목 검색")
+        field.setAccessibilityLabel(allowsAIQuestion ? "원문 검색" : "Secret 제목 검색")
         if (field.currentEditor() as? NSTextInputClient)?.hasMarkedText() != true, field.stringValue != text { field.stringValue = text }
         if isFocused, field.currentEditor() == nil {
             DispatchQueue.main.async { [weak field] in

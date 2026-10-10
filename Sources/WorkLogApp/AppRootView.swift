@@ -69,25 +69,11 @@ struct AppRootView: View {
                         .frame(maxWidth: 540)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let environment = controller.environment {
-                    HStack(spacing: 0) {
-                        sidebar.frame(width: controller.sidebarExpanded ? 216 : 60)
-                        Divider()
-                        VStack(spacing: 0) {
-                            workspaceHeader
-                            Divider()
-                            if let notice = controller.notice {
-                                HStack(alignment: .top, spacing: 8) {
-                                    InlineNotice(message: notice)
-                                    Button { controller.dismissNotice() } label: { Image(systemName: "xmark") }
-                                        .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
-                                }.padding(12)
-                            }
-                            GeometryReader { contentGeometry in
-                                destination(environment, contentWidth: contentGeometry.size.width)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            }
-                        }
-                        .buttonStyle(WorkLogButtonStyle())
+                    HSplitView {
+                        sidebar.frame(minWidth: controller.sidebarExpanded ? 180 : 52,
+                                      idealWidth: controller.sidebarExpanded ? 200 : 52,
+                                      maxWidth: controller.sidebarExpanded ? 280 : 52)
+                        workspace(environment)
                     }
                     .worklogAnimation(.easeInOut(duration: 0.18), value: controller.sidebarExpanded)
                     .sheet(isPresented: Binding(get: { controller.selectedTaskId != nil },
@@ -125,6 +111,24 @@ struct AppRootView: View {
         }
     }
 
+    private func workspace(_ environment: AppEnvironment) -> some View {
+        VStack(spacing: 0) {
+            workspaceHeader
+            Divider()
+            if let notice = controller.notice {
+                HStack(alignment: .top, spacing: 8) {
+                    InlineNotice(message: notice)
+                    Button { controller.dismissNotice() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
+                }.padding(12)
+            }
+            GeometryReader { viewport in
+                destination(environment)
+                    .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+            }
+        }.frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var taskNames: [String: String] {
         Dictionary(uniqueKeysWithValues: (controller.taskList?.rows ?? []).map { ($0.id, $0.title) })
     }
@@ -153,7 +157,6 @@ struct AppRootView: View {
                     ScrollView {
                         VStack(spacing: 2) {
                             ForEach(SidebarRoute.primary) { navigationButton($0) }
-                            Spacer(minLength: 16)
                             Divider().padding(.vertical, 6)
                             ForEach(SidebarRoute.secondary) { navigationButton($0) }
                         }
@@ -231,7 +234,7 @@ struct AppRootView: View {
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
-    @ViewBuilder private func destination(_ environment: AppEnvironment, contentWidth: CGFloat) -> some View {
+    @ViewBuilder private func destination(_ environment: AppEnvironment) -> some View {
         switch selectedRoute {
         case .day:
             if let day = controller.day {
@@ -240,7 +243,7 @@ struct AppRootView: View {
                         let asOf: WorkDate? = day.box?.isPast == true ? day.selectedDate : nil
                         controller.openTask(id, asOf: asOf)
                     }, projectNames: Dictionary(uniqueKeysWithValues: (controller.projects?.projects ?? []).map { ($0.id, $0.name) }),
-                    contentWidth: contentWidth, detailDismissalRevision: detailDismissalRevision)
+                    detailDismissalRevision: detailDismissalRevision)
             }
         case .tasks:
             if let tasks = controller.taskList {

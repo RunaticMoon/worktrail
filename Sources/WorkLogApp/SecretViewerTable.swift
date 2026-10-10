@@ -9,7 +9,6 @@ import WorkLogCore
     var host: SecretEditorHost = .main
     private enum Control: Hashable { case row(String), copy(String) }
     @FocusState private var focusedControl: Control?
-    @Environment(\.colorSchemeContrast) private var contrast
 
     private var canRead: Bool {
         !model.isLocked && !model.isEditing && model.canEdit(from: host) && !model.hasRecoverableDraft
@@ -19,23 +18,23 @@ import WorkLogCore
         ScrollViewReader { proxy in
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("key").frame(minWidth: 90, idealWidth: 140, maxWidth: 180, alignment: .leading)
+                    Text("key").frame(width: 132, alignment: .leading)
                     Text("값").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("복사")
+                    Text("복사").frame(width: 48)
                 }
-                .font(.headline).padding(.horizontal, 8).accessibilityHidden(true)
-                Text("행 클릭 또는 Return으로 복사 · ↑↓ 포커스 이동")
-                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                .font(.callout.weight(.medium)).foregroundStyle(WorkLogTheme.muted)
+                .padding(.horizontal, 8).accessibilityHidden(true)
+                Divider()
                 if model.rows.isEmpty {
                     StateView(kind: .empty, title: "저장된 행이 없습니다", detail: "‘편집’을 눌러 행을 추가하세요.")
                 }
-                LazyVStack(spacing: 4) {
+                LazyVStack(spacing: 0) {
                     ForEach(model.rows) { row in
                         HStack(spacing: 8) {
                             Button { copy(row) } label: {
                                 HStack(alignment: .top, spacing: 8) {
                                     Text(row.key)
-                                        .frame(minWidth: 90, idealWidth: 140, maxWidth: 180, alignment: .leading)
+                                        .frame(width: 132, alignment: .leading)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Group {
                                         if model.showsValues && canRead {
@@ -46,10 +45,12 @@ import WorkLogCore
                                 }.padding(8).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .focusable()
                             .focused($focusedControl, equals: .row(row.id))
                             .accessibilityElement(children: .ignore)
+                            .accessibilityAddTraits(.isButton)
                             .accessibilityLabel(Text("\(row.key), \(model.showsValues && canRead ? "값 표시됨" : "값 가려짐"), Return으로 복사"))
-                            .worklogHelp("값 복사", keys: "Return")
+                            .worklogHelp("값 복사", keys: "Return / ⌘C")
                             .onKeyPress(.return, phases: .down) { press in
                                 guard accepts(press), canRead else { return .ignored }
                                 focus(row.id)
@@ -57,10 +58,10 @@ import WorkLogCore
                                 return .handled
                             }
                             .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat], action: move)
-                            Button { copy(row) } label: { Image(systemName: "doc.on.doc") }
+                            Button("복사") { copy(row) }
                                 .buttonStyle(.bordered)
                                 .accessibilityLabel(Text("\(row.key) 값 복사"))
-                                .worklogHelp("값 복사", keys: "Return")
+                                .worklogHelp("값 복사", keys: "Return / ⌘C")
                                 .focused($focusedControl, equals: .copy(row.id))
                                 .onKeyPress(.return, phases: .down) { press in
                                     guard accepts(press), canRead else { return .ignored }
@@ -70,19 +71,27 @@ import WorkLogCore
                                 .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat], action: move)
                         }
                         .padding(.trailing, 8)
-                        .background(model.focusedRowId == row.id ? WorkLogTheme.accentSoft : WorkLogTheme.surface,
-                                    in: RoundedRectangle(cornerRadius: 6))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(model.focusedRowId == row.id ? WorkLogTheme.text : WorkLogTheme.outlineColor(for: contrast),
-                                              lineWidth: model.focusedRowId == row.id ? 2 : WorkLogTheme.outlineWidth(for: contrast))
-                                .allowsHitTesting(false)
+                        .frame(minHeight: 36)
+                        .background(model.focusedRowId == row.id ? WorkLogTheme.accentSoft : Color.clear)
+                        .overlay(alignment: .leading) {
+                            if model.focusedRowId == row.id {
+                                Rectangle().fill(WorkLogTheme.accent).frame(width: 2).allowsHitTesting(false)
+                            }
                         }
                         .id(row.id)
+                        Divider()
                     }
                 }
+                Text("클릭·Return·⌘C 복사 · ↑↓ 선택 이동")
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
             .disabled(!canRead)
+            .onKeyPress(characters: CharacterSet(charactersIn: "c"), phases: .down) { press in
+                guard press.modifiers == .command, focusedControl != nil, canRead,
+                      (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
+                model.copyFocusedRow()
+                return .handled
+            }
             .onChange(of: focusedControl) { _, control in
                 switch control {
                 case .row(let id), .copy(let id): focus(id)
