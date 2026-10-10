@@ -22,10 +22,11 @@ Maclab의 `mac_test_start`에 아래 `test_name`과 검증 목적을 전달한�
 | --- | --- | --- |
 | `ui-review` | [ui-review.json](../../.maclab/tests/ui-review.json) | Before/After 빌드, `many` 데이터, 날짜 화면 크기별·주요 화면 스크린샷, AX 창/컨트롤 범위 점검 |
 | `ui-flows` | [ui-flows.json](../../.maclab/tests/ui-flows.json) | After 빌드, Memo 핫키 입력·저장·이전 앱 복귀, ⌘N 입력창 회귀 검사 |
+| `ui-edge-cases` | [ui-edge-cases.json](../../.maclab/tests/ui-edge-cases.json) | After 빌드, `empty`·`few`의 세 가지 창 크기와 `many` 화면 비교 |
 
 `ui-review`는 약 960×640, 1280×800, 1440×875pt를 요청한다. 호스트의 화면 작업 영역과 앱 최소 크기에 따라 실제 크기는 달라질 수 있으므로 AX 결과의 실제 frame을 기록한다. 스크린샷 이름만으로 해당 화면이 열렸다고 판단하지 않는다.
 
-두 정의 모두 빌드 단계 제한은 단계당 600초이며, 자동 실행 후 수동 확인 시간은 최대 900초다. `exploration.ready=true`일 때 한 번에 한 동작을 실행하고 이전 동작의 완료를 확인한다. `accepted:true`는 접수일 뿐 성공이 아니다. 확인을 마치면 `mac_test_finish`를 요청하고 cleanup·정산 상태도 확인한다.
+모든 정의의 빌드 단계 제한은 단계당 600초이며, 자동 실행 후 수동 확인 시간은 최대 900초다. `exploration.ready=true`일 때 한 번에 한 동작을 실행하고 이전 동작의 완료를 확인한다. `accepted:true`는 접수일 뿐 성공이 아니다. 확인을 마치면 `mac_test_finish`를 요청하고 cleanup·정산 상태도 확인한다.
 
 ## 가짜 데이터 격리
 

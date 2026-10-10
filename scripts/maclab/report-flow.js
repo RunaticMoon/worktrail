@@ -227,8 +227,8 @@ function run(args) {
         output.axReads = reads; output.visitedNodes = visited;
         return JSON.stringify(output);
     } catch (error) {
-        return JSON.stringify({ ok: false, stage: stage, code: error.reviewCode || 'NATIVE_AX_OPERATION_FAILED',
+        throw new Error(JSON.stringify({ ok: false, stage: stage, code: error.reviewCode || 'NATIVE_AX_OPERATION_FAILED',
             durationMs: Math.round((now() - started) * 1000), axReads: reads, visitedNodes: visited,
-            contentRedacted: true });
+            contentRedacted: true }));
     }
 }

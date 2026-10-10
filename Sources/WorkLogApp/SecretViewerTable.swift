@@ -45,8 +45,10 @@ import WorkLogCore
                                 }.padding(8).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .focusable()
                             .focused($focusedControl, equals: .row(row.id))
                             .accessibilityElement(children: .ignore)
+                            .accessibilityAddTraits(.isButton)
                             .accessibilityLabel(Text("\(row.key), \(model.showsValues && canRead ? "값 표시됨" : "값 가려짐"), Return으로 복사"))
                             .worklogHelp("값 복사", keys: "Return / ⌘C")
                             .onKeyPress(.return, phases: .down) { press in

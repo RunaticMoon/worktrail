@@ -319,6 +319,7 @@ import WorkLogCore
         .buttonStyle(.plain)
         .focused($focusedResult, equals: hit.key)
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(Text(([sourceLabel(hit.sourceType)] + [hit.workDate?.iso].compactMap { $0 }
             + hit.projectNames + [hit.snippet]).joined(separator: ", ")))
         .accessibilityValue(selected ? "선택됨" : "")
