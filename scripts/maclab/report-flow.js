@@ -4,7 +4,7 @@
  * Actions: open, inspect, edit, save, plan, copy, run (all steps).
  * Uses native Accessibility calls; System Events is used only for Cmd+S / paste.
  * No report body, clipboard contents, arbitrary AX values, or native errors are logged.
- * Linux: syntax checked only. Each action still needs a real Mac execution receipt.
+ * Native AX run verified on Maclab with synthetic data; see docs/ux-verification.md.
  */
 ObjC.import('AppKit');
 ObjC.import('ApplicationServices');
@@ -25,7 +25,11 @@ function argument(args, name, fallback) {
 function read(node, name) {
     checkTime(); reads += 1;
     var result = Ref();
-    return Number($.AXUIElementCopyAttributeValue(node, $(name), result)) === 0 ? result[0] : null;
+    if (Number($.AXUIElementCopyAttributeValue(node, $(name), result)) !== 0) return null;
+    // AX returns CFTypeRef, which JXA does not expose as an NSArray/NSString yet.
+    // Without this bridge, a successful AXWindows read silently looks empty.
+    try { return ObjC.castRefToObject(result[0]); }
+    catch (_) { fail('AX_RESULT_BRIDGE_FAILED'); }
 }
 function string(value) {
     if (value === null || value === undefined) return '';
@@ -41,8 +45,9 @@ function array(value) {
     var result = [];
     try {
         var count = Number(value.count);
+        requireThat(isFinite(count) && count >= 0 && Math.floor(count) === count, 'AX_ARRAY_BRIDGE_FAILED');
         for (var index = 0; index < count; index += 1) result.push(value.objectAtIndex(index));
-    } catch (_) {}
+    } catch (_) { fail('AX_ARRAY_BRIDGE_FAILED'); }
     return result;
 }
 function scan(wants, limit) {
