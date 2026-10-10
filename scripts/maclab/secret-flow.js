@@ -71,6 +71,18 @@ function reviewProcess() {
 function reviewIsFront() {
     return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
 }
+function pointerActivateMain(eventApp, nativeWindow) {
+    // A shallow window lookup avoids slow per-control AppleEvents. A real pointer
+    // event makes the visible main window key after a floating panel was closed.
+    var apps = eventApp.processes.whose({ unixId: reviewPID })();
+    if (apps.length !== 1) throw new Error('REVIEW_PROCESS_MISSING');
+    var windows = apps[0].windows().filter(function (window) { return window.name() === nativeWindow.name(); });
+    if (windows.length !== 1) throw new Error('AMBIGUOUS_MAIN_WINDOW');
+    var position = windows[0].position(), size = windows[0].size();
+    var point = $.CGPointMake(position[0] + size[0] / 2, position[1] + 12);
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft));
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, point, $.kCGMouseButtonLeft));
+}
 function nativePress(node) {
     var role = node.role();
     if (role === 'AXTextField' || role === 'AXTextArea') {
@@ -140,6 +152,8 @@ function run(args) {
         safe(function () { mainWindow.actions.byName('AXRaise').perform(); }, null);
         safe(function () { mainWindow.attributes.byName('AXMain').value = true; }, null);
         safe(function () { mainWindow.attributes.byName('AXFocused').value = true; }, null);
+        pointerActivateMain(events, mainWindow);
+        delay(0.3);
         pause();
         foreground();
     }
@@ -197,8 +211,10 @@ function run(args) {
             if (unlock) press(unlock.node);
             assert('vaultUnlocked', named('지금 잠금', 'AXButton', false) !== null);
             stage = 'search_fake_title';
-            press(requireNamed('Secret 제목 검색', 'AXTextField', false).node);
+            const titleSearch = requireNamed('Secret 제목 검색', 'AXTextField', false).node;
+            press(titleSearch);
             pasteFake('가짜 개발 환경 설정');
+            assert('titleQueryEntered', titleSearch.value() === '가짜 개발 환경 설정');
             stage = 'select_fake_title';
             const title = requireNamed('가짜 개발 환경 설정', null, true);
             const rows = title.parents.filter(function (node) { return safe(function () { return node.role(); }, '') === 'AXRow'; });

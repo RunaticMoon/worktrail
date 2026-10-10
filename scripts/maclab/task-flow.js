@@ -69,6 +69,18 @@ function reviewProcess() {
 function reviewIsFront() {
     return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
 }
+function pointerActivateMain(eventApp, nativeWindow) {
+    // A shallow window lookup avoids slow per-control AppleEvents. A real pointer
+    // event makes the visible main window key after a floating panel was closed.
+    var apps = eventApp.processes.whose({ unixId: reviewPID })();
+    if (apps.length !== 1) throw new Error('REVIEW_PROCESS_MISSING');
+    var windows = apps[0].windows().filter(function (window) { return window.name() === nativeWindow.name(); });
+    if (windows.length !== 1) throw new Error('AMBIGUOUS_MAIN_WINDOW');
+    var position = windows[0].position(), size = windows[0].size();
+    var point = $.CGPointMake(position[0] + size[0] / 2, position[1] + 12);
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft));
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, point, $.kCGMouseButtonLeft));
+}
 function nativePress(node) {
     var role = node.role();
     if (role === 'AXTextField' || role === 'AXTextArea') {
@@ -127,6 +139,8 @@ function run() {
         safe(function () { mainWindow.actions.byName('AXRaise').perform(); }, null);
         safe(function () { mainWindow.attributes.byName('AXMain').value = true; }, null);
         safe(function () { mainWindow.attributes.byName('AXFocused').value = true; }, null);
+        pointerActivateMain(events, mainWindow);
+        delay(0.3);
         pause();
         if (!reviewIsFront()) throw new Error('main_activation_failed');
     }
@@ -165,9 +179,11 @@ function run() {
         const routeButton = find('AXButton', '업무', true);
         if (routeButton) click(routeButton);
         else key('2');
-        click(need('AXTextField', '업무 이름 검색'));
+        const searchField = need('AXTextField', '업무 이름 검색');
+        click(searchField);
         key('a');
         paste('배포 파이프라인');
+        assert('searchQueryEntered', searchField.value() === '배포 파이프라인');
         stage = 'select_filtered_task';
         let open = need('AXButton', '선택한 업무 열기');
         const row = find('AXRow') || find(null, '배포 파이프라인');
