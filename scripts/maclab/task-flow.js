@@ -103,7 +103,7 @@ function run() {
         return sheets.length ? sheets : windows;
     }
     function find(role, text, exact) {
-        const queue = roots().map(function (node) { return { node: node, depth: 0 }; });
+        const queue = roots().map(function (node) { return { node: node, depth: 0, parents: [] }; });
         let count = 0;
         while (queue.length && count++ < 700) {
             tick();
@@ -113,9 +113,9 @@ function run() {
                 safe(function () { return node.name(); }, ''),
                 safe(function () { return node.description(); }, ''),
                 actualRole === 'AXStaticText' ? safe(function () { return node.value(); }, '') : ''
-            ].some(function (label) { return typeof label === 'string' && (exact ? label === text : label.indexOf(text) >= 0); }))) return node;
+            ].some(function (label) { return typeof label === 'string' && (exact ? label === text : label.indexOf(text) >= 0); }))) { node.reviewParents = item.parents; return node; }
             if (item.depth < 16) safe(function () { return node.uiElements(); }, []).forEach(function (child) {
-                queue.push({ node: child, depth: item.depth + 1 });
+                queue.push({ node: child, depth: item.depth + 1, parents: item.parents.concat([node]) });
             });
         }
         return null;
@@ -168,11 +168,27 @@ function run() {
         click(need('AXTextField', '업무 이름 검색'));
         key('a');
         paste('배포 파이프라인');
-        stage = 'select_first_filtered_task';
-        const row = need('AXRow');
-        try { row.selected = true; pause(); } catch (_) { click(row); }
+        stage = 'select_filtered_task';
         let open = need('AXButton', '선택한 업무 열기');
-        if (!safe(function () { return open.enabled(); }, false)) { click(row); open = need('AXButton', '선택한 업무 열기'); }
+        const row = find('AXRow') || find(null, '배포 파이프라인');
+        if (!row) throw new Error('filtered_task_element_missing');
+        const candidates = [row].concat((row.reviewParents || []).slice().reverse());
+        result.selectionRoles = candidates.map(function (node) { return safe(function () { return node.role(); }, 'unknown'); });
+        for (let index = 0; index < candidates.length && !open.enabled(); index += 1) {
+            const candidate = candidates[index], role = candidate.role();
+            if (['AXWindow', 'AXScrollArea'].indexOf(role) >= 0) continue;
+            // SwiftUI List may expose AXUnknown/AXGroup entries instead of AXRow.
+            safe(function () { candidate.selected = true; }, null);
+            if (!open.enabled() && ['AXButton', 'AXRow', 'AXUnknown', 'AXGroup'].indexOf(role) >= 0) {
+                safe(function () { candidate.actions.byName('AXPress').perform(); }, null);
+            }
+            pause();
+        }
+        if (!open.enabled()) {
+            const list = find('AXList') || find('AXOutline') || find('AXTable') || row;
+            axSet(list.reference, 'AXFocused', true);
+            events.keyCode(125); pause();
+        }
         assert('taskSelected', safe(function () { return open.enabled(); }, false));
         click(open);
         stage = 'focus_activity_composer';
