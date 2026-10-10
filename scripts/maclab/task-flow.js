@@ -172,10 +172,10 @@ function run() {
         let open = need('AXButton', '선택한 업무 열기');
         const row = find('AXRow') || find(null, '배포 파이프라인');
         if (!row) throw new Error('filtered_task_element_missing');
-        const candidates = [row].concat((row.reviewParents || []).slice().reverse());
-        result.selectionRoles = candidates.map(function (node) { return safe(function () { return node.role(); }, 'unknown'); });
-        for (let index = 0; index < candidates.length && !open.enabled(); index += 1) {
-            const candidate = candidates[index], role = candidate.role();
+        const selectionCandidates = [row].concat((row.reviewParents || []).slice().reverse());
+        result.selectionRoles = selectionCandidates.map(function (node) { return safe(function () { return node.role(); }, 'unknown'); });
+        for (let index = 0; index < selectionCandidates.length && !open.enabled(); index += 1) {
+            const candidate = selectionCandidates[index], role = candidate.role();
             if (['AXWindow', 'AXScrollArea'].indexOf(role) >= 0) continue;
             // SwiftUI List may expose AXUnknown/AXGroup entries instead of AXRow.
             safe(function () { candidate.selected = true; }, null);
