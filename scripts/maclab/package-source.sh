@@ -23,12 +23,13 @@ REVIEW_STAGE="$(mktemp -d "$(dirname "$REVIEW_OUTPUT")/ui-review-package.XXXXXX"
 trap 'rm -rf "$REVIEW_STAGE"' EXIT
 mkdir -p "$REVIEW_STAGE/baseline" "$REVIEW_STAGE/after" "$REVIEW_STAGE/scripts/maclab"
 
-git -C "$REVIEW_REPO_ROOT" archive "$REVIEW_BASELINE" Sources Package.swift VERSION |
+git -C "$REVIEW_REPO_ROOT" archive "$REVIEW_BASELINE" Sources Tests Package.swift VERSION |
     tar -xf - -C "$REVIEW_STAGE/baseline"
 if git -C "$REVIEW_REPO_ROOT" cat-file -e "$REVIEW_BASELINE:Package.resolved" 2>/dev/null; then
     git -C "$REVIEW_REPO_ROOT" show "$REVIEW_BASELINE:Package.resolved" > "$REVIEW_STAGE/baseline/Package.resolved"
 fi
 cp -R "$REVIEW_REPO_ROOT/Sources" "$REVIEW_STAGE/after/Sources"
+cp -R "$REVIEW_REPO_ROOT/Tests" "$REVIEW_STAGE/after/Tests"
 cp "$REVIEW_REPO_ROOT/Package.swift" "$REVIEW_REPO_ROOT/VERSION" "$REVIEW_STAGE/after/"
 if [[ -f "$REVIEW_REPO_ROOT/Package.resolved" ]]; then
     cp "$REVIEW_REPO_ROOT/Package.resolved" "$REVIEW_STAGE/after/Package.resolved"
