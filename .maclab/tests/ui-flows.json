@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "name": "ui-flows",
+  "purpose": "Final build with fake Memo and Command N regressions; interactive Task search report Secret verification",
+  "artifact": {
+    "path": ".build/maclab/ui-review.tar",
+    "format": "tar",
+    "app_bundle_path": "WorkLogReview.app",
+    "expected_bundle_id": "dev.worklog.UIReview"
+  },
+  "prepare": [
+    {
+      "id": "build-after",
+      "kind": "exec",
+      "purpose": "after SwiftUI build, isolated fixture only",
+      "before": "Remote test session available",
+      "after": "Inspect exit code and evidence",
+      "argv": [
+        "/bin/bash",
+        "scripts/maclab/build-remote.sh",
+        "after"
+      ],
+      "timeout_seconds": 600
+    }
+  ],
+  "cases": [
+    {
+      "id": "final-flow",
+      "purpose": "Actual final app smoke and capture regressions",
+      "steps": [
+        {
+          "id": "after-launch",
+          "kind": "exec",
+          "purpose": "Launch after with synthetic data",
+          "before": "Remote test session available",
+          "after": "Inspect exit code and evidence",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "many"
+          ],
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-day-1280-open",
+          "kind": "osascript",
+          "purpose": "day-1280-open",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "delay 2\ntell application \"System Events\"\n tell process \"WorkLogApp\"\n  set frontmost to true\n  set position of window 1 to {0, 25}\n  set size of window 1 to {1280, 800}\n end tell\n keystroke \"1\" using command down\nend tell\ndelay 1",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-day-1280",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "day-1280 UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "memo-save-return",
+          "kind": "exec",
+          "purpose": "memo-save-return",
+          "before": "Synthetic fixture is running",
+          "after": "Inspect nonzero exit and sanitized assertions",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/capture-search-flow.js",
+            "--action",
+            "capture"
+          ],
+          "timeout_seconds": 75
+        },
+        {
+          "id": "command-n-regression",
+          "kind": "exec",
+          "purpose": "command-n-regression",
+          "before": "Synthetic fixture is running",
+          "after": "Inspect nonzero exit and sanitized assertions",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/capture-shortcut.js"
+          ],
+          "timeout_seconds": 45
+        },
+        {
+          "id": "capture-result",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "Real compact capture after Command N",
+          "before": "Shortcut regression ran",
+          "after": "Review focused Memo"
+        },
+        {
+          "id": "capture-dismiss",
+          "kind": "osascript",
+          "purpose": "Close empty fixture capture",
+          "before": "No text entered",
+          "after": "Panel closed",
+          "script": "tell application \"System Events\" to key code 53\ndelay 1",
+          "timeout_seconds": 20
+        },
+        {
+          "id": "after-visibility",
+          "kind": "osascript",
+          "purpose": "visibility",
+          "before": "Application is open",
+          "after": "Observe actual screen",
+          "script": "tell application \"System Events\"\nreturn exists window 1 of process \"WorkLogApp\"\nend tell",
+          "timeout_seconds": 30
+        },
+        {
+          "id": "after-visible-end",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "visible-end UI comparison",
+          "before": "Requested screen active",
+          "after": "Review captured layout and text"
+        },
+        {
+          "id": "after-visible-assert",
+          "kind": "assert",
+          "purpose": "App window exists after navigation; visual quality is reviewed separately",
+          "before": "Window existence query ran",
+          "after": "Boolean assertion recorded",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "after-visibility",
+            "equals": true,
+            "before_screenshot": "after-day-1280",
+            "after_screenshot": "after-visible-end"
+          }
+        },
+        {
+          "id": "memo-save-return-assert",
+          "kind": "assert",
+          "purpose": "Regression must exit successfully",
+          "before": "Flow finished",
+          "after": "Result recorded",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "memo-save-return",
+            "equals": 0
+          }
+        },
+        {
+          "id": "command-n-regression-assert",
+          "kind": "assert",
+          "purpose": "Regression must exit successfully",
+          "before": "Flow finished",
+          "after": "Result recorded",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "command-n-regression",
+            "equals": 0
+          }
+        }
+      ]
+    }
+  ],
+  "collect": [],
+  "explore": {
+    "hold_s": 900
+  }
+}
