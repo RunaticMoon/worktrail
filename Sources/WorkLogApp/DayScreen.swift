@@ -100,7 +100,6 @@ import WorkLogCore
                     }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
                 .scrollPosition(id: $timelineScrollID)
-                .onAppear { if let id = lastOpened["timeline"] { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["timeline"] { proxy.scrollTo(id) }
                 }
@@ -180,7 +179,6 @@ import WorkLogCore
                     }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
                 .scrollPosition(id: $taskScrollID)
-                .onAppear { if let id = lastOpened["tasks"] { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["tasks"] { proxy.scrollTo(id) }
                 }
@@ -224,7 +222,6 @@ import WorkLogCore
                     }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
                 .scrollPosition(id: $memoScrollID)
-                .onAppear { if let id = lastOpened["memos"] { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["memos"] { proxy.scrollTo(id) }
                 }
