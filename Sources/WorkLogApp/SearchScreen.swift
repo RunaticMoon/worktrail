@@ -33,6 +33,7 @@ import WorkLogCore
                 Text(isPanel ? "Secret (⌘2)" : "Secret").tag(SearchScope.secret)
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .frame(width: 220)
             .worklogHelp(isPanel ? "검색 범위 · ⌘1 기록 · ⌘2 Secret" : "검색 범위 · Tab으로 포커스한 뒤 화살표로 전환")
             if scope == .records {
@@ -307,7 +308,9 @@ import WorkLogCore
             .frame(maxWidth: .infinity, alignment: .leading)
             .foregroundStyle(WorkLogTheme.text)
             .background(selected ? WorkLogTheme.accentSoft : .clear)
-            .overlay(alignment: .bottom) { Divider() }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(WorkLogTheme.border).frame(height: 1)
+            }
             .overlay(alignment: .leading) {
                 if selected { Rectangle().fill(WorkLogTheme.accent).frame(width: 3) }
             }
