@@ -16,8 +16,8 @@
  *   osascript -l JavaScript scripts/maclab/capture-search-flow.js --action search --search-open command-f
  * This explicit mode uses native app activation and AXRaise before CmdF. It does
  * not silently substitute for a failed global hotkey; the output identifies it.
- * For an executor that passes this file as an inline -e program, put a -- between
- * the script and its arguments: osascript -l JavaScript -e SCRIPT -- --action capture
+ * Execute the file directly. It exceeds 16KB; do not send its complete contents
+ * through an executor's inline osascript -e argument.
  *
  * Effects: activates TextEdit, uses registered global hotkeys, replaces the
  * clipboard with synthetic text, saves one fake Memo, and opens/closes its source
@@ -98,8 +98,26 @@ function worklogProcess(events) {
     return processes[0];
 }
 function windows(process) { return readSafely(function () { return process.windows(); }, []); }
-function findWindowAndElement(process, matches) {
-    var items = windows(process);
+function panelWindows(process, panelTitle) {
+    var named = [], fallback = [];
+    windows(process).forEach(function (window) {
+        var title = label(window);
+        if (title.indexOf(panelTitle) >= 0) {
+            named.push(window);
+            return;
+        }
+        // Some macOS versions omit a borderless NSPanel's accessible title.
+        // Never walk the main record list while waiting for a closed panel.
+        if (title.indexOf('빠른 입력') >= 0 || title.indexOf('WorkLog 검색') >= 0) return;
+        var subrole = readSafely(function () { return window.subrole(); }, '');
+        if (subrole === 'AXStandardWindow') return;
+        var size = readSafely(function () { return window.size(); }, null);
+        if (subrole === 'AXFloatingWindow' || (size && size[0] <= 900 && size[1] <= 800)) fallback.push(window);
+    });
+    return named.concat(fallback);
+}
+function findWindowAndElement(process, matches, panelTitle) {
+    var items = panelWindows(process, panelTitle);
     for (var index = 0; index < items.length; index += 1) {
         var element = findElement(items[index], matches);
         if (element) return { window: items[index], element: element };
@@ -135,19 +153,23 @@ function sameGeometry(first, second) {
     return ['x', 'y', 'width', 'height'].every(function (key) { return Math.abs(first[key] - second[key]) <= 1; });
 }
 function captureEditor(element) {
+    if (role(element) !== 'AXTextArea') return false;
     var text = label(element);
-    return role(element) === 'AXTextArea' && (text.indexOf('메모 본문') >= 0 || text.indexOf('무엇을 기록할까요?') >= 0);
+    return text.indexOf('메모 본문') >= 0 || text.indexOf('무엇을 기록할까요?') >= 0;
 }
 function searchField(element) {
     return role(element) === 'AXTextField' && label(element).indexOf('원문 검색') >= 0;
 }
-function sourceSheet(process) {
-    var items = windows(process);
+function sourceSheet(process, owner) {
+    var items = owner ? [owner] : windows(process);
     for (var index = 0; index < items.length; index += 1) {
+        if (role(items[index]) === 'AXSheet') return items[index];
         var sheets = readSafely(function () { return items[index].sheets(); }, []);
         if (sheets.length) return sheets[0];
-        var sheet = findElement(items[index], function (element) { return role(element) === 'AXSheet'; });
-        if (sheet) return sheet;
+        // AXSheets is an explicit window relationship, not a recursive content
+        // search. An empty sheet list must be cheap even with thousands of rows.
+        var attached = attribute(items[index], 'AXSheets', []);
+        if (attached && attached.length) return attached[0];
     }
     return null;
 }
@@ -173,7 +195,7 @@ function searchWindowDiagnostics(process) {
     var items = windows(process);
     return { reviewAppForeground: frontmostBundle() === REVIEW_BUNDLE, windowCount: items.length,
         searchTitledWindowPresent: items.some(function (window) { return label(window).indexOf('WorkLog 검색') >= 0; }),
-        searchFieldPresent: Boolean(findWindowAndElement(process, searchField)),
+        searchFieldPresent: Boolean(findWindowAndElement(process, searchField, 'WorkLog 검색')),
         mainWindowPresent: items.some(function (window) {
             return readSafely(function () { return window.subrole(); }, '') === 'AXStandardWindow';
         }) };
@@ -211,11 +233,11 @@ function run(args) {
     requireState(!sourceSheet(process), 'Close the existing source sheet before running this workflow.');
 
     if (action === 'capture') {
-        requireState(!findWindowAndElement(process, captureEditor), 'A capture draft is already open. Close it without discarding before starting this workflow.');
+        requireState(!findWindowAndElement(process, captureEditor, '빠른 입력'), 'A capture draft is already open. Close it without discarding before starting this workflow.');
         Application('TextEdit').activate();
         waitFor(function () { return frontmostBundle() === 'com.apple.TextEdit'; }, 'TextEdit becomes the previous app');
         events.keyCode(49, { using: ['control down', 'option down'] });
-        var capture = waitFor(function () { return findWindowAndElement(process, captureEditor); }, 'Memo capture panel opens with a body editor');
+        var capture = waitFor(function () { return findWindowAndElement(process, captureEditor, '빠른 입력'); }, 'Memo capture panel opens with a body editor');
         var initialFocus = isFocused(capture.element);
         requireState(initialFocus, 'Memo body did not receive automatic focus on opening; no test text was entered.');
         var original = textValue(capture.element);
@@ -224,7 +246,7 @@ function run(args) {
         waitFor(function () { return textValue(capture.element) === REVIEW_BODY; }, 'synthetic multiline Memo is pasted exactly');
         var beforeFrame = geometry(capture.window);
         events.keyCode(36, { using: ['command down'] });
-        waitFor(function () { return !findWindowAndElement(process, captureEditor); }, 'successful save closes the capture panel');
+        waitFor(function () { return !findWindowAndElement(process, captureEditor, '빠른 입력'); }, 'successful save closes the capture panel');
         waitFor(function () { return frontmostBundle() === 'com.apple.TextEdit'; }, 'successful save restores TextEdit');
         return JSON.stringify({ action: action, bundleIdentifier: REVIEW_BUNDLE,
             openedByHotkey: true, memoBodyFocusedOnOpen: initialFocus, exactSyntheticMultilineInput: true,
@@ -245,7 +267,7 @@ function run(args) {
     }
     var search;
     try {
-        search = waitFor(function () { return findWindowAndElement(process, searchField); }, 'local search panel opens');
+        search = waitFor(function () { return findWindowAndElement(process, searchField, 'WorkLog 검색'); }, 'local search panel opens');
     } catch (_) {
         throw new Error('Search entry failed through ' + searchEntry + ': ' + JSON.stringify(searchWindowDiagnostics(process)));
     }
@@ -267,14 +289,14 @@ function run(args) {
     var barsBefore = scrollbarSnapshot(search.window);
     var queryBefore = textValue(search.element);
     events.keyCode(36);
-    var sheet = waitFor(function () { return sourceSheet(process); }, 'Return opens the saved source sheet');
+    var sheet = waitFor(function () { return sourceSheet(process, search.window); }, 'Return opens the saved source sheet');
     var sourceMatches = Boolean(findElement(sheet, function (element) {
         return role(element) === 'AXStaticText' && label(element).indexOf(REVIEW_QUERY) >= 0;
     }));
     requireState(sourceMatches, 'The opened source sheet did not expose the synthetic Memo text through Accessibility.');
     events.keyCode(53);
-    waitFor(function () { return !sourceSheet(process); }, 'Escape closes the source and returns to search');
-    search = waitFor(function () { return findWindowAndElement(process, searchField); }, 'search query remains available after source closes');
+    waitFor(function () { return !sourceSheet(process, search.window); }, 'Escape closes the source and returns to search');
+    search = waitFor(function () { return findWindowAndElement(process, searchField, 'WorkLog 검색'); }, 'search query remains available after source closes');
     selected = waitFor(function () { return selectedResult(search.window); }, 'search result remains selected');
     var rowFrameAfter = geometry(selected);
     var barsAfter = scrollbarSnapshot(search.window);

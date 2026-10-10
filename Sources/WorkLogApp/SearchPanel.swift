@@ -39,7 +39,7 @@ import WorkLogCore
         if !panel.isVisible {
             previousApp = NSWorkspace.shared.frontmostApplication
             // Reuse hosting to preserve scope, title/key selection, filters and scroll.
-            if panel.contentView == nil {
+            if !(panel.contentView is NSHostingView<AnyView>) {
                 let hosting = NSHostingView(rootView: AnyView(SearchPanelContent(
                     model: model, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
                         self?.dismiss(restorePreviousApp: false)
