@@ -56,6 +56,7 @@ struct AppRootView: View {
     @Bindable var controller: AppController
     @Environment(\.openWindow) private var openWindow
     @State private var detailDismissalRevision = 0
+    @FocusState private var sidebarFocus: SidebarRoute?
     private var selectedRoute: SidebarRoute { controller.route ?? .day }
 
     var body: some View {
@@ -80,6 +81,7 @@ struct AppRootView: View {
                         if let detail = controller.taskDetail {
                             TaskDetailScreen(model: detail, onClose: { controller.selectedTaskId = nil },
                                 taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) })
+                                .buttonStyle(WorkLogButtonStyle())
                                 .frame(minWidth: 560, minHeight: 480)
                         }
                     }
@@ -87,6 +89,7 @@ struct AppRootView: View {
                         set: { if !$0 { controller.selectedMemoId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                         if let memo = controller.memoDetail {
                             MemoDetailScreen(model: memo, onClose: { controller.selectedMemoId = nil })
+                                .buttonStyle(WorkLogButtonStyle())
                         }
                     }
                 } else {
@@ -97,12 +100,14 @@ struct AppRootView: View {
         }
         .background(WorkLogTheme.canvas)
         .tint(WorkLogTheme.accent)
-        .buttonStyle(WorkLogButtonStyle())
         .groupBoxStyle(WorkLogGroupBoxStyle())
         .scrollContentBackground(.hidden)
         .onAppear {
             let action = openWindow
             controller.openMainWindow = { action(id: "main") }
+        }
+        .onChange(of: selectedRoute) { _, route in
+            if sidebarFocus != nil { sidebarFocus = route }
         }
     }
 
@@ -144,45 +149,73 @@ struct AppRootView: View {
                 if controller.sidebarExpanded { ShortcutLabel(title: "빠른 입력", keys: "⌘N") }
                 else { Image(systemName: "plus").frame(maxWidth: .infinity) }
             }
-            .buttonStyle(WorkLogButtonStyle(prominent: true))
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
             .accessibilityLabel("빠른 입력").worklogHelp("빠른 입력", keys: "⌘N")
-            ScrollView {
-                VStack(spacing: 2) {
-                    ForEach(SidebarRoute.primary) { navigationButton($0, auxiliary: false) }
-                    Divider().padding(.vertical, 8)
-                    ForEach(SidebarRoute.secondary) { navigationButton($0, auxiliary: true) }
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(SidebarRoute.primary) { navigationButton($0) }
+                            Divider().padding(.vertical, 6)
+                            ForEach(SidebarRoute.secondary) { navigationButton($0) }
+                        }
+                        .frame(minHeight: geometry.size.height, alignment: .top)
+                    }
+                    .onChange(of: sidebarFocus) { _, route in
+                        if let route { proxy.scrollTo(route) }
+                    }
+                    .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                        guard press.modifiers.isEmpty, let sidebarFocus else { return .ignored }
+                        if press.key == .return {
+                            guard press.phase == .down else { return .handled }
+                            controller.route = sidebarFocus
+                        } else {
+                            let routes = SidebarRoute.primary + SidebarRoute.secondary
+                            guard let index = routes.firstIndex(of: sidebarFocus) else { return .ignored }
+                            let offset = press.key == .upArrow ? -1 : 1
+                            self.sidebarFocus = routes[min(max(index + offset, 0), routes.count - 1)]
+                        }
+                        return .handled
+                    }
                 }
             }
-
         }
         .padding(controller.sidebarExpanded ? 12 : 8)
         .background(WorkLogTheme.surface)
+        .buttonStyle(.plain)
+        .accessibilityLabel("사이드바")
     }
 
-    private func navigationButton(_ route: SidebarRoute, auxiliary: Bool) -> some View {
-        Button { controller.route = route } label: {
+    private func navigationButton(_ route: SidebarRoute) -> some View {
+        Button { controller.route = route; sidebarFocus = route } label: {
             HStack(spacing: 8) {
                 Image(systemName: route.symbol).frame(width: 20).accessibilityHidden(true)
                 if controller.sidebarExpanded {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(route.title).fontWeight(selectedRoute == route ? .semibold : .regular)
-                        if let purpose = route.purpose { Text(purpose).font(.caption).foregroundStyle(WorkLogTheme.muted) }
+                        if let purpose = route.purpose {
+                            Text(purpose).font(.caption).foregroundStyle(WorkLogTheme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     Spacer(minLength: 0)
                 }
             }
-            .font(auxiliary ? .callout : .body)
+            .font(.body)
             .foregroundStyle(WorkLogTheme.text)
             .padding(.horizontal, controller.sidebarExpanded ? 8 : 0)
-            .padding(.vertical, auxiliary ? 6 : 8)
+            .padding(.vertical, 5)
+            .frame(minHeight: controller.sidebarExpanded && route.purpose != nil ? 42 : WorkLogTheme.rowHeight)
             .frame(maxWidth: .infinity, alignment: controller.sidebarExpanded ? .leading : .center)
-            .background(selectedRoute == route ? WorkLogTheme.accentSoft : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(WorkLogSourceRowStyle(isSelected: selectedRoute == route, isFocused: sidebarFocus == route))
+        .focusEffectDisabled()
+        .focused($sidebarFocus, equals: route)
+        .id(route)
         .accessibilityLabel(Text(route.purpose.map { "\(route.title), \($0)" } ?? route.title))
         .accessibilityAddTraits(selectedRoute == route ? .isSelected : [])
+        .accessibilityHint("위아래 방향키로 이동하고 Return으로 엽니다.")
         .worklogHelp(route.purpose.map { "\(route.title) · \($0)" } ?? route.title, keys: route.shortcut)
     }
 

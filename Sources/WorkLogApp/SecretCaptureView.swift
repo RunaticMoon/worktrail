@@ -76,7 +76,7 @@ import WorkLogCore
             if phase != .editing || model.isLocked || !model.canEdit(from: .capture) {
                 Spacer(minLength: 0)
             }
-            Text("Tab 필드 이동 · Control+Tab 유형 전환 · ⌘Return 저장 · Esc 초안 보존")
+            Text("⌘1–3 유형 · ⌃Tab 유형 순환 · Tab 필드 이동 · ⌘Return 저장 · Esc 초안 보존")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

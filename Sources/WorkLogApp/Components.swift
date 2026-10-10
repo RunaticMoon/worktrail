@@ -39,17 +39,15 @@ struct StatusBadge: View {
                 .foregroundStyle(WorkLogTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.callout)
+        .font(.caption)
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(tone.color.opacity(contrast == .increased ? 0.12 : 0.08),
-                    in: RoundedRectangle(cornerRadius: 6))
-        .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 6))
+        .padding(.vertical, 3)
+        .background(tone.color.opacity(0.12), in: Capsule())
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
-                              lineWidth: WorkLogTheme.outlineWidth(for: contrast))
-                .allowsHitTesting(false)
+            if contrast == .increased {
+                Capsule().strokeBorder(WorkLogTheme.text, lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(label))
@@ -59,7 +57,7 @@ struct StatusBadge: View {
 extension TaskStatus {
     var badgeSymbol: String {
         switch self {
-        case .planned: return "clock"
+        case .planned: return "circle.dashed"
         case .inProgress: return "arrow.triangle.2.circlepath"
         case .onHold: return "pause.circle"
         case .completed: return "checkmark.circle"
@@ -83,6 +81,25 @@ struct TaskStatusBadge: View {
 
     var body: some View {
         StatusBadge(label: status.koreanLabel, systemImage: status.badgeSymbol, tone: status.badgeTone)
+    }
+}
+
+/// A compact list status; shape and its accessible label both convey meaning.
+struct TaskStatusIcon: View {
+    let status: TaskStatus?
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var symbol: String {
+        status?.badgeSymbol ?? "questionmark.circle"
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 16))
+            .foregroundStyle(contrast == .increased ? WorkLogTheme.text : (status?.badgeTone.color ?? WorkLogTheme.muted))
+            .frame(width: 20, height: 20)
+            .accessibilityLabel(Text(status?.koreanLabel ?? "상태 없음"))
+            .help(status?.koreanLabel ?? "상태 없음")
     }
 }
 
@@ -348,16 +365,16 @@ struct ChipView: View {
                     .accessibilityLabel(Text("\(label) 제거"))
             }
         }
-        .font(.callout)
+        .font(.caption)
         .foregroundStyle(WorkLogTheme.text)
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 6))
+        .padding(.vertical, 3)
+        .background(WorkLogTheme.muted.opacity(0.10), in: Capsule())
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
-                              lineWidth: WorkLogTheme.outlineWidth(for: contrast))
-                .allowsHitTesting(false)
+            if contrast == .increased {
+                Capsule().strokeBorder(WorkLogTheme.text, lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
         }
     }
 }

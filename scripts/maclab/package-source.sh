@@ -34,10 +34,33 @@ cp "$REVIEW_REPO_ROOT/Package.swift" "$REVIEW_REPO_ROOT/VERSION" "$REVIEW_STAGE/
 if [[ -f "$REVIEW_REPO_ROOT/Package.resolved" ]]; then
     cp "$REVIEW_REPO_ROOT/Package.resolved" "$REVIEW_STAGE/after/Package.resolved"
 fi
-# Both versions use the same synthetic records and the same isolated startup path.
-# AppController does not render the screen layouts under comparison.
+# Both versions use the same synthetic records and isolated environment factory.
+# Preserve the baseline controller's own hotkey and other API calls: copying the
+# entire current controller can break a baseline built against older app APIs.
 cp "$REVIEW_FIXTURE" "$REVIEW_STAGE/baseline/Sources/WorkLogApp/UITestFixture.swift"
-cp "$REVIEW_REPO_ROOT/Sources/WorkLogApp/AppController.swift" "$REVIEW_STAGE/baseline/Sources/WorkLogApp/AppController.swift"
+python3 - "$REVIEW_REPO_ROOT/Sources/WorkLogApp/AppController.swift" \
+    "$REVIEW_STAGE/baseline/Sources/WorkLogApp/AppController.swift" <<'PY'
+from pathlib import Path
+import sys
+
+current = Path(sys.argv[1]).read_text()
+baseline_path = Path(sys.argv[2])
+baseline = baseline_path.read_text()
+factory_start = current.index("    private func openEnvironment() async throws -> AppEnvironment {")
+factory_end = current.index("    func retryStart()", factory_start)
+factory = current[factory_start:factory_end]
+if "    private func openEnvironment() async throws -> AppEnvironment {" in baseline:
+    start = baseline.index("    private func openEnvironment() async throws -> AppEnvironment {")
+    end = baseline.index("    func retryStart()", start)
+    baseline = baseline[:start] + factory + baseline[end:]
+else:
+    start = baseline.index("            let paths = AppPaths.standard()")
+    end = baseline.index("            environment = env", start)
+    baseline = baseline[:start] + "            let env = try await openEnvironment()\n            let settings = env.settings\n" + baseline[end:]
+    insertion = baseline.index("    func retryStart()")
+    baseline = baseline[:insertion] + factory + baseline[insertion:]
+baseline_path.write_text(baseline)
+PY
 cp "$REVIEW_REPO_ROOT/scripts/maclab/build-remote.sh" "$REVIEW_STAGE/scripts/maclab/build-remote.sh"
 # Include the read-only UI inspection driver when present in the current checkout.
 for REVIEW_DRIVER in "$REVIEW_REPO_ROOT/scripts/maclab/"*.js; do

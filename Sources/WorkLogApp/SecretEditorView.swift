@@ -34,7 +34,7 @@ import WorkLogCore
         !model.isLocked && model.isEditing && model.canEdit(from: host) && !model.hasRecoverableDraft
     }
     private var keyboardHint: String {
-        let navigation = keyboardMode == .panel ? "Tab 필드 이동 · Control+Tab 유형 전환" : "Tab 셀 이동"
+        let navigation = keyboardMode == .panel ? "Tab 필드 이동 · ⌘1–3 유형 · ⌃Tab 유형 순환" : "Tab 셀 이동"
         let saveKey = keyboardMode == .panel ? "⌘Return" : "⌘S 또는 ⌘Return"
         return "\(navigation) · \(saveKey) 저장 · key·값의 앞뒤 공백만 저장 시 제거"
     }

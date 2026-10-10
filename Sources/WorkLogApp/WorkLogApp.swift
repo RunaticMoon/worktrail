@@ -20,6 +20,7 @@ enum WorkLogEntryPoint {
     var body: some Scene {
         WindowGroup("WorkLog", id: "main") {
             AppRootView(controller: controller)
+                .environment(\.hotkeyDiagnostics, controller.hotkeyDiagnostics)
                 .frame(minWidth: 840, minHeight: 560)
                 .task { await controller.start() }
         }
@@ -61,11 +62,23 @@ private struct ResidentMenu: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button("WorkLog 열기") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-        Button("빠른 입력") { controller.showCapture() }.disabled(controller.environment == nil)
-        Button("검색") { controller.showSearch() }.disabled(controller.environment == nil)
+        Button("빠른 입력 (\(controller.hotkeyDisplay(.capture)))") { controller.showCapture() }
+            .disabled(controller.environment == nil)
+        hotkeyStatus(.capture)
+        Button("검색 열기 (\(controller.hotkeyDisplay(.search)))") { controller.showSearch() }
+        hotkeyStatus(.search)
         CheckForUpdatesButton()
         Divider()
         Button("종료") { controller.environment?.lockSecrets(.appQuit); NSApp.terminate(nil) }
+    }
+
+    @ViewBuilder private func hotkeyStatus(_ action: HotkeyAction) -> some View {
+        let diagnostic = controller.hotkeyDiagnostics[action] ?? HotkeyDiagnostic()
+        Text(diagnostic.registrationText)
+        if let recent = diagnostic.recentPressText { Text(recent) }
+        if let failure = diagnostic.lastFailure, failure != diagnostic.registrationText {
+            Text("최근 등록 시도 · \(failure)")
+        }
     }
 }
 #else
