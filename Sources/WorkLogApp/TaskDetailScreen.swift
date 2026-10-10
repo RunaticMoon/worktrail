@@ -23,60 +23,104 @@ import WorkLogCore
                         .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
                 }
                 Spacer(minLength: 0)
-                Button("닫기") { if !hasMarkedText { onClose() } }.keyboardShortcut(.cancelAction)
+                Button(model.completionCheck == nil ? "닫기" : "완료 취소") {
+                    guard !hasMarkedText else { return }
+                    if model.completionCheck != nil { model.cancelCompletion() }
+                    else { onClose() }
+                }.keyboardShortcut(.cancelAction)
             }
-            if let date = model.asOf {
-                AsOfDateBadge(dateLabel: date.iso)
-                Text("읽기 전용입니다. 현재 상태는 업무 화면에서 관리합니다.")
-                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
-            }
-            if let error = model.errorMessage { InlineNotice(message: error) }
-            if let detail = model.detail {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { taskStatus(detail) }
-                    VStack(alignment: .leading, spacing: 8) { taskStatus(detail) }
-                }
-                if model.asOf == nil {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) { primaryActions(detail); statusActions(detail) }
-                        VStack(alignment: .leading, spacing: 8) { primaryActions(detail); statusActions(detail) }
-                    }
-                }
-                Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            if model.asOf == nil { activityComposer.id("activities") }
-                            SectionDisclosure(title: "프로젝트별 적용 상태", summary: projectSummary(detail),
-                                              isExpanded: $projectsExpanded) { projectStatuses(detail) }
-                            Divider()
-                            SectionDisclosure(title: "체크리스트", summary: model.checklistSummary ?? "항목 없음",
-                                              isExpanded: $checklistExpanded) { checklist(detail) }
-                            Divider()
-                            SectionDisclosure(title: "근거·이력", summary: "완료 이력 \(detail.completionDates.count)개 · 관계 \(detail.relations.count)개 · 링크 \(detail.links.count)개",
-                                              isExpanded: $evidenceExpanded) { evidence(detail) }
-                            Divider()
-                            SectionDisclosure(title: "진행 기록", summary: "\(detail.activities.count)개 기록",
-                                              isExpanded: $activitiesExpanded) { activityHistory(detail) }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .onChange(of: activityFocused) { _, focused in
-                        if focused { proxy.scrollTo("activities", anchor: .top) }
-                    }
-                }
+            if model.completionCheck != nil {
+                completionConfirmation
             } else {
-                StateView(kind: model.errorMessage == nil ? .empty : .failure, title: "업무를 불러올 수 없습니다",
-                          detail: "목록으로 돌아가 업무를 다시 선택하세요.", actionTitle: "목록으로", action: onClose)
+                if let date = model.asOf {
+                    AsOfDateBadge(dateLabel: date.iso)
+                    Text("읽기 전용입니다. 현재 상태는 업무 화면에서 관리합니다.")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                }
+                if let error = model.errorMessage { InlineNotice(message: error) }
+                if let detail = model.detail {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { taskStatus(detail) }
+                        VStack(alignment: .leading, spacing: 8) { taskStatus(detail) }
+                    }
+                    if model.asOf == nil {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { primaryActions(detail); statusActions(detail) }
+                            VStack(alignment: .leading, spacing: 8) { primaryActions(detail); statusActions(detail) }
+                        }
+                    }
+                    Divider()
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 16) {
+                                if model.asOf == nil { activityComposer.id("activities") }
+                                SectionDisclosure(title: "프로젝트별 적용 상태", summary: projectSummary(detail),
+                                                  isExpanded: $projectsExpanded) { projectStatuses(detail) }
+                                Divider()
+                                SectionDisclosure(title: "체크리스트", summary: model.checklistSummary ?? "항목 없음",
+                                                  isExpanded: $checklistExpanded) { checklist(detail) }
+                                Divider()
+                                SectionDisclosure(title: "근거·이력", summary: "완료 이력 \(detail.completionDates.count)개 · 관계 \(detail.relations.count)개 · 링크 \(detail.links.count)개",
+                                                  isExpanded: $evidenceExpanded) { evidence(detail) }
+                                Divider()
+                                SectionDisclosure(title: "진행 기록", summary: "\(detail.activities.count)개 기록",
+                                                  isExpanded: $activitiesExpanded) { activityHistory(detail) }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .onChange(of: activityFocused) { _, focused in
+                            if focused { proxy.scrollTo("activities", anchor: .top) }
+                        }
+                    }
+                } else {
+                    StateView(kind: model.errorMessage == nil ? .empty : .failure, title: "업무를 불러올 수 없습니다",
+                              detail: "목록으로 돌아가 업무를 다시 선택하세요.", actionTitle: "목록으로", action: onClose)
+                }
             }
         }
         .padding(WorkLogTheme.contentInset)
-        .alert("남은 범위를 확인하세요", isPresented: Binding(get: { model.completionCheck != nil },
-            set: { if !$0 { model.cancelCompletion() } })) {
-            Button("계속 작업", role: .cancel) { model.cancelCompletion() }
-            Button("남겨두고 Task 전체 완료") { model.complete(confirmRemaining: true) }
-        } message: {
-            Text((model.completionScopeLines + ["체크리스트와 프로젝트별 적용 상태는 자동으로 완료되지 않습니다."]).joined(separator: "\n\n"))
-        }
+    }
+
+    private var completionConfirmation: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("남은 범위를 확인하세요").font(.headline)
+            if let error = model.errorMessage { InlineNotice(message: error) }
+            Text("체크리스트와 프로젝트별 적용 상태는 그대로 남습니다.")
+                .font(.callout).foregroundStyle(WorkLogTheme.muted)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let check = model.completionCheck {
+                        if !check.remainingChecklist.isEmpty {
+                            Text("남은 체크리스트 · \(check.remainingChecklist.count)개").font(.headline)
+                            ForEach(check.remainingChecklist) { item in
+                                Label(item.text, systemImage: "square")
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if !check.unfinishedProjects.isEmpty {
+                            Text("프로젝트별 미완료 적용 · \(check.unfinishedProjects.count)개").font(.headline)
+                            ForEach(check.unfinishedProjects.indices, id: \.self) { index in
+                                let project = check.unfinishedProjects[index]
+                                let name = model.detail?.projects.first { $0.project.id == project.projectId }?.project.name ?? "프로젝트"
+                                Text("\(name) · \(project.status.koreanLabel)")
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { completionActions }
+                VStack(alignment: .leading, spacing: 8) { completionActions }
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder private var completionActions: some View {
+        Button("계속 작업") { model.cancelCompletion() }
+            .worklogHelp("전체 완료를 취소하고 작성 중인 내용으로 돌아가기", keys: "Esc")
+        Button("남겨두고 Task 전체 완료") { model.complete(confirmRemaining: true) }
+            .buttonStyle(.borderedProminent)
     }
 
     @ViewBuilder private func taskStatus(_ detail: TaskDetail) -> some View {

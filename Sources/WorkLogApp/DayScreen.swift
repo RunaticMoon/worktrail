@@ -13,6 +13,9 @@ import WorkLogCore
     @SceneStorage("worklog.day.region") private var selectedRegion = "timeline"
     @State private var lastOpened: [String: String] = [:]
     @State private var showsSummary = false
+    @State private var timelineScrollID: String?
+    @State private var taskScrollID: String?
+    @State private var memoScrollID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -27,11 +30,6 @@ import WorkLogCore
                     Label("당시 상태 · \(KoreanDateLabel.monthDayWeekday(box.date, calendar: calendar)) 종료 기준", systemImage: "clock.arrow.circlepath")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
-                if box.timeline.isEmpty && box.tasks.isEmpty && box.memos.isEmpty && model.aiSummary == nil {
-                    StateView(kind: .empty, title: "이 날짜의 기록이 없습니다", detail: "빠른 입력에서 선택한 날짜의 기록을 추가하세요.",
-                        actionTitle: "기록 추가 ⌘N", action: onCapture)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
                     Picker("표시 영역", selection: $selectedRegion) {
                         Text("활동 기록 \(box.timeline.count)").tag("timeline")
                         Text("업무 상태 \(box.tasks.count)").tag("tasks")
@@ -42,7 +40,6 @@ import WorkLogCore
                     case "memos": memos(box)
                     default: timeline(box)
                     }
-                }
             } else if model.errorMessage == nil {
                 StateView(kind: .empty, title: "날짜를 선택하세요", detail: "기록을 불러오면 타임라인·업무·메모를 보여드립니다.")
             }
@@ -50,7 +47,10 @@ import WorkLogCore
         .padding(WorkLogTheme.contentInset)
         .background(WorkLogTheme.canvas)
         .onAppear { model.load() }
-        .onChange(of: model.selectedDate) { _, _ in lastOpened = [:]; model.load() }
+        .onChange(of: model.selectedDate) { _, _ in
+            lastOpened = [:]; timelineScrollID = nil; taskScrollID = nil; memoScrollID = nil
+            model.load()
+        }
         .onChange(of: model.includeHeldAndCancelled) { _, _ in model.load() }
     }
 
@@ -97,8 +97,9 @@ import WorkLogCore
                             timelineRow(entry).padding(.vertical, 12).id(entry.id)
                             Divider()
                         }
-                    }.frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
+                    }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
+                .scrollPosition(id: $timelineScrollID)
                 .onAppear { if let id = lastOpened["timeline"] { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["timeline"] { proxy.scrollTo(id) }
@@ -176,8 +177,9 @@ import WorkLogCore
                             }.buttonStyle(.plain).id(row.id).accessibilityHint("업무 상세 열기")
                             Divider()
                         }
-                    }.frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
+                    }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
+                .scrollPosition(id: $taskScrollID)
                 .onAppear { if let id = lastOpened["tasks"] { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["tasks"] { proxy.scrollTo(id) }
@@ -219,8 +221,9 @@ import WorkLogCore
                                 }.padding(.top, 8)
                             }.padding(.vertical, 12)
                         }
-                    }.frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
+                    }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
+                .scrollPosition(id: $memoScrollID)
                 .onAppear { if let id = lastOpened["memos"] { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["memos"] { proxy.scrollTo(id) }

@@ -552,6 +552,7 @@ import Observation
     @State private var choosingTask = true
     @State private var trackingExpanded = false
     @FocusState private var cancelFocused: Bool
+    @FocusState private var focusedTaskRow: String?
 
     private var keys: [String] { ["new"] + model.filteredTasks.map { "task:\($0.id)" } }
     private var isLocked: Bool { model.isSubmitting || model.pendingCompletion != nil }
@@ -670,6 +671,20 @@ import Observation
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($focusedTaskRow, equals: key)
+        .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+            guard !isLocked,
+                  (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
+                  press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty else { return .ignored }
+            switch press.key {
+            case .upArrow: moveTask(-1)
+            case .downArrow: moveTask(1)
+            case .return: if press.phase != .repeat { chooseTask(key) }
+            default: return .ignored
+            }
+            return .handled
+        }
+        .onChange(of: focusedTaskRow) { _, row in if let row { highlighted = row } }
         .accessibilityValue(highlighted == key ? "선택됨" : "")
         .worklogHelp("선택하고 바로 내용 입력", keys: "↑↓ 선택 · Return 입력")
         .id(key)
@@ -714,6 +729,7 @@ import Observation
         let rows = keys
         let index = rows.firstIndex(of: highlighted) ?? 0
         highlighted = rows[min(max(index + delta, 0), rows.count - 1)]
+        if focusedTaskRow != nil { focusedTaskRow = highlighted }
     }
 
     private func chooseTask(_ key: String) {
@@ -733,6 +749,7 @@ import Observation
             model.taskSelection = .existing(task.id)
         }
         choosingTask = false
+        focusedTaskRow = nil
         (NSApp.keyWindow as? KeyboardPanel)?.requestDraftFocus()
     }
 }
@@ -1088,6 +1105,13 @@ import Observation
 
     override func keyDown(with event: NSEvent) {
         if handleCandidateKey(event) { return }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if event.keyCode == 48, !hasMarkedText(), isEditable,
+           modifiers.isEmpty || modifiers == .shift {
+            if modifiers == .shift { window?.selectPreviousKeyView(nil) }
+            else { window?.selectNextKeyView(nil) }
+            return
+        }
         super.keyDown(with: event)
     }
 }
