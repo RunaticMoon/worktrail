@@ -3,11 +3,85 @@
  * Bundle lookup is deliberate: this helper must never target the production app.
  * Optional --action open|copy|edit runs an atomic phase; phases after open assume
  * the fake development settings record remains selected in the Secret screen.
+ * Native AX traversal avoids per-node AppleEvents; keyboard paste stays native.
  * Output contains booleans/stage identifiers only, never clipboard or AX values.
  * A failed assertion throws sanitized JSON so osascript exits nonzero.
  * Run open, copy, edit in that order when using atomic phases on one fresh fixture.
  */
 ObjC.import('AppKit');
+ObjC.import('ApplicationServices');
+var reviewRunningApp, reviewPID, reviewAX;
+function axRead(reference, attribute) {
+    var output = Ref();
+    if (Number($.AXUIElementCopyAttributeValue(reference, $(attribute), output)) !== 0) return null;
+    return ObjC.castRefToObject(output[0]);
+}
+function axString(value) {
+    if (value === null || value === undefined) return '';
+    var unwrapped = ObjC.unwrap(value);
+    return typeof unwrapped === 'string' ? unwrapped : '';
+}
+function axArray(value) {
+    if (value === null || value === undefined) return [];
+    var output = [], count = Number(value.count);
+    if (!isFinite(count)) throw new Error('AX_ARRAY_BRIDGE_FAILED');
+    for (var index = 0; index < count; index += 1) output.push(value.objectAtIndex(index));
+    return output;
+}
+function axSet(reference, attribute, value) {
+    var nativeValue = typeof value === 'boolean' ? (value ? $.kCFBooleanTrue : $.kCFBooleanFalse) : $(value);
+    if (Number($.AXUIElementSetAttributeValue(reference, $(attribute), nativeValue)) !== 0) throw new Error('AX_SET_FAILED');
+}
+function axWrap(reference) {
+    var node = {
+        reference: reference,
+        role: function () { return axString(axRead(reference, 'AXRole')); },
+        subrole: function () { return axString(axRead(reference, 'AXSubrole')); },
+        name: function () { return axString(axRead(reference, 'AXTitle')); },
+        description: function () { return axString(axRead(reference, 'AXDescription')); },
+        value: function () { return axString(axRead(reference, 'AXValue')); },
+        enabled: function () { var value = axRead(reference, 'AXEnabled'); return value !== null && Boolean(ObjC.unwrap(value)); },
+        uiElements: function () { return axArray(axRead(reference, 'AXChildren')).map(axWrap); },
+        sheets: function () { return axArray(axRead(reference, 'AXSheets')).map(axWrap); },
+        actions: { byName: function (action) { return { perform: function () {
+            if (Number($.AXUIElementPerformAction(reference, $(action))) !== 0) throw new Error('AX_ACTION_FAILED');
+        } }; } },
+        attributes: { byName: function (attribute) { var property = {};
+            Object.defineProperty(property, 'value', { set: function (value) { axSet(reference, attribute, value); } });
+            return property;
+        } }
+    };
+    Object.defineProperty(node, 'selected', { set: function (value) { axSet(reference, 'AXSelected', value); } });
+    return node;
+}
+function reviewProcess() {
+    var matches = axArray($.NSWorkspace.sharedWorkspace.runningApplications).filter(function (app) {
+        return axString(app.bundleIdentifier) === 'dev.worklog.UIReview';
+    });
+    if (matches.length !== 1) throw new Error('EXACTLY_ONE_REVIEW_APP_REQUIRED');
+    reviewRunningApp = matches[0]; reviewPID = Number(reviewRunningApp.processIdentifier);
+    reviewAX = $.AXUIElementCreateApplication(reviewPID);
+    $.AXUIElementSetMessagingTimeout(reviewAX, 0.6);
+    return {
+        windows: function () { return axArray(axRead(reviewAX, 'AXWindows')).map(axWrap); },
+        unixId: function () { return reviewPID; },
+        bundleIdentifier: function () { return axString(reviewRunningApp.bundleIdentifier); }
+    };
+}
+function reviewIsFront() {
+    return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
+}
+function nativePress(node) {
+    var role = node.role();
+    if (role === 'AXTextField' || role === 'AXTextArea') {
+        axSet(node.reference, 'AXFocused', true); return;
+    }
+    if (role === 'AXRow') {
+        axSet(node.reference, 'AXSelected', true); return;
+    }
+    node.actions.byName('AXPress').perform();
+}
+
 
 function run(args) {
     const started = Number($.NSProcessInfo.processInfo.systemUptime);
@@ -62,7 +136,7 @@ function run(args) {
     }
     function activateMain() {
         $.NSRunningApplication.runningApplicationWithProcessIdentifier(process.unixId()).activateWithOptions(3);
-        process.frontmost = true;
+        reviewRunningApp.activateWithOptions(3);
         safe(function () { mainWindow.actions.byName('AXRaise').perform(); }, null);
         safe(function () { mainWindow.attributes.byName('AXMain').value = true; }, null);
         safe(function () { mainWindow.attributes.byName('AXFocused').value = true; }, null);
@@ -70,19 +144,11 @@ function run(args) {
         foreground();
     }
     function foreground() {
-        if (!process.frontmost()) throw new Error('lost_foreground');
+        if (!reviewIsFront()) throw new Error('lost_foreground');
     }
     function press(node) {
         foreground();
-        try { node.actions.byName('AXPress').perform(); }
-        catch (_) {
-            try { events.click(node); }
-            catch (_) {
-                // A standard list's static text has no AXPress. Use its live AX frame.
-                const point = node.position(), size = node.size();
-                events.click({ at: [point[0] + size[0] / 2, point[1] + size[1] / 2] });
-            }
-        }
+        nativePress(node);
         pause();
     }
     function key(value, modifiers) {
@@ -111,9 +177,7 @@ function run(args) {
     try {
         if (['few', 'many'].indexOf(fixture) < 0 || ['all', 'open', 'copy', 'edit'].indexOf(action) < 0) throw new Error('invalid_mode');
         stage = 'locate_review_bundle';
-        const matches = events.processes.whose({ bundleIdentifier: 'dev.worklog.UIReview' })();
-        if (matches.length !== 1) throw new Error('ambiguous_review_process');
-        process = matches[0];
+        process = reviewProcess();
         const candidates = process.windows().filter(function (window) {
             return safe(function () { return window.subrole(); }, '') === 'AXStandardWindow' &&
                 ['빠른 입력', 'WorkLog 검색'].indexOf(safe(function () { return window.name(); }, '')) < 0;
