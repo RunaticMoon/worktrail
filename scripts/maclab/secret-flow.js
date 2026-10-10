@@ -1,7 +1,7 @@
 /* Run on Maclab after launching After.app --args --ui-test-fixture few|many.
  * osascript -l JavaScript scripts/maclab/secret-flow.js --fixture many
  * Bundle lookup is deliberate: this helper must never target the production app.
- * Optional --action open|copy|edit runs an atomic phase; phases after open assume
+ * Optional --action open|copy|arrows|edit runs an atomic phase; phases after open assume
  * the fake development settings record remains selected in the Secret screen.
  * Native AX traversal avoids per-node AppleEvents; keyboard paste stays native.
  * Output contains booleans/stage identifiers only, never clipboard or AX values.
@@ -112,10 +112,13 @@ function run(args) {
     }
     function safe(read, fallback) { try { return read(); } catch (_) { return fallback; } }
     function pause() { checkTime(); delay(0.2); }
-    function labels(node) {
-        // AX descriptions are accessible labels; never request AXValue/field values.
-        return [safe(function () { return node.name(); }, ''),
-            safe(function () { return node.description(); }, '')].filter(function (item) { return typeof item === 'string'; });
+    function labels(node, role) {
+        const values = [safe(function () { return node.name(); }, ''),
+            safe(function () { return node.description(); }, '')];
+        // SwiftUI headings such as “Secret 편집” expose their label as AXValue.
+        // Read AXValue only on static text, never on secure fields or value cells.
+        if (role === 'AXStaticText') values.push(safe(function () { return node.value(); }, ''));
+        return values.filter(function (item) { return typeof item === 'string'; });
     }
     function find(predicate) {
         const roots = mainWindow ? [mainWindow] : process.windows();
@@ -138,7 +141,7 @@ function run(args) {
     function named(label, role, contains) {
         return find(function (node, actualRole) {
             if (role && actualRole !== role) return false;
-            return labels(node).some(function (text) { return contains ? text.indexOf(label) >= 0 : text === label; });
+            return labels(node, actualRole).some(function (text) { return contains ? text.indexOf(label) >= 0 : text === label; });
         });
     }
     function requireNamed(label, role, contains) {
@@ -189,7 +192,7 @@ function run(args) {
         press(requireNamed('DEMO_SETTING_' + number + ' 값 복사', 'AXButton', false).node);
     }
     try {
-        if (['few', 'many'].indexOf(fixture) < 0 || ['all', 'open', 'copy', 'edit'].indexOf(action) < 0) throw new Error('invalid_mode');
+        if (['few', 'many'].indexOf(fixture) < 0 || ['all', 'open', 'copy', 'arrows', 'edit'].indexOf(action) < 0) throw new Error('invalid_mode');
         stage = 'locate_review_bundle';
         process = reviewProcess();
         const candidates = process.windows().filter(function (window) {
@@ -225,12 +228,20 @@ function run(args) {
             assert('fakeRecordOpened', named('DEMO_SETTING_1 값 복사', 'AXButton', false) !== null);
             assert('valuesMasked', named('DEMO_SETTING_1, 값 가려짐', 'AXButton', true) !== null);
         }
-        if (action === 'all' || action === 'copy') {
+        if (action === 'all' || action === 'copy' || action === 'arrows') {
             stage = 'explicit_first_row_copy';
             const beforeCopy = count();
             copyRow(1);
             assert('explicitCopyChangedClipboard', count() !== beforeCopy);
-            assert('firstFakeValueMatches', clipboardEquals('fake-ui-only-updated'));
+            if (action !== 'arrows') assert('firstFakeValueMatches', clipboardEquals('fake-ui-only-updated'));
+            stage = 'focus_first_row_for_keyboard';
+            const firstRow = requireNamed('DEMO_SETTING_1, 값 가려짐', 'AXButton', true).node;
+            axSet(firstRow.reference, 'AXFocused', true);
+            pause();
+            assert('firstRowKeyboardFocused', safe(function () {
+                const focused = axRead(firstRow.reference, 'AXFocused');
+                return focused !== null && Boolean(ObjC.unwrap(focused));
+            }, false));
             stage = 'arrow_selection_does_not_copy';
             const beforeArrow = count();
             key(125); // Down: focus changes, clipboard must not.
@@ -259,7 +270,7 @@ function run(args) {
             stage = 'verify_untouched_second_value';
             copyRow(2);
             assert('secondValuePreserved', clipboardEquals('fake-ui-only-value-2'));
-            assert('valuesRemainMasked', named('DEMO_SETTING_1, 값 가려짐', 'AXButton', true) !== null);
+            assert('valuesRemainMasked', named('DEMO_SETTING_2, 값 가려짐', 'AXButton', true) !== null);
         }
         stage = 'complete';
         report.ok = true;
