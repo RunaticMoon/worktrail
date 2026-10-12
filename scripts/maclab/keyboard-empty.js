@@ -87,7 +87,10 @@ function main(args) {
     }
     function labelled(root, label, role) {
         return walk(root, function (node, currentRole) {
-            return (!role || role === currentRole) && emptyLabel(node) === label;
+            // Native controls can expose a generic description such as "button"
+            // alongside their semantic title. Neither may hide the other.
+            return (!role || role === currentRole) &&
+                (emptyText(node, 'AXDescription') === label || emptyText(node, 'AXTitle') === label);
         }, false);
     }
     function knownTitle(root, title) {
@@ -161,6 +164,33 @@ function main(args) {
         key(29, ['command down']);
         check(checkName, waitFor(function () { return sidebarFocused(route); }, 'SIDEBAR_NOT_FOCUSED'));
     }
+    function recordTrashUnlockFocus() {
+        // Emit only fixed interface names, never arbitrary labels or AXValue.
+        var safeNames = ['', '잠금 해제', 'Secret 휴지통 잠금 해제', '휴지통', '사이드바',
+            'WorkLog', 'button', 'text', 'group', 'scroll area', '버튼'];
+        function safeName(value) { return safeNames.indexOf(value) >= 0 ? value : 'other'; }
+        function describe(node) {
+            if (!node) return { exists: false };
+            var role = emptyText(node, 'AXRole'), focused = emptyAXRead(node, 'AXFocused');
+            return {
+                exists: true,
+                role: /^AX[A-Za-z]+$/.test(role) ? role : 'other',
+                title: safeName(emptyText(node, 'AXTitle')),
+                description: safeName(emptyText(node, 'AXDescription')),
+                focused: focused !== null && Boolean(ObjC.unwrap(focused))
+            };
+        }
+        var root = mainWindow();
+        var unlock = labelled(root, '잠금 해제', 'AXButton');
+        var helpMatched = walk(root, function (node, role) {
+            return role === 'AXButton' && emptyText(node, 'AXHelp') === 'Secret 휴지통 잠금 해제';
+        }, false);
+        result.observations.trashUnlockFocus = {
+            focusedElement: describe(emptyAXRead(appAX, 'AXFocusedUIElement')),
+            unlockByLabel: describe(unlock),
+            unlockByFixedHelp: describe(helpMatched)
+        };
+    }
 
     try {
         need(args.length === 2 && args[0] === '--fixture' && args[1] === 'empty', 'REQUIRE_EXPLICIT_EMPTY_FIXTURE');
@@ -230,6 +260,10 @@ function main(args) {
         result.stage = 'complete';
         return JSON.stringify(result);
     } catch (error) {
+        if (error.keyboardCode === 'TRASH_UNLOCK_NOT_FOCUSED') {
+            try { recordTrashUnlockFocus(); }
+            catch (_) { result.observations.trashUnlockFocusDiagnosticFailed = true; }
+        }
         result.stage = stage;
         result.error = error.keyboardCode || 'NATIVE_AX_OR_AUTOMATION_FAILURE';
         throw new Error(JSON.stringify(result));
