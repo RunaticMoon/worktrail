@@ -88,6 +88,10 @@ import WorkLogCore
         .background(WorkLogKeyHandler { event in
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
             guard modifiers == .command else { return false }
+            if event.keyCode == 13 {
+                if !event.isARepeat { requestClose() }
+                return true
+            }
             if event.keyCode == 14, onSaveBody != nil {
                 if !event.isARepeat { beginEditing() }
                 return true

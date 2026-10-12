@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "name": "keyboard-ux",
+  "purpose": "Keyboard-only capture tabs, main navigation, search-to-memo editing and focus restoration in verified synthetic data",
+  "artifact": {
+    "path": ".build/maclab/ui-review.tar",
+    "format": "tar",
+    "app_bundle_path": "WorkLogReview.app",
+    "expected_bundle_id": "dev.worklog.UIReview"
+  },
+  "prepare": [
+    {
+      "id": "build-after",
+      "kind": "exec",
+      "purpose": "Compile the reviewed macOS app with isolated DEBUG fixture support",
+      "before": "Remote test session available",
+      "after": "Inspect build exit code",
+      "argv": ["/bin/bash", "scripts/maclab/build-remote.sh", "after"],
+      "timeout_seconds": 600
+    }
+  ],
+  "cases": [
+    {
+      "id": "keyboard-only-workflow",
+      "purpose": "Exercise actual keyboard events and inspect focus through native read-only AX",
+      "steps": [
+        {
+          "id": "launch-many",
+          "kind": "exec",
+          "purpose": "Start one fresh synthetic fixture process; never use the normal application data store",
+          "before": "After build succeeded and no other UIReview instance is running",
+          "after": "Fixture startup pending",
+          "argv": ["/usr/bin/open", "-n", "After.app", "--args", "--ui-test-fixture", "many"],
+          "timeout_seconds": 30
+        },
+        {
+          "id": "wait-for-launch",
+          "kind": "osascript",
+          "purpose": "Allow the fake-data application to finish startup",
+          "before": "Launch requested",
+          "after": "Main window ready for the script's fixture and focus guards",
+          "script": "delay 3",
+          "timeout_seconds": 10
+        },
+        {
+          "id": "before-keyboard",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "Record initial fixture screen",
+          "before": "Application started",
+          "after": "Before evidence retained"
+        },
+        {
+          "id": "keyboard-flow",
+          "kind": "exec",
+          "purpose": "Verify actual launch arguments, numbered tabs, CtrlTab, Cmd0/CmdShift0, Return, CmdE, CmdS, Escape and restored focus without clicking",
+          "before": "Fresh many fixture with no existing panels or sheets",
+          "after": "Inspect sanitized JSON booleans and stage; any failed assertion exits nonzero",
+          "argv": ["/usr/bin/osascript", "-l", "JavaScript", "scripts/maclab/keyboard-flow.js", "--fixture", "many"],
+          "timeout_seconds": 180
+        },
+        {
+          "id": "after-keyboard",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "Record final screen or the exact failed interaction state",
+          "before": "Keyboard workflow finished or stopped on failure",
+          "after": "Visual evidence retained for focus and layout review"
+        },
+        {
+          "id": "keyboard-flow-assert",
+          "kind": "assert",
+          "purpose": "Every keyboard-only assertion must pass on the actual Mac",
+          "before": "Keyboard helper finished",
+          "after": "Regression exit status recorded",
+          "assertion": { "type": "exit_code", "source_step": "keyboard-flow", "equals": 0 }
+        }
+      ]
+    }
+  ],
+  "collect": [],
+  "explore": { "hold_s": 900 }
+}

@@ -40,23 +40,15 @@ import WorkLogCore
     @State private var sourceOpenedFromQuery = false
 
     var body: some View {
+        searchLifecycle
+            .sheet(isPresented: sourcePresented, onDismiss: sourceDidDismiss) { sourceSheet }
+    }
+
+    private var searchContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("검색 범위", selection: $scope) {
-                Text("전체 (\(scopeModifier)1)").tag(SearchScope.all)
-                Text("기록 (\(scopeModifier)2)").tag(SearchScope.records)
-                Text("Secret (\(scopeModifier)3)").tag(SearchScope.secret)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 360)
-            .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 Secret · ⌃Tab 다음 범위")
+            scopePicker
             queryField
-            if showsSecretKeys, let secrets {
-                SearchSecretScope(model: secrets, selection: $secretSelection,
-                    onBack: returnToResults, onOpenSecrets: onOpenSecrets)
-            } else {
-                unifiedResults
-            }
+            searchResults
             keyboardHints
         }
         .padding(16)
@@ -65,22 +57,31 @@ import WorkLogCore
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
         .worklogFocusContent { returnToResults() }
-        .onChange(of: scope) { previous, current in
-            cancelSecretOpening()
-            secretSelection.openedId = nil
-            secretSelection.selectedRowId = nil
-            // Secret-only input must never become an ordinary AI question on a scope change.
-            if previous == .secret {
-                secretQuery = query
-                query = recordQuery
-            } else if current == .secret {
-                recordQuery = query
-                query = secretQuery
-            }
-            updateSearch()
-            validateSelection()
-            focusQuery()
+    }
+
+    private var scopePicker: some View {
+        Picker("검색 범위", selection: $scope) {
+            Text("전체 (\(scopeModifier)1)").tag(SearchScope.all)
+            Text("기록 (\(scopeModifier)2)").tag(SearchScope.records)
+            Text("Secret (\(scopeModifier)3)").tag(SearchScope.secret)
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 360)
+        .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 Secret · ⌃Tab 다음 범위")
+    }
+
+    @ViewBuilder private var searchResults: some View {
+        if showsSecretKeys, let secrets {
+            SearchSecretScope(model: secrets, selection: $secretSelection,
+                onBack: returnToResults, onOpenSecrets: onOpenSecrets)
+        } else {
+            unifiedResults
+        }
+    }
+
+    private var searchWithSecretObservers: some View {
+        searchContent
         .onChange(of: secrets?.isLocked) { _, locked in
             if locked == true { returnToResults() }
         }
@@ -100,7 +101,11 @@ import WorkLogCore
         .onChange(of: secrets?.hasRecoverableDraft) { _, hasDraft in
             if hasDraft == true { returnToResults() }
         }
-        .onAppear { initializeSearch() }
+    }
+
+    private var searchWithQueryObservers: some View {
+        searchWithSecretObservers
+        .onChange(of: scope) { previous, current in scopeDidChange(from: previous, to: current) }
         .onChange(of: query) { _, _ in
             cancelSecretOpening()
             secretSelection.openedId = nil
@@ -116,16 +121,41 @@ import WorkLogCore
         .onChange(of: filtersExpanded) { _, expanded in
             if !expanded { focusQuery() }
         }
+    }
+
+    private var searchLifecycle: some View {
+        searchWithQueryObservers
+        .onAppear { initializeSearch() }
         .onDisappear { isActive = false; cancelSecretOpening() }
         .task(id: openingId) { await openSecretSelection() }
-        .sheet(isPresented: Binding(get: { source != nil }, set: { if !$0 { source = nil } }), onDismiss: {
-            updateSearch()
-            validateSelection()
-            if sourceOpenedFromQuery || selectedResult == nil { focusQuery() }
-            else { focusResults() }
-        }) {
-            sourceSheet
+    }
+
+    private var sourcePresented: Binding<Bool> {
+        Binding<Bool>(get: { source != nil }, set: { if !$0 { closeSource() } })
+    }
+
+    private func sourceDidDismiss() {
+        updateSearch()
+        validateSelection()
+        if sourceOpenedFromQuery || selectedResult == nil { focusQuery() }
+        else { focusResults() }
+    }
+
+    private func scopeDidChange(from previous: SearchScope, to current: SearchScope) {
+        cancelSecretOpening()
+        secretSelection.openedId = nil
+        secretSelection.selectedRowId = nil
+        // Secret-only input must never become an ordinary AI question on a scope change.
+        if previous == .secret {
+            secretQuery = query
+            query = recordQuery
+        } else if current == .secret {
+            recordQuery = query
+            query = secretQuery
         }
+        updateSearch()
+        validateSelection()
+        focusQuery()
     }
 
     private var scopeModifier: String { isPanel ? "⌘" : "⌃" }
@@ -771,23 +801,49 @@ import WorkLogCore
 
     @ViewBuilder private var sourceSheet: some View {
         if let detail = sourceMemoDetail {
-            MemoDetailScreen(model: detail, onClose: { source = nil }, onSaveBody: { body in
-                guard let memo = detail.memo else { throw WorkLogError.notFound("memo") }
-                _ = try environment.repo.updateMemoBody(id: memo.id, body: body, workDate: memo.workDate)
-                detail.load(id: memo.id)
-                model.search()
-            }, initiallyEditing: true)
+            memoSourceSheet(detail)
         } else if let detail = sourceTaskDetail {
-            TaskDetailScreen(model: detail, onClose: { source = nil })
-                .buttonStyle(WorkLogButtonStyle())
-                .frame(minWidth: 560, minHeight: 480)
+            taskSourceSheet(detail)
         } else {
-            SourceRecordSheet(bodyText: sourceBody, error: sourceError, snippet: source?.snippet ?? "",
-                sourceTitle: source.map { sourceLabel($0.sourceType) } ?? "기록",
-                workDate: source?.workDate, onClose: { source = nil },
-                onEdit: source?.sourceType != .report && sourceBody != nil ? editSource : nil)
+            readOnlySourceSheet
         }
     }
+
+    private func memoSourceSheet(_ detail: MemoDetailModel) -> MemoDetailScreen {
+        let saveBody: (String) throws -> Void = { body in
+            try saveSourceMemo(body: body, detail: detail)
+        }
+        return MemoDetailScreen(model: detail, onClose: closeSource,
+            onSaveBody: saveBody, initiallyEditing: true)
+    }
+
+    private func saveSourceMemo(body: String, detail: MemoDetailModel) throws {
+        guard let memo = detail.memo else { throw WorkLogError.notFound("memo") }
+        _ = try environment.repo.updateMemoBody(id: memo.id, body: body, workDate: memo.workDate)
+        detail.load(id: memo.id)
+        model.search()
+    }
+
+    private func taskSourceSheet(_ detail: TaskDetailModel) -> some View {
+        TaskDetailScreen(model: detail, onClose: closeSource)
+            .buttonStyle(WorkLogButtonStyle())
+            .frame(minWidth: 560, minHeight: 480)
+    }
+
+    private var readOnlySourceSheet: SourceRecordSheet {
+        let editAction: (() -> Void)?
+        if let source, source.sourceType != .report, sourceBody != nil {
+            editAction = { editSource() }
+        } else {
+            editAction = nil
+        }
+        let title: String = source.map { sourceLabel($0.sourceType) } ?? "기록"
+        return SourceRecordSheet(bodyText: sourceBody, error: sourceError,
+            snippet: source?.snippet ?? "", sourceTitle: title,
+            workDate: source?.workDate, onClose: closeSource, onEdit: editAction)
+    }
+
+    private func closeSource() { source = nil }
 
     private func editSource() {
         guard let hit = source else { return }

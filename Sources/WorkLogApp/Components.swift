@@ -338,7 +338,9 @@ struct SectionDisclosure<Content: View>: View {
         }
         .focusable().focused($headerFocused)
         .onKeyPress(keys: [.return, .space, .leftArrow, .rightArrow], phases: .down) { press in
-            guard headerFocused, press.modifiers.isEmpty, !worklogHasMarkedText else { return .ignored }
+            guard headerFocused, press.modifiers.isEmpty, !worklogHasMarkedText,
+                  !(NSApp.keyWindow?.firstResponder is NSTextView),
+                  !(NSApp.keyWindow?.firstResponder is NSTextField) else { return .ignored }
             if press.key == .leftArrow { isExpanded = false }
             else if press.key == .rightArrow { isExpanded = true }
             else { isExpanded.toggle() }

@@ -86,13 +86,15 @@ extension View {
             stopMonitoring()
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                var handled = false
                 MainActor.assumeIsolated {
                     guard let self, let window = self.window, window.isVisible,
                           window.isKeyWindow, event.window === window, window.attachedSheet == nil,
                           !self.isHiddenOrHasHiddenAncestor,
-                          (window.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
-                    return self.handle?(event) == true ? nil : event
+                          (window.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return }
+                    handled = self.handle?(event) == true
                 }
+                return handled ? nil : event
             }
         }
 
