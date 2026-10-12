@@ -1,0 +1,302 @@
+{
+  "version": 1,
+  "name": "keyboard-ux",
+  "purpose": "Keyboard-only capture tabs, main navigation, search-to-memo editing and focus restoration in verified synthetic data",
+  "artifact": {
+    "path": ".build/maclab/ui-review.tar",
+    "format": "tar",
+    "app_bundle_path": "WorkLogReview.app",
+    "expected_bundle_id": "dev.worklog.UIReview"
+  },
+  "prepare": [
+    {
+      "id": "build-after",
+      "kind": "exec",
+      "purpose": "Compile the reviewed macOS app with isolated DEBUG fixture support",
+      "before": "Remote test session available",
+      "after": "Inspect build exit code",
+      "argv": [
+        "/bin/bash",
+        "scripts/maclab/build-remote.sh",
+        "after"
+      ],
+      "timeout_seconds": 600
+    }
+  ],
+  "cases": [
+    {
+      "id": "keyboard-only-workflow",
+      "purpose": "Exercise actual keyboard events and inspect focus through native read-only AX",
+      "steps": [
+        {
+          "id": "launch-many",
+          "kind": "exec",
+          "purpose": "Start one fresh synthetic fixture process; never use the normal application data store",
+          "before": "After build succeeded and no other UIReview instance is running",
+          "after": "Fixture startup pending",
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "many"
+          ],
+          "timeout_seconds": 30
+        },
+        {
+          "id": "wait-for-launch",
+          "kind": "osascript",
+          "purpose": "Allow the fake-data application to finish startup",
+          "before": "Launch requested",
+          "after": "Main window ready for the script's fixture and focus guards",
+          "script": "delay 3",
+          "timeout_seconds": 10
+        },
+        {
+          "id": "before-keyboard",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "Record initial fixture screen",
+          "before": "Application started",
+          "after": "Before evidence retained"
+        },
+        {
+          "id": "keyboard-flow",
+          "kind": "exec",
+          "purpose": "Verify global capture/search hotkeys, repeated numbered tabs, CtrlTab, main navigation, editing and focus restoration without clicking",
+          "before": "Fresh many fixture with no existing panels or sheets",
+          "after": "Inspect sanitized JSON booleans and stage; any failed assertion exits nonzero",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/keyboard-flow.js",
+            "--fixture",
+            "many",
+            "--entry",
+            "global"
+          ],
+          "timeout_seconds": 180
+        },
+        {
+          "id": "command-capture",
+          "kind": "exec",
+          "purpose": "Also verify application CmdN capture entry and repeated tab switching",
+          "before": "Global workflow closed its panel",
+          "after": "Local command entry regression result recorded",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/keyboard-flow.js",
+            "--fixture",
+            "many",
+            "--action",
+            "capture"
+          ],
+          "timeout_seconds": 180
+        },
+        {
+          "id": "keyboard-safety",
+          "kind": "exec",
+          "purpose": "Verify checklist cursor typing, unsaved memo close protection and Secret tab order without saving Secret data",
+          "before": "Keyboard workflow closed its panel",
+          "after": "Inspect sanitized safety assertions; failures exit nonzero",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/keyboard-safety.js",
+            "--fixture",
+            "many"
+          ],
+          "timeout_seconds": 180
+        },
+        {
+          "id": "after-keyboard",
+          "kind": "screenshot",
+          "target": "screen",
+          "purpose": "Record final screen or the exact failed interaction state",
+          "before": "Keyboard workflow finished or stopped on failure",
+          "after": "Visual evidence retained for focus and layout review"
+        },
+        {
+          "id": "visible-after-keyboard",
+          "kind": "osascript",
+          "purpose": "Confirm the fixture main window is still available after the keyboard workflow",
+          "before": "Keyboard workflow finished",
+          "after": "GUI boolean recorded",
+          "script": "tell application \"System Events\"\nreturn exists window 1 of process \"WorkLogApp\"\nend tell",
+          "timeout_seconds": 15
+        },
+        {
+          "id": "keyboard-flow-assert",
+          "kind": "assert",
+          "purpose": "Every keyboard-only assertion must pass on the actual Mac",
+          "before": "Keyboard helper finished",
+          "after": "Regression exit status recorded",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "keyboard-flow",
+            "equals": 0
+          }
+        },
+        {
+          "id": "keyboard-safety-assert",
+          "kind": "assert",
+          "purpose": "Require actual safety and Secret keyboard assertions to pass",
+          "before": "Safety helper finished",
+          "after": "Safety regression result recorded",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "keyboard-safety",
+            "equals": 0
+          }
+        },
+        {
+          "id": "command-capture-assert",
+          "kind": "assert",
+          "purpose": "Require CmdN entry and tab navigation to pass",
+          "before": "Capture helper finished",
+          "after": "Local command result recorded",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "command-capture",
+            "equals": 0
+          }
+        },
+        {
+          "id": "visible-after-keyboard-assert",
+          "kind": "assert",
+          "purpose": "Pair visible GUI evidence with the keyboard helper assertions",
+          "before": "Final visibility query completed",
+          "after": "GUI assertion recorded",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "visible-after-keyboard",
+            "equals": true,
+            "before_screenshot": "before-keyboard",
+            "after_screenshot": "after-keyboard"
+          }
+        }
+      ]
+    },
+    {
+      "id": "empty-keyboard-navigation",
+      "purpose": "Verify usable content focus when projects and trash have no items",
+      "steps": [
+        {
+          "id": "stop-many",
+          "kind": "exec",
+          "purpose": "Stop only the verified disposable many fixture",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "-e",
+            "ObjC.import('AppKit');const apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.worklog.UIReview');if(Number(apps.count)!==1)throw Error('FIXTURE_COUNT');const app=apps.firstObject;const sa=Application.currentApplication();sa.includeStandardAdditions=true;const cmd=sa.doShellScript('/bin/ps -ww -p '+Number(app.processIdentifier)+' -o command=');if(!/--ui-test-fixture\\s+many(?:\\s|$)/.test(cmd))throw Error('NOT_MANY_FIXTURE');app.terminate;for(let i=0;i<40&&Number($.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.worklog.UIReview').count)>0;i++)delay(0.1);if(Number($.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.worklog.UIReview').count)!==0)throw Error('FIXTURE_STILL_RUNNING');"
+          ],
+          "timeout_seconds": 20
+        },
+        {
+          "id": "launch-empty",
+          "kind": "exec",
+          "purpose": "Open fresh empty synthetic data only when no UIReview process remains",
+          "before": "Verify the exact UIReview bundle has zero running processes",
+          "after": "Inspect captured result",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "-e",
+            "ObjC.import('AppKit');if(Number($.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.worklog.UIReview').count)!==0)throw Error('FIXTURE_ALREADY_RUNNING');const task=$.NSTask.alloc.init;task.launchPath='/usr/bin/open';task.arguments=$(['-n','After.app','--args','--ui-test-fixture','empty']);task.currentDirectoryPath=$.NSFileManager.defaultManager.currentDirectoryPath;task.launch;task.waitUntilExit;if(Number(task.terminationStatus)!==0)throw Error('EMPTY_FIXTURE_OPEN_FAILED');"
+          ],
+          "timeout_seconds": 30
+        },
+        {
+          "id": "wait-empty",
+          "kind": "osascript",
+          "purpose": "Wait for empty fixture initialization",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "script": "delay 3",
+          "timeout_seconds": 10
+        },
+        {
+          "id": "before-empty",
+          "kind": "screenshot",
+          "purpose": "Record empty fixture before keyboard navigation",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "target": "screen"
+        },
+        {
+          "id": "keyboard-empty",
+          "kind": "exec",
+          "purpose": "Verify project fallback activation and empty trash focus using keys and fake authentication",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/keyboard-empty.js",
+            "--fixture",
+            "empty"
+          ],
+          "timeout_seconds": 180
+        },
+        {
+          "id": "after-empty",
+          "kind": "screenshot",
+          "purpose": "Record final empty screen keyboard focus",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "target": "screen"
+        },
+        {
+          "id": "visible-empty",
+          "kind": "osascript",
+          "purpose": "Check empty fixture main window remains available",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "script": "tell application \"System Events\"\nreturn exists window 1 of process \"WorkLogApp\"\nend tell",
+          "timeout_seconds": 15
+        },
+        {
+          "id": "keyboard-empty-assert",
+          "kind": "assert",
+          "purpose": "Require empty keyboard workflow to pass",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "keyboard-empty",
+            "equals": 0
+          }
+        },
+        {
+          "id": "visible-empty-assert",
+          "kind": "assert",
+          "purpose": "Verify empty screen visibility with visual evidence",
+          "before": "Previous step completed",
+          "after": "Inspect captured result",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "visible-empty",
+            "equals": true,
+            "before_screenshot": "before-empty",
+            "after_screenshot": "after-empty"
+          }
+        }
+      ]
+    }
+  ],
+  "collect": [],
+  "explore": {
+    "hold_s": 900
+  }
+}

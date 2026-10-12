@@ -8,6 +8,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
     case search, graph, trash, backups, settings
     static let primary: [SidebarRoute] = [.day, .tasks, .projects, .weekly, .performance, .secrets]
     static let secondary: [SidebarRoute] = [.search, .graph, .trash, .backups, .settings]
+    static let numbered = Array((primary + secondary).prefix(9))
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -47,7 +48,8 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         }
     }
     var shortcut: String? {
-        guard let index = Self.primary.firstIndex(of: self) else { return nil }
+        if self == .settings { return "⌘," }
+        guard let index = Self.numbered.firstIndex(of: self) else { return nil }
         return "⌘\(index + 1)"
     }
 }
@@ -88,7 +90,12 @@ struct AppRootView: View {
                     .sheet(isPresented: Binding(get: { controller.selectedMemoId != nil },
                         set: { if !$0 { controller.selectedMemoId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                         if let memo = controller.memoDetail {
-                            MemoDetailScreen(model: memo, onClose: { controller.selectedMemoId = nil })
+                            MemoDetailScreen(model: memo, onClose: { controller.selectedMemoId = nil }, onSaveBody: { body in
+                                guard let record = memo.memo else { throw WorkLogError.validation("메모를 찾을 수 없습니다.") }
+                                try environment.repo.updateMemoBody(id: record.id, body: body, workDate: record.workDate)
+                                memo.load(id: record.id)
+                                controller.refresh()
+                            })
                                 .buttonStyle(WorkLogButtonStyle())
                         }
                     }
@@ -102,6 +109,7 @@ struct AppRootView: View {
         .tint(WorkLogTheme.accent)
         .groupBoxStyle(WorkLogGroupBoxStyle())
         .scrollContentBackground(.hidden)
+        .focusedSceneValue(\.worklogFocusSidebar, { sidebarFocus = selectedRoute })
         .onAppear {
             let action = openWindow
             controller.openMainWindow = { action(id: "main") }
@@ -200,6 +208,10 @@ struct AppRootView: View {
                         }
                     }
                     Spacer(minLength: 0)
+                    if let shortcut = route.shortcut {
+                        Text(shortcut).font(.caption).foregroundStyle(WorkLogTheme.muted)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .font(.body)
@@ -210,6 +222,7 @@ struct AppRootView: View {
             .frame(maxWidth: .infinity, alignment: controller.sidebarExpanded ? .leading : .center)
         }
         .buttonStyle(WorkLogSourceRowStyle(isSelected: selectedRoute == route, isFocused: sidebarFocus == route))
+        .focusable()
         .focusEffectDisabled()
         .focused($sidebarFocus, equals: route)
         .id(route)
@@ -230,6 +243,8 @@ struct AppRootView: View {
                 .worklogHelp("검색 패널 열기", keys: "⌘F")
             Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .worklogHelp("새로고침").accessibilityLabel("새로고침")
+            Button { KeyboardHelpFocusRestoration.shared.open(using: openWindow) } label: { Image(systemName: "keyboard") }
+                .worklogHelp("키보드 단축키", keys: "⌘⌥K").accessibilityLabel("키보드 단축키")
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
@@ -247,12 +262,14 @@ struct AppRootView: View {
             }
         case .tasks:
             if let tasks = controller.taskList {
-                TaskListScreen(model: tasks, onOpen: { controller.openTask($0) }, onCapture: { controller.showCapture() })
+                TaskListScreen(model: tasks, onOpen: { controller.openTask($0) }, onCapture: { controller.showCapture() },
+                    detailDismissalRevision: detailDismissalRevision)
             }
         case .projects:
             if let projects = controller.projects {
                 ProjectsScreen(model: projects, calendar: environment.calendar,
-                    onOpen: { controller.openTask($0) }, onCapture: { controller.showCapture() })
+                    onOpen: { controller.openTask($0) }, onCapture: { controller.showCapture() },
+                    detailDismissalRevision: detailDismissalRevision)
             }
         case .search:
             if let search = controller.search {

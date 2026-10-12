@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import WorkLogCore
 
@@ -16,6 +17,9 @@ import WorkLogCore
     @State private var timelineScrollID: String?
     @State private var taskScrollID: String?
     @State private var memoScrollID: String?
+    @State private var selectedRows: [String: String] = [:]
+    @FocusState private var focusedRegion: String?
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -35,23 +39,49 @@ import WorkLogCore
                         Text("업무 상태 \(box.tasks.count)").tag("tasks")
                         Text("메모 \(box.memos.count)").tag("memos")
                     }.pickerStyle(.segmented).frame(maxWidth: 480)
+                        .worklogHelp("활동 기록 ⌘⌥1 · 업무 상태 ⌘⌥2 · 메모 ⌘⌥3 · 다음 영역 ⌃Tab")
                     switch selectedRegion {
                     case "tasks": taskColumn(box)
                     case "memos": memos(box)
                     default: timeline(box)
                     }
+                    Text("⌃Tab 영역 전환 · ↑↓ 선택 · Return 열기")
+                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
             } else if model.errorMessage == nil {
                 StateView(kind: .empty, title: "날짜를 선택하세요", detail: "기록을 불러오면 타임라인·업무·메모를 보여드립니다.")
             }
         }
         .padding(WorkLogTheme.contentInset)
         .background(WorkLogTheme.canvas)
-        .onAppear { model.load() }
-        .onChange(of: model.selectedDate) { _, _ in
-            lastOpened = [:]; timelineScrollID = nil; taskScrollID = nil; memoScrollID = nil
+        .background(WorkLogKeyHandler(handle: handleKey))
+        .worklogFocusContent { focusSelectedRegion() }
+        .onAppear {
             model.load()
+            DispatchQueue.main.async { focusSelectedRegion() }
+        }
+        .onChange(of: selectedRegion) { _, _ in
+            focusedRegion = nil
+            DispatchQueue.main.async { focusSelectedRegion() }
+        }
+        .onChange(of: model.selectedDate) { _, _ in
+            lastOpened = [:]; selectedRows = [:]
+            timelineScrollID = nil; taskScrollID = nil; memoScrollID = nil
+            model.load()
+            ensureSelection(in: selectedRegion)
         }
         .onChange(of: model.includeHeldAndCancelled) { _, _ in model.load() }
+        .onChange(of: model.box) { _, _ in
+            for region in ["timeline", "tasks", "memos"] { ensureSelection(in: region) }
+        }
+        .onChange(of: focusedRegion) { _, region in
+            if let region { ensureSelection(in: region) }
+        }
+        .onChange(of: detailDismissalRevision) { _, _ in
+            if let id = lastOpened[selectedRegion], rowIDs(in: selectedRegion).contains(id) {
+                selectedRows[selectedRegion] = id
+            }
+            DispatchQueue.main.async { focusSelectedRegion() }
+        }
     }
 
     private var dateControls: some View {
@@ -94,12 +124,24 @@ import WorkLogCore
                                       actionTitle: "기록 추가 ⌘N", action: onCapture)
                         }
                         ForEach(box.timeline) { entry in
-                            timelineRow(entry).padding(.vertical, 12).id(entry.id)
+                            timelineRow(entry).padding(.vertical, 12).padding(.horizontal, 8)
+                                .background(rowBackground(entry.id, region: "timeline"))
+                                .overlay(rowOutline(entry.id, region: "timeline"))
+                                .contentShape(Rectangle())
+                                .onTapGesture { selectRow(entry.id, region: "timeline") }
+                                .accessibilityAddTraits(selectedRows["timeline"] == entry.id ? .isSelected : [])
+                                .id(entry.id)
                             Divider()
                         }
                     }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
+                .focusable().focusEffectDisabled().focused($focusedRegion, equals: "timeline")
+                .accessibilityLabel("활동 기록 목록")
+                .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                    handleListKey(press, region: "timeline")
+                }
                 .scrollPosition(id: $timelineScrollID)
+                .onChange(of: selectedRows["timeline"]) { _, id in if let id { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["timeline"] { proxy.scrollTo(id) }
                 }
@@ -120,16 +162,18 @@ import WorkLogCore
                 }.font(.callout).foregroundStyle(WorkLogTheme.muted)
                 if let id = entry.taskId {
                     Button {
+                        selectRow(entry.id, region: "timeline")
                         lastOpened["timeline"] = entry.id
                         onTask(id)
                     } label: { Text(entry.title).font(.body.weight(.medium)).multilineTextAlignment(.leading) }
-                    .buttonStyle(.plain).accessibilityHint("업무 상세 열기")
+                    .buttonStyle(.plain).focusable(false).accessibilityHint("업무 상세 열기")
                 } else if entry.kind == .memo, entry.id.hasPrefix("memo:") {
                     Button {
+                        selectRow(entry.id, region: "timeline")
                         lastOpened["timeline"] = entry.id
                         onMemo(String(entry.id.dropFirst(5)))
                     } label: { Text(entry.title).font(.body.weight(.medium)).multilineTextAlignment(.leading) }
-                    .buttonStyle(.plain).accessibilityHint("메모 상세 열기")
+                    .buttonStyle(.plain).focusable(false).accessibilityHint("메모 상세 열기")
                 } else { Text(entry.title).font(.body.weight(.medium)) }
                 if let detail = entry.detail, detail != entry.title, !detail.isEmpty {
                     Text(detail).font(.body).foregroundStyle(WorkLogTheme.muted).textSelection(.enabled)
@@ -151,6 +195,7 @@ import WorkLogCore
                         }
                         ForEach(box.tasks) { row in
                             Button {
+                                selectRow(row.id, region: "tasks")
                                 lastOpened["tasks"] = row.id
                                 onTask(row.taskId)
                             } label: {
@@ -171,14 +216,23 @@ import WorkLogCore
                                     Label(row.status.koreanLabel, systemImage: row.status.badgeSymbol)
                                         .font(.callout).foregroundStyle(row.status.badgeTone.color).fixedSize()
                                 }
-                                .multilineTextAlignment(.leading).padding(.vertical, 12)
+                                .multilineTextAlignment(.leading).padding(.vertical, 12).padding(.horizontal, 8)
                                 .contentShape(Rectangle())
-                            }.buttonStyle(.plain).id(row.id).accessibilityHint("업무 상세 열기")
+                            }.buttonStyle(WorkLogSourceRowStyle(isSelected: selectedRows["tasks"] == row.id,
+                                isFocused: focusedRegion == "tasks" && selectedRows["tasks"] == row.id))
+                                .focusable(false).id(row.id).accessibilityHint("Return으로 업무 상세 열기")
+                                .accessibilityAddTraits(selectedRows["tasks"] == row.id ? .isSelected : [])
                             Divider()
                         }
                     }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
+                .focusable().focusEffectDisabled().focused($focusedRegion, equals: "tasks")
+                .accessibilityLabel("하루 업무 목록")
+                .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                    handleListKey(press, region: "tasks")
+                }
                 .scrollPosition(id: $taskScrollID)
+                .onChange(of: selectedRows["tasks"]) { _, id in if let id { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["tasks"] { proxy.scrollTo(id) }
                 }
@@ -200,11 +254,19 @@ import WorkLogCore
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(memo.body).font(.body).lineLimit(8).textSelection(.enabled)
                                 Button {
+                                    selectRow(memo.id, region: "memos")
                                     lastOpened["memos"] = memo.id
                                     onMemo(memo.id)
                                 } label: { Label("원문 열기 · 업무 연결", systemImage: "arrow.up.right") }
+                                    .focusable(false)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12).id(memo.id)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12).padding(.horizontal, 8)
+                            .background(rowBackground(memo.id, region: "memos"))
+                            .overlay(rowOutline(memo.id, region: "memos"))
+                            .contentShape(Rectangle())
+                            .onTapGesture { selectRow(memo.id, region: "memos") }
+                            .accessibilityAddTraits(selectedRows["memos"] == memo.id ? .isSelected : [])
+                            .id(memo.id)
                             Divider()
                         }
                         if let summary = model.aiSummary {
@@ -221,12 +283,113 @@ import WorkLogCore
                         }
                     }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
+                .focusable().focusEffectDisabled().focused($focusedRegion, equals: "memos")
+                .accessibilityLabel("하루 메모 목록")
+                .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                    handleListKey(press, region: "memos")
+                }
                 .scrollPosition(id: $memoScrollID)
+                .onChange(of: selectedRows["memos"]) { _, id in if let id { proxy.scrollTo(id) } }
                 .onChange(of: detailDismissalRevision) { _, _ in
                     if let id = lastOpened["memos"] { proxy.scrollTo(id) }
                 }
             }
         }
+    }
+
+    private func rowIDs(in region: String) -> [String] {
+        guard let box = model.box else { return [] }
+        switch region {
+        case "tasks": return box.tasks.map(\.id)
+        case "memos": return box.memos.map(\.id)
+        default: return box.timeline.map(\.id)
+        }
+    }
+
+    private func ensureSelection(in region: String) {
+        let ids = rowIDs(in: region)
+        if let id = selectedRows[region], ids.contains(id) { return }
+        selectedRows[region] = ids.first
+    }
+
+    private func selectRow(_ id: String, region: String) {
+        selectedRows[region] = id
+        focusedRegion = region
+    }
+
+    private func focusSelectedRegion() {
+        ensureSelection(in: selectedRegion)
+        focusedRegion = selectedRegion
+    }
+
+    private func rowBackground(_ id: String, region: String) -> some View {
+        RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius)
+            .fill(selectedRows[region] == id ? WorkLogTheme.accentSoft : Color.clear)
+    }
+
+    private func rowOutline(_ id: String, region: String) -> some View {
+        RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius)
+            .strokeBorder(selectedRows[region] == id && (focusedRegion == region || contrast == .increased)
+                          ? (contrast == .increased ? WorkLogTheme.text : WorkLogTheme.accent) : Color.clear,
+                          lineWidth: 2)
+            .allowsHitTesting(false)
+    }
+
+    private func handleListKey(_ press: KeyPress, region: String) -> KeyPress.Result {
+        guard focusedRegion == region, press.modifiers.isEmpty,
+              !(NSApp.keyWindow?.firstResponder is NSTextView),
+              (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
+        let ids = rowIDs(in: region)
+        guard !ids.isEmpty else { return .ignored }
+        if press.key == .return {
+            if press.phase == .down { openSelectedRow(in: region) }
+        } else {
+            let offset = press.key == .upArrow ? -1 : 1
+            if let id = selectedRows[region], let index = ids.firstIndex(of: id) {
+                selectedRows[region] = ids[min(max(index + offset, 0), ids.count - 1)]
+            } else { selectedRows[region] = offset < 0 ? ids.last : ids.first }
+        }
+        return .handled
+    }
+
+    private func openSelectedRow(in region: String) {
+        guard let id = selectedRows[region], let box = model.box else { return }
+        switch region {
+        case "tasks":
+            guard let row = box.tasks.first(where: { $0.id == id }) else { return }
+            lastOpened[region] = id
+            onTask(row.taskId)
+        case "memos":
+            lastOpened[region] = id
+            onMemo(id)
+        default:
+            guard let entry = box.timeline.first(where: { $0.id == id }) else { return }
+            if let taskId = entry.taskId {
+                lastOpened[region] = id
+                onTask(taskId)
+            } else if entry.kind == .memo, entry.id.hasPrefix("memo:") {
+                lastOpened[region] = id
+                onMemo(String(entry.id.dropFirst(5)))
+            }
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let regions = ["timeline", "tasks", "memos"]
+        if modifiers == [.command, .option],
+           let index = [UInt16(18), 19, 20].firstIndex(of: event.keyCode) {
+            selectedRegion = regions[index]
+            focusSelectedRegion()
+            return true
+        }
+        if event.keyCode == 48, modifiers == [.control] || modifiers == [.control, .shift] {
+            let index = regions.firstIndex(of: selectedRegion) ?? 0
+            let offset = modifiers.contains(.shift) ? -1 : 1
+            selectedRegion = regions[(index + offset + regions.count) % regions.count]
+            return true
+        }
+        return false
     }
 
     private func projectSummary(_ ids: [String]) -> String {

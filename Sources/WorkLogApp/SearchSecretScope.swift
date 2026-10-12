@@ -36,7 +36,7 @@ struct SearchSecretSelection {
                     }
                     Label("Secret은 AI로 보내지 않습니다", systemImage: "lock.fill")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                    Text("↑↓ 선택 · Return 값 복사 · Esc 또는 ⌘← 검색 결과로 돌아가기")
+                    Text("↑↓ 선택 · Return 값 복사 · ⌘E Secret 화면 · Esc 또는 ⌘← 검색 결과로 돌아가기")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     if model.rows.isEmpty {
@@ -62,7 +62,7 @@ struct SearchSecretSelection {
                                         lineWidth: selection.selectedRowId == row.id ? 2 : 1)
                             }
                         }
-                        .buttonStyle(.plain).focused($rowFocus, equals: row.id)
+                        .buttonStyle(.plain).focusable().focused($rowFocus, equals: row.id)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(Text("\(row.key), 가려진 값, 값 복사"))
                         .accessibilityValue(selection.selectedRowId == row.id ? "선택됨" : "")
@@ -74,7 +74,10 @@ struct SearchSecretSelection {
                         Label(message, systemImage: "info.circle")
                             .font(.callout).fixedSize(horizontal: false, vertical: true)
                     }
-                    if let onOpenSecrets { Button("Secret 화면 열기", action: onOpenSecrets) }
+                    if let onOpenSecrets {
+                        Button("Secret 화면 열기", action: onOpenSecrets)
+                            .worklogHelp("Secret 화면에서 편집", keys: "⌘E")
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(1)
             }
             .onChange(of: selection.selectedRowId) { _, id in

@@ -7,8 +7,10 @@ import WorkLogCore
     @Bindable var model: TaskListModel
     let onOpen: (String) -> Void
     let onCapture: () -> Void
+    var detailDismissalRevision: Int = 0
     @State private var selection: String?
     @FocusState private var listFocused: Bool
+    @FocusState private var queryFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -18,6 +20,8 @@ import WorkLogCore
             HStack(spacing: 12) {
                 TextField("업무 이름으로 찾기", text: $model.query)
                     .textFieldStyle(.roundedBorder).accessibilityLabel("업무 이름 검색")
+                    .focused($queryFocused)
+                    .worklogHelp("업무 이름으로 찾기 · ↓ 목록으로 이동 · Return 열기", keys: "⌘⌥F")
                 Text("\(model.filteredRows.count)개").font(.callout).foregroundStyle(WorkLogTheme.muted)
                     .monospacedDigit().fixedSize()
             }
@@ -66,19 +70,65 @@ import WorkLogCore
                         if let id { proxy.scrollTo(id) }
                     }
                     .onAppear { if let selection { proxy.scrollTo(selection) } }
+                    .onChange(of: detailDismissalRevision) { _, _ in
+                        focusList()
+                        if let selection { proxy.scrollTo(selection) }
+                    }
                 }
                 HStack(spacing: 12) {
                     Button("선택한 업무 열기") { if let selection { onOpen(selection) } }
                         .disabled(selection == nil).worklogHelp("선택한 업무 상세 열기", keys: "Return")
-                    Text("↑↓ 선택 · Return 열기")
+                    Text("⌘⌥F 찾기 · ↑↓ 선택 · Return 열기")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
             }
         }
         .padding(WorkLogTheme.contentInset)
-        .onAppear { model.load() }
+        .background(WorkLogKeyHandler(handle: handleKey))
+        .worklogFocusContent { focusContent() }
+        .onAppear {
+            model.load()
+            DispatchQueue.main.async { focusContent() }
+        }
         .onChange(of: model.filteredRows.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = listFocused ? ids.first : nil }
+        }
+    }
+
+    private func focusContent() {
+        if model.filteredRows.isEmpty {
+            listFocused = false
+            queryFocused = true
+        } else { focusList() }
+    }
+
+    private func focusList() {
+        guard !model.filteredRows.isEmpty else { return }
+        if !model.filteredRows.contains(where: { $0.id == selection }) {
+            selection = model.filteredRows.first?.id
+        }
+        queryFocused = false
+        listFocused = true
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers == [.command, .option], event.keyCode == 3 {
+            listFocused = false
+            queryFocused = true
+            return true
+        }
+        guard queryFocused, modifiers.isEmpty, !model.filteredRows.isEmpty else { return false }
+        switch event.keyCode {
+        case 125: // Down leaves the single-line search field and enters the results.
+            focusList()
+            return true
+        case 36, 76:
+            guard !event.isARepeat else { return true }
+            focusList()
+            if let selection { onOpen(selection) }
+            return true
+        default: return false
         }
     }
 

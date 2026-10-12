@@ -314,6 +314,7 @@ struct SectionDisclosure<Content: View>: View {
     let summary: String
     @Binding private var isExpanded: Bool
     private let content: Content
+    @FocusState private var headerFocused: Bool
 
     init(title: String, summary: String, isExpanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
         self.title = title
@@ -334,8 +335,18 @@ struct SectionDisclosure<Content: View>: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
+            .accessibilityValue(Text(isExpanded ? "펼침" : "접힘"))
         }
-        .accessibilityValue(Text(isExpanded ? "펼침" : "접힘"))
+        .focusable().focused($headerFocused)
+        .onKeyPress(keys: [.return, .space, .leftArrow, .rightArrow], phases: .down) { press in
+            guard headerFocused, press.modifiers.isEmpty, !worklogHasMarkedText,
+                  !(NSApp.keyWindow?.firstResponder is NSTextView),
+                  !(NSApp.keyWindow?.firstResponder is NSTextField) else { return .ignored }
+            if press.key == .leftArrow { isExpanded = false }
+            else if press.key == .rightArrow { isExpanded = true }
+            else { isExpanded.toggle() }
+            return .handled
+        }
         .worklogAnimation(.easeInOut(duration: 0.16), value: isExpanded)
     }
 }

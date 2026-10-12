@@ -27,14 +27,21 @@ enum WorkLogEntryPoint {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 800)
         .commands {
+            WorkLogFocusCommands()
             CommandGroup(after: .appInfo) { CheckForUpdatesButton() }
             CommandGroup(after: .sidebar) {
-                ForEach(Array(SidebarRoute.primary.enumerated()), id: \.element.id) { index, route in
-                    Button(route.title) { controller.route = route }
+                ForEach(Array(SidebarRoute.numbered.enumerated()), id: \.element.id) { index, route in
+                    Button(route.title) { controller.navigate(to: route) }
                         .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
                         .disabled(controller.isPanelKeyWindow)
                 }
                 Divider()
+                Button("이전 화면") { controller.moveRoute(by: -1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                    .disabled(controller.isPanelKeyWindow)
+                Button("다음 화면") { controller.moveRoute(by: 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                    .disabled(controller.isPanelKeyWindow)
                 Button(controller.sidebarExpanded ? "사이드바 접기" : "사이드바 펼치기") {
                     controller.sidebarExpanded.toggle()
                 }.keyboardShortcut("s", modifiers: [.control, .command])
@@ -50,7 +57,15 @@ enum WorkLogEntryPoint {
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(controller.isPanelKeyWindow)
             }
+            CommandGroup(replacing: .appSettings) {
+                Button("설정…") { controller.navigate(to: .settings) }
+                    .keyboardShortcut(",", modifiers: .command)
+                    .disabled(controller.isPanelKeyWindow)
+            }
         }
+        Window("키보드 단축키", id: "keyboard-shortcuts") {
+            KeyboardShortcutsView()
+        }.defaultSize(width: 680, height: 720)
         MenuBarExtra("WorkLog", systemImage: "square.and.pencil") {
             ResidentMenu(controller: controller)
         }

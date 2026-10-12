@@ -13,6 +13,7 @@ struct SettingsScreen: View {
     let onOpenBackups: (() -> Void)?
     @Environment(\.hotkeyDiagnostics) private var hotkeyDiagnostics
     @FocusState private var errorFocused: Bool
+    @FocusState private var generalFocused: Bool
     @State private var promptEditor: PromptEditorSelection?
 
     init(model: SettingsModel, prompts: PromptSettingsModel, onSave: @escaping () -> Void,
@@ -61,17 +62,21 @@ struct SettingsScreen: View {
             }.formStyle(.grouped)
             Divider()
             HStack {
-                Button("변경 되돌리기") { model.reset() }.disabled(!model.hasChanges)
+                Button("변경 되돌리기") { model.reset() }.worklogKeyboardActivation { model.reset() }.disabled(!model.hasChanges)
+                    .focusable()
                     .worklogHelp("마지막 저장 설정으로 되돌리기")
                 Spacer()
                 Button { onSave(); errorFocused = !model.errors.isEmpty } label: {
                     ShortcutLabel(title: "설정 저장", keys: "⌘S")
                 }
+                .worklogKeyboardActivation { onSave(); errorFocused = !model.errors.isEmpty }
                 .keyboardShortcut("s", modifiers: .command).disabled(!model.hasChanges)
+                .focusable()
                 .worklogHelp("설정 검증 후 저장 · 단축키 적용", keys: "⌘S")
             }.padding(WorkLogTheme.cardInset)
         }
         .navigationTitle("설정")
+        .worklogFocusContent { errorFocused = false; generalFocused = true }
         .onAppear { backups?.load() }
         .sheet(item: $promptEditor) { selection in
             PromptEditorView(prompts: prompts, job: selection.job)
@@ -83,7 +88,7 @@ struct SettingsScreen: View {
                 Text("Memo · 메모").tag(CaptureKind.memo)
                 Text("Task · 업무").tag(CaptureKind.task)
                 Text("Secret · 보관함").tag(CaptureKind.secret)
-            }
+            }.focusable().focused($generalFocused)
             Text("Secret을 선택하면 입력 단축키로 보관함의 새 항목을 엽니다. 잠금 상태에서는 기기 인증이 필요합니다.")
                 .foregroundStyle(WorkLogTheme.muted)
         }
@@ -115,6 +120,8 @@ struct SettingsScreen: View {
                            onBeginRecording: onBeginHotkeyRecording, onEndRecording: onEndHotkeyRecording)
             hotkeyStatus(.search)
             Button("단축키 기본값으로 되돌리기") { model.restoreDefaultHotkeys() }
+                .worklogKeyboardActivation { model.restoreDefaultHotkeys() }
+                .focusable()
                 .worklogHelp("빠른 입력·검색 전역 단축키 기본값 복원 · 설정 저장 후 적용")
             Text("칸을 누른 뒤 원하는 조합을 누르세요. 기본값: 빠른 입력 ⌃⌥Space, 검색 ⌃⌥D. 변경은 ‘설정 저장’ 후 적용됩니다.")
                 .foregroundStyle(WorkLogTheme.muted).fixedSize(horizontal: false, vertical: true)
@@ -124,6 +131,15 @@ struct SettingsScreen: View {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 shortcutRow("빠른 입력", keys: "⌘N")
                 shortcutRow("검색", keys: "⌘F")
+                shortcutRow("앱 화면 이동", keys: "⌘1…9")
+                shortcutRow("사이드바 / 현재 화면 내용", keys: "⌘0 / ⌘⇧0")
+                shortcutRow("이전 / 다음 화면", keys: "⌘⌥← / ⌘⌥→")
+                shortcutRow("입력·검색·오늘의 이전 / 다음 탭", keys: "⌃⇧Tab / ⌃Tab")
+                shortcutRow("다음 / 이전 제어", keys: "Tab / ⇧Tab")
+                shortcutRow("목록 선택 / 열기", keys: "↑↓ / Return")
+                shortcutRow("메모 편집 / 업무 진행 기록", keys: "⌘E")
+                shortcutRow("업무 이름 검색", keys: "⌘⌥F")
+                shortcutRow("전체 단축키 도움말", keys: "⌘⌥K")
                 shortcutRow("입력 저장 / 검색 AI 답변", keys: "⌘↩")
                 shortcutRow("본문·설정 저장", keys: "⌘S")
                 shortcutRow("후보·시트·패널 닫기", keys: "Esc")
@@ -149,19 +165,21 @@ struct SettingsScreen: View {
             Text("나중에 연결해도 기록·검색은 바로 사용할 수 있습니다.")
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
             DisclosureGroup("AI 연결 설정") {
-                Toggle("일반 기록에 AI 사용", isOn: $model.draft.aiEnabled)
+                Toggle("일반 기록에 AI 사용", isOn: $model.draft.aiEnabled).focusable()
                 Text(SettingsModel.transmissionNotice).fixedSize(horizontal: false, vertical: true)
                 Text("설치된 Codex와 회사 정책에서 허용하는 기능만 사용합니다. AI 연결 실패 시 일반 기록과 검색은 계속 사용할 수 있습니다.")
                     .foregroundStyle(WorkLogTheme.muted)
                 TextField("Codex 실행 경로 (비우면 자동 탐색)", text: Binding(
                     get: { model.draft.codexExecutablePath ?? "" }, set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }))
-                Button("로그인 상태 확인") { Task { await model.checkAccount() } }.disabled(model.isCheckingAccount)
+                Button("로그인 상태 확인") { Task { await model.checkAccount() } }
+                    .worklogKeyboardActivation { Task { await model.checkAccount() } }.disabled(model.isCheckingAccount)
+                    .focusable()
                     .worklogHelp("설치된 Codex의 로그인 상태 확인")
                 if model.isCheckingAccount {
                     ProgressView("로그인 상태 확인 중…").controlSize(.small).accessibilityLabel("Codex 로그인 상태 확인 중")
                 }
                 Text(model.accountMessage).accessibilityLabel("Codex 계정 상태: \(model.accountMessage)")
-            }
+            }.focusable()
             DisclosureGroup("작업별 스킬·프롬프트") {
                 Text("스킬 이름 또는 SKILL.md 경로를 입력하세요. 비우면 추가 스킬 없이 이 작업의 프롬프트를 사용합니다. 기존 스킬 파일은 수정하지 않습니다.")
                     .foregroundStyle(WorkLogTheme.muted)
@@ -172,6 +190,8 @@ struct SettingsScreen: View {
                             get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
                             .accessibilityLabel("\(jobTitle(type)) 스킬")
                         Button("프롬프트 편집…") { promptEditor = PromptEditorSelection(job: type) }
+                            .worklogKeyboardActivation { promptEditor = PromptEditorSelection(job: type) }
+                            .focusable()
                             .accessibilityLabel("\(jobTitle(type)) 프롬프트 편집")
                             .worklogHelp("\(jobTitle(type)) 지침과 출력 예시 편집")
                         if let note = PromptCatalog.usageNote(for: type) {
@@ -180,7 +200,7 @@ struct SettingsScreen: View {
                         }
                     }.padding(.vertical, 4)
                 }
-            }
+            }.focusable()
         }
     }
     private var aiStatusSymbol: String {
@@ -209,17 +229,20 @@ struct SettingsScreen: View {
                 Text("백업 위치와 복원 지점은 사이드바의 백업 화면에서 확인하세요.")
                     .foregroundStyle(WorkLogTheme.muted)
                 if let onOpenBackups {
-                    Button("백업·복원 열기", action: onOpenBackups).worklogHelp("백업 위치와 복원 지점 확인")
+                    Button("백업·복원 열기", action: onOpenBackups).worklogKeyboardActivation(onOpenBackups).focusable().worklogHelp("백업 위치와 복원 지점 확인")
                 }
             }
             TextField("백업 보관 (일, 1~3650)", value: $model.draft.backupRetentionDays, format: .number)
         }
     }
     @ViewBuilder private func backupActions(_ backups: BackupModel) -> some View {
-        Button("지금 백업") { Task { await backups.create() } }.disabled(backups.isBusy)
+        Button("지금 백업") { Task { await backups.create() } }
+            .worklogKeyboardActivation { Task { await backups.create() } }.disabled(backups.isBusy)
+            .focusable()
             .worklogHelp("현재 기록·설정과 암호화된 Secret을 백업")
         if let onOpenBackups {
-            Button("복원…", action: onOpenBackups).disabled(backups.isBusy)
+            Button("복원…", action: onOpenBackups).worklogKeyboardActivation(onOpenBackups).disabled(backups.isBusy)
+                .focusable()
                 .worklogHelp("백업 화면에서 복원 지점 선택")
         } else {
             Text("복원: 사이드바 → 백업").font(.callout).foregroundStyle(WorkLogTheme.muted)

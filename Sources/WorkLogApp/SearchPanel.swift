@@ -268,7 +268,8 @@ import WorkLogCore
                 var handled = false
                 MainActor.assumeIsolated {
                     guard let self, let window = self.window, window.isVisible,
-                          window.isKeyWindow, event.window === window, window.attachedSheet == nil else { return }
+                          window.isKeyWindow, event.window === window, window.attachedSheet == nil,
+                          !self.isHiddenOrHasHiddenAncestor else { return }
                     let responder = window.firstResponder
                     guard (responder as? NSTextInputClient)?.hasMarkedText() != true else { return }
                     let editing = responder is NSTextView || responder is NSTextField
@@ -302,7 +303,7 @@ import WorkLogCore
         field.drawsBackground = false
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
         field.setAccessibilityLabel(allowsAIQuestion ? "원문 검색" : "Secret 제목 검색")
-        field.setAccessibilityHelp("↑↓ 결과 선택 · Return 열기 · Secret은 AI로 보내지 않습니다")
+        field.setAccessibilityHelp("↑↓ 결과 선택 · Tab 결과로 이동 · Return 열기 · ⌘F 검색어 · Secret은 AI로 보내지 않습니다")
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.delegate = context.coordinator
         return field
