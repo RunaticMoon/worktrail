@@ -15,6 +15,7 @@ struct GraphScreen: View {
     @GestureState private var magnification: CGFloat = 1
     @State private var showsLegend = false
     @FocusState private var graphFocused: Bool
+    @FocusState private var periodFocused: Bool
 
     private let primaryKinds: [GraphNodeKind] = [
         .memo, .task, .activity, .reportVersion, .project, .tag,
@@ -43,6 +44,16 @@ struct GraphScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("관계 그래프")
+        .worklogFocusContent {
+            if model.phase == .loaded {
+                periodFocused = false
+                selectCurrentOrFirst()
+                graphFocused = true
+            } else {
+                graphFocused = false
+                periodFocused = true
+            }
+        }
         .onAppear { if model.phase == .idle { model.reload() } }
         .onChange(of: model.rangePreset) { _, _ in reloadAndFit() }
         .onChange(of: model.visibleKinds) { _, _ in reloadAndFit() }
@@ -66,7 +77,7 @@ struct GraphScreen: View {
                     Text(model.snapshot.nodes.first(where: { $0.id == focus })?.title ?? "선택한 기록")
                         .lineLimit(1).help(model.snapshot.nodes.first(where: { $0.id == focus })?.title ?? "선택한 기록")
                     Spacer(minLength: 8)
-                    Button("전체 보기") { model.clearFocus() }
+                    Button("전체 보기") { model.clearFocus() }.focusable()
                 }.font(.callout)
             }
         }
@@ -79,6 +90,7 @@ struct GraphScreen: View {
             }
         }
         .pickerStyle(.segmented)
+        .focusable().focused($periodFocused)
         .frame(minWidth: 270, idealWidth: 310, maxWidth: 350)
         .accessibilityLabel("그래프 조회 기간")
     }
@@ -90,6 +102,7 @@ struct GraphScreen: View {
             kindToggle(.supplement)
             kindToggle(.historicalSource)
         } label: { Label("종류", systemImage: "line.3.horizontal.decrease.circle") }
+        .focusable()
         .fixedSize()
         .help("표시할 종류를 선택하세요. 최소 한 종류는 선택해야 합니다.")
         .accessibilityLabel("노드 종류 필터")
@@ -120,6 +133,7 @@ struct GraphScreen: View {
 
     private var refreshButton: some View {
         Button { reloadAndFit() } label: { Image(systemName: "arrow.clockwise") }
+            .focusable()
             .accessibilityLabel("그래프 새로고침").help("그래프 새로고침")
             .disabled(model.phase == .loading)
     }
@@ -135,7 +149,7 @@ struct GraphScreen: View {
             VStack(spacing: 12) {
                 Label(message, systemImage: "exclamationmark.triangle")
                     .multilineTextAlignment(.center)
-                Button("다시 시도") { reloadAndFit() }
+                Button("다시 시도") { reloadAndFit() }.focusable()
             }.padding(WorkLogTheme.contentInset).frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded:
             GeometryReader { geometry in
@@ -196,15 +210,18 @@ struct GraphScreen: View {
                 Button("위로 이동", systemImage: "arrow.up") { pan.height -= 80 }
                 Button("아래로 이동", systemImage: "arrow.down") { pan.height += 80 }
             } label: { Image(systemName: "arrow.up.and.down.and.arrow.left.and.right") }
+                .focusable()
                 .accessibilityLabel("그래프 이동").help("드래그 대신 메뉴로 그래프 이동")
             Button { changeZoom(by: 1 / 1.25) } label: { Image(systemName: "minus.magnifyingglass") }
+                .focusable()
                 .disabled(zoom <= 0.35).accessibilityLabel("그래프 축소").help("축소")
             Text("\(Int(effectiveZoom * 100))%")
                 .font(.caption).monospacedDigit().frame(minWidth: 34)
                 .accessibilityLabel("확대율 \(Int(effectiveZoom * 100))퍼센트")
             Button { changeZoom(by: 1.25) } label: { Image(systemName: "plus.magnifyingglass") }
+                .focusable()
                 .disabled(zoom >= 4).accessibilityLabel("그래프 확대").help("확대")
-            Button("맞춤") { fit() }.help("이동과 확대를 초기화해 전체 그래프를 표시합니다.")
+            Button("맞춤") { fit() }.focusable().help("이동과 확대를 초기화해 전체 그래프를 표시합니다.")
         }.fixedSize()
     }
 
@@ -251,7 +268,7 @@ struct GraphScreen: View {
         .focused($graphFocused)
         .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return, .space],
                     phases: [.down, .repeat]) { press in
-            guard press.modifiers.isEmpty else { return .ignored }
+            guard press.modifiers.isEmpty, !worklogHasMarkedText else { return .ignored }
             switch press.key {
             case .upArrow, .leftArrow: moveSelection(by: -1)
             case .downArrow, .rightArrow: moveSelection(by: 1)
@@ -346,6 +363,7 @@ struct GraphScreen: View {
                 Text("\(model.listedNodes.count)개").font(.caption).foregroundStyle(.secondary)
                 if model.selectedNodeID != nil {
                     Button { model.select(nil) } label: { Image(systemName: "xmark.circle") }
+                        .focusable()
                         .buttonStyle(.borderless).accessibilityLabel("노드 선택 해제").help("선택 해제")
                 }
             }.padding(12)
@@ -364,12 +382,18 @@ struct GraphScreen: View {
                     }
                     .listStyle(.sidebar)
                     .accessibilityLabel("그래프 노드 목록")
+                    .onKeyPress(keys: [.return], phases: [.down]) { press in
+                        guard press.modifiers.isEmpty, !worklogHasMarkedText,
+                              let node = model.selectedNode else { return .ignored }
+                        open(node)
+                        return .handled
+                    }
                     .onChange(of: model.selectedNodeID) { _, id in
                         if let id { proxy.scrollTo(id) }
                     }
                 }
             }
-            Text(graphFocused ? "그래프: ↑↓←→ 이동 · Space 선택 · Return 열기" : "목록: ↑↓ 이동 · 원문은 ‘열기’ 버튼 사용")
+            Text(graphFocused ? "그래프: ↑↓←→ 이동 · Space 선택 · Return 열기" : "목록: ↑↓ 이동 · Return 원문 열기")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).padding(12)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -418,8 +442,9 @@ struct GraphScreen: View {
             }
             HStack {
                 Button("열기", systemImage: "arrow.up.forward.square") { open(node) }
+                    .focusable()
                     .disabled(node.record == nil || node.id.kind == .historicalSource)
-                Button("주변 보기", systemImage: "scope") { model.focusOnSelection() }
+                Button("주변 보기", systemImage: "scope") { model.focusOnSelection() }.focusable()
             }
             let neighbors = model.neighbors(of: node.id)
             Divider()
@@ -447,7 +472,7 @@ struct GraphScreen: View {
                             Text("당시 원문 개정 \(revision)").font(.caption).foregroundStyle(.secondary)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.plain).accessibilityHint("연결된 노드 선택")
+                }.buttonStyle(.plain).focusable().accessibilityHint("연결된 노드 선택")
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

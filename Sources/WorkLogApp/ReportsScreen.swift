@@ -70,6 +70,8 @@ private struct ReportWorkspace: View {
     @State private var planExpanded = false
     @State private var quizExpanded = false
     @State private var writingOptionsExpanded = false
+    @FocusState private var editorFocused: Bool
+    @FocusState private var generateFocused: Bool
 
     private enum RetryAction { case load, generate, save, confirm, apply, propose, createEvaluation }
     private var isWeekly: Bool { family == .submission }
@@ -140,6 +142,13 @@ private struct ReportWorkspace: View {
             }
         }
         .navigationTitle(title)
+        .worklogFocusContent { focusContent() }
+        .background(WorkLogKeyHandler { event in
+            guard event.keyCode == 14,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command else { return false }
+            if !event.isARepeat { focusContent() }
+            return true
+        })
         .task { await prepareScreen() }
         .onChange(of: model.hasChanges) { _, changed in
             if !changed && model.family != family && !model.isGenerating {
@@ -157,6 +166,11 @@ private struct ReportWorkspace: View {
         .onChange(of: model.pendingRegeneration?.id) { _, _ in comparisonExpanded = false }
         .onChange(of: plan?.items) { _, _ in model.checkStale() }
         .onChange(of: quiz?.recorded) { _, _ in model.checkStale() }
+    }
+
+    private func focusContent() {
+        if model.canEdit, model.version != nil { editorFocused = true }
+        else { generateFocused = true }
     }
 
     @ViewBuilder private var weeklySupport: some View {
@@ -260,6 +274,7 @@ private struct ReportWorkspace: View {
                 }
                 if model.canEdit {
                     TextEditor(text: $model.content)
+                        .focused($editorFocused)
                         .font(.system(size: 14))
                         .scrollContentBackground(.hidden)
                         .padding(8)
@@ -310,7 +325,11 @@ private struct ReportWorkspace: View {
         Button("본문 복사") { copyReport() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
-        Button("저장") { retryAction = .save; model.saveEdits() }
+        Button("편집 ⌘E") { focusContent() }.disabled(!model.canEdit).focusable()
+        Button("저장") {
+            guard !worklogHasMarkedText else { return }
+            retryAction = .save; model.saveEdits()
+        }
             .keyboardShortcut("s", modifiers: .command).disabled(!model.canEdit || !model.hasChanges)
             .worklogHelp("본문 변경 저장", keys: "⌘S")
         Button("되돌리기") { model.discardEdits() }.disabled(!model.hasChanges)
@@ -328,6 +347,7 @@ private struct ReportWorkspace: View {
     }
     @ViewBuilder private var generationActions: some View {
         Button(model.version == nil ? "초안 만들기" : model.regenerateTitle) { generate() }
+            .focusable().focused($generateFocused)
             .disabled(selectionLocked || model.pendingRegeneration != nil)
             .worklogHelp("기록과 확정 계획으로 새 버전 만들기 · 저장한 수정본과 확정본 보존")
         Button("다시 불러오기") { loadSelection() }.disabled(selectionLocked)

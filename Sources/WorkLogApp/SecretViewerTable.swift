@@ -7,6 +7,7 @@ import WorkLogCore
 @MainActor struct SecretViewerTable: View {
     @Bindable var model: SecretsModel
     var host: SecretEditorHost = .main
+    var focusRequest: Int = 0
     private enum Control: Hashable { case row(String), copy(String) }
     @FocusState private var focusedControl: Control?
 
@@ -101,12 +102,20 @@ import WorkLogCore
             .onChange(of: model.focusedRowId) { _, id in
                 if let id { proxy.scrollTo(id) }
             }
+            .onChange(of: focusRequest) { _, _ in focusFirstRow() }
+            .onAppear { if focusRequest > 0 { focusFirstRow() } }
         }
     }
 
     private func accepts(_ press: KeyPress) -> Bool {
         press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty &&
             (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true
+    }
+
+    private func focusFirstRow() {
+        guard canRead, let row = model.rows.first else { return }
+        focusedControl = .row(row.id)
+        focus(row.id)
     }
 
     private func focus(_ id: String) {

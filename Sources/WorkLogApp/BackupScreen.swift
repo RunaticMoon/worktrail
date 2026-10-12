@@ -9,6 +9,8 @@ struct BackupScreen: View {
     let calendar: WorkCalendar
     let onRestore: (BackupInfo, Bool) -> Void
     @State private var failedOperation: Operation = .load
+    @FocusState private var createFocused: Bool
+    @FocusState private var contentFocused: Bool
     private enum Operation { case load, create, folder, verify(BackupInfo), restore(BackupInfo) }
 
     var body: some View {
@@ -47,8 +49,13 @@ struct BackupScreen: View {
             .frame(maxWidth: 1000, alignment: .leading).padding(WorkLogTheme.contentInset)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .focusable().focused($contentFocused)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("백업")
+        .worklogFocusContent {
+            if model.isBusy { contentFocused = true }
+            else { contentFocused = false; createFocused = true }
+        }
         .onAppear { model.load() }
         .sheet(isPresented: Binding(get: { model.pendingRestore != nil }, set: { if !$0 { model.cancelRestore() } })) {
             if let backup = model.pendingRestore { restoreSheet(backup) }
@@ -56,10 +63,13 @@ struct BackupScreen: View {
     }
     @ViewBuilder private var backupActions: some View {
         Button("지금 백업", systemImage: "externaldrive.badge.plus") { create() }
+            .focusable().focused($createFocused)
             .disabled(model.isBusy).worklogHelp("현재 기록·설정과 암호화된 Secret 백업")
         Button("백업 폴더 열기", systemImage: "folder") { openFolder() }
+            .focusable()
             .disabled(model.folder == nil).worklogHelp("Finder에서 백업 폴더 열기")
         Button("목록 새로고침", systemImage: "arrow.clockwise") { failedOperation = .load; model.load() }
+            .focusable()
             .disabled(model.isBusy).worklogHelp("복원 지점 목록 새로고침")
     }
     private func backupRow(_ backup: BackupInfo) -> some View {
@@ -76,9 +86,11 @@ struct BackupScreen: View {
     }
     @ViewBuilder private func restoreActions(_ backup: BackupInfo) -> some View {
         Button("검증") { verify(backup) }.disabled(model.isBusy)
+            .focusable()
             .accessibilityLabel("\(timestamp(backup.manifest.createdAt)) 백업 검증")
             .worklogHelp("백업 형식·해시·데이터베이스 무결성 확인")
         Button("복원…") { requestRestore(backup) }.disabled(model.isBusy)
+            .focusable()
             .accessibilityLabel("\(timestamp(backup.manifest.createdAt)) 백업 복원")
             .worklogHelp("백업 검증 후 복원 범위 확인")
         if model.verifiedIds.contains(backup.id) {
@@ -93,6 +105,7 @@ struct BackupScreen: View {
                     Text("현재 기록·설정을 이 백업으로 교체합니다. 복원 직전 현재 데이터를 별도 백업으로 보존하고, 모든 저장소 연결을 닫은 후 복원합니다.")
                     if model.offersOrdinaryOnlyRestore, let message = model.message { InlineNotice(message: message) }
                     Toggle("Secret 포함", isOn: $model.includeSecrets)
+                        .focusable()
                         .accessibilityHint("같은 Mac의 기존 Keychain 키가 필요합니다. 제외하면 현재 Secret 보관함을 유지합니다.")
                     Text("Secret은 같은 Mac의 기존 Keychain 키가 있어야 복원할 수 있습니다. 제외하면 현재 Secret 보관함은 유지하고 일반 기록·설정만 복원합니다.")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
@@ -107,11 +120,12 @@ struct BackupScreen: View {
     }
     @ViewBuilder private func restoreSheetActions(_ backup: BackupInfo) -> some View {
         Button("취소") { model.cancelRestore() }.keyboardShortcut(.cancelAction)
+            .focusable()
             .worklogHelp("복원을 취소하고 백업 목록으로 돌아가기", keys: "Esc")
         Button("복원하고 다시 열기", role: .destructive) {
             let include = model.includeSecrets
             model.cancelRestore(); onRestore(backup, include)
-        }.disabled(model.isBusy)
+        }.disabled(model.isBusy).focusable()
             .accessibilityLabel(model.includeSecrets ? "Secret을 포함해 백업 복원하고 다시 열기" : "Secret을 유지하고 일반 기록·설정 복원하고 다시 열기")
             .worklogHelp("현재 데이터를 별도 보존한 뒤 선택한 백업으로 교체")
     }

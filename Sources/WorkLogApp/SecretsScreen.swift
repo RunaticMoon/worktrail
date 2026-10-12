@@ -19,6 +19,10 @@ import WorkLogCore
     @State private var titleFocusRequest = 0
     @State private var isActive = false
     @State private var showsTitlePicker = false
+    @State private var viewerFocusRequest = 0
+    @State private var usesTitlePopover = false
+    @FocusState private var queryFocused: Bool
+    @FocusState private var titlesFocused: Bool
 
     private var canUseEditor: Bool {
         !model.isLocked && model.canEdit(from: .main) && !model.hasRecoverableDraft
@@ -44,6 +48,7 @@ import WorkLogCore
                 Button("초안 버리기…", role: .destructive) { confirmsDiscardDraft = true }
             }
             GeometryReader { geometry in
+                Group {
                 if !hasDetail {
                     titleList
                 } else if geometry.size.width < 700 {
@@ -60,9 +65,18 @@ import WorkLogCore
                         detail.frame(minWidth: 360)
                     }
                 }
+                }
+                .onChange(of: geometry.size.width, initial: true) { _, width in
+                    usesTitlePopover = width < 700
+                }
             }
         }
         .padding(WorkLogTheme.contentInset).navigationTitle("Secret")
+        .worklogFocusContent {
+            if model.isEditing && canUseEditor { titleFocusRequest += 1 }
+            else { focusTitleSearch() }
+        }
+        .background(WorkLogKeyHandler(handle: handleKey))
         .onAppear {
             isActive = true
             model.tick()
@@ -85,6 +99,7 @@ import WorkLogCore
             VStack(alignment: .leading, spacing: 12) {
                 ScreenHeader(title: "Secret 휴지통", purpose: "항목과 이전 버전을 함께 복원") {
                     Button("닫기") { showsTrash = false }.worklogHelp("휴지통 닫기")
+                        .keyboardShortcut(.cancelAction)
                 }
                 SecretTrashList(model: model)
             }.padding(16).frame(minWidth: 440, idealWidth: 540, minHeight: 360)
@@ -123,21 +138,24 @@ import WorkLogCore
         Label(model.isLocked ? "잠김" : "로컬 보관함", systemImage: model.isLocked ? "lock.fill" : "lock.open")
             .font(.callout).foregroundStyle(WorkLogTheme.muted)
         Button("새 Secret", systemImage: "plus") { requestNew() }
+            .focusable()
             .worklogHelp("새 Secret 입력")
             .disabled(model.isUnlocking || model.hasRecoverableDraft || (!model.isLocked && !model.canEdit(from: .main)))
         Button("휴지통", systemImage: "trash") { showsTrash = true }
+            .focusable()
             .worklogHelp("Secret 휴지통 열기")
             .disabled(!canUseEditor)
         if model.isLocked {
-            Button("잠금 해제", systemImage: "lock.open") { unlock() }.disabled(model.isUnlocking)
+            Button("잠금 해제", systemImage: "lock.open") { unlock() }.disabled(model.isUnlocking).focusable()
         } else {
-            Button("지금 잠금", systemImage: "lock") { model.lock() }.worklogHelp("Secret 보관함 잠금")
+            Button("지금 잠금", systemImage: "lock") { model.lock() }.worklogHelp("Secret 보관함 잠금").focusable()
         }
     }
 
     private var titleList: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("제목 검색", text: $model.query).textFieldStyle(.roundedBorder)
+                .focused($queryFocused)
                 .accessibilityLabel("Secret 제목 검색")
                 .accessibilityHint("잠금 중에도 제목만 검색합니다")
             if model.titles.isEmpty {
@@ -153,9 +171,8 @@ import WorkLogCore
             } else {
                 List(selection: Binding(get: { selectedTitleId }, set: { id in
                     guard let item = model.titles.first(where: { $0.id == id }) else { return }
-                    showsTitlePicker = false
-                    if model.isLocked { lockedSelection = item; newAfterUnlock = false }
-                    else { navigate(to: item) }
+                    selectTitle(item)
+                    if NSApp.currentEvent?.type == .leftMouseUp { showsTitlePicker = false }
                 })) {
                     ForEach(model.titles) { item in
                         VStack(alignment: .leading, spacing: 4) {
@@ -171,9 +188,12 @@ import WorkLogCore
                     }
                 }
                 .listStyle(.plain)
+                .focused($titlesFocused)
                 .disabled(model.isUnlocking || model.hasRecoverableDraft || (!model.isLocked && !model.canEdit(from: .main)))
             }
-        }
+            Text("⌘⌥F 제목 찾기 · ↓ 목록 · Return 열기 · ⌘E 편집 · ⌘L 목록 복귀")
+                .font(.caption).foregroundStyle(WorkLogTheme.muted)
+        }.background(WorkLogKeyHandler(handle: handleKey))
     }
 
     private var hasDetail: Bool {
@@ -217,7 +237,7 @@ import WorkLogCore
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        SecretViewerTable(model: model)
+                        SecretViewerTable(model: model, focusRequest: viewerFocusRequest)
                         versionHistory
                         Button("휴지통으로 이동…", role: .destructive) { confirmsTrash = true }
                             .worklogHelp("항목과 이전 버전을 휴지통으로 이동")
@@ -236,6 +256,7 @@ import WorkLogCore
             guard canUseEditor, !hasMarkedText else { return }
             model.showsValues = false
             model.beginEditing()
+            titleFocusRequest += 1
         }.keyboardShortcut("e", modifiers: .command).worklogHelp("Secret 표 편집", keys: "⌘E")
     }
 
@@ -269,6 +290,43 @@ import WorkLogCore
     }
 
     private var canOwnEditor: Bool { isActive && !model.isLocked && model.canEdit(from: .main) }
+    private func focusTitleSearch() {
+        if usesTitlePopover && hasDetail { showsTitlePicker = true }
+        DispatchQueue.main.async { queryFocused = true }
+    }
+    private func selectTitle(_ item: SecretMetadata) {
+        let willMoveList = !hasDetail && usesTitlePopover
+        if model.isLocked { lockedSelection = item; newAfterUnlock = false }
+        else { navigate(to: item) }
+        if willMoveList {
+            showsTitlePicker = true
+            DispatchQueue.main.async { titlesFocused = true }
+        }
+    }
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if (modifiers == [.command, .option] && event.keyCode == 3)
+            || (modifiers == .command && event.keyCode == 37) {
+            if !event.isARepeat { focusTitleSearch() }
+            return true
+        }
+        guard modifiers.isEmpty, !model.isUnlocking, !model.titles.isEmpty else { return false }
+        if queryFocused, event.keyCode == 125 {
+            if selectedTitleId == nil, let item = model.titles.first { selectTitle(item) }
+            queryFocused = false; titlesFocused = true
+            return true
+        }
+        if queryFocused || titlesFocused, event.keyCode == 36 || event.keyCode == 76 {
+            if !event.isARepeat {
+                if selectedTitleId == nil, let item = model.titles.first { selectTitle(item) }
+                showsTitlePicker = false
+                if model.isLocked { unlock() }
+                else if model.selectedId != nil { viewerFocusRequest += 1 }
+            }
+            return true
+        }
+        return false
+    }
     private var hasMarkedText: Bool {
         (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
     }
@@ -277,6 +335,7 @@ import WorkLogCore
             await model.unlock()
             guard isActive, !model.isLocked, model.acquireEditor(.main) else { return }
             resumeLockedSelection()
+            viewerFocusRequest += 1
         }
     }
     private func resumeLockedSelection() {
@@ -321,9 +380,11 @@ import WorkLogCore
 /// Claims ownership only when needed; it never releases an enclosing screen's claim.
 @MainActor struct SecretTrashList: View {
     @Bindable var model: SecretsModel
+    var focusRevision: Int = 0
     @State private var purgeId: String?
     @State private var ownsClaim = false
     @State private var isActive = false
+    @FocusState private var focusedAction: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -334,6 +395,7 @@ import WorkLogCore
                 StateView(kind: model.isUnlocking ? .loading : .empty, title: "휴지통이 잠겨 있습니다",
                           detail: "기기 인증 후 항목을 복원하거나 영구 삭제하세요.")
                 Button("잠금 해제") { Task { await model.unlock(); prepare() } }
+                    .focusable().focused($focusedAction, equals: "unlock")
                     .disabled(model.isUnlocking).worklogHelp("Secret 휴지통 잠금 해제")
             } else if !model.canEdit(from: .main) {
                 StateView(kind: .failure, title: "빠른 입력창에서 편집 중입니다", detail: "빠른 입력창을 닫은 뒤 다시 시도하세요.",
@@ -350,8 +412,10 @@ import WorkLogCore
                         if let group = item.groupName { Text(group).foregroundStyle(WorkLogTheme.muted) }
                         HStack {
                             Button("복원") { if canMutate { model.restoreTrash(item.id) } }
+                                .focusable().focused($focusedAction, equals: item.id)
                                 .accessibilityLabel(Text("\(item.title) 복원")).worklogHelp("항목과 이전 버전 복원")
                             Button("영구 삭제…", role: .destructive) { purgeId = item.id }
+                                .focusable()
                                 .accessibilityLabel(Text("\(item.title) 영구 삭제")).worklogHelp("현재 보관함에서 영구 삭제")
                         }.disabled(!canMutate)
                     }.padding(.vertical, 4)
@@ -359,6 +423,10 @@ import WorkLogCore
             }
         }
         .onAppear { isActive = true; model.tick(); prepare() }
+        .onChange(of: focusRevision) { _, _ in focusFirstAction() }
+        .onChange(of: model.trashItems.map(\.id)) { _, _ in
+            if focusedAction != nil { focusFirstAction() }
+        }
         .onChange(of: model.isLocked) { _, locked in
             if locked { purgeId = nil; ownsClaim = false }
             else { prepare() }
@@ -379,6 +447,9 @@ import WorkLogCore
     }
 
     private var canMutate: Bool { isActive && !model.isLocked && model.canEdit(from: .main) && !model.hasRecoverableDraft }
+    private func focusFirstAction() {
+        focusedAction = model.isLocked ? "unlock" : model.trashItems.first?.id
+    }
     private func prepare() {
         guard isActive, !model.isLocked else { return }
         if !model.canEdit(from: .main) { ownsClaim = model.acquireEditor(.main) }

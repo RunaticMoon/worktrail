@@ -111,6 +111,18 @@ import WorkLogCore
 
     func retryStart() async { didStart = false; startupError = nil; await start() }
     func dismissNotice() { notice = nil }
+    func navigate(to route: SidebarRoute) {
+        guard let window = NSApp.keyWindow, !(window is NSPanel),
+              window.attachedSheet == nil, window.sheetParent == nil,
+              selectedTaskId == nil, selectedMemoId == nil, !worklogHasMarkedText else { return }
+        self.route = route
+    }
+
+    func moveRoute(by offset: Int) {
+        let routes = SidebarRoute.allCases
+        let current = routes.firstIndex(of: route ?? .day) ?? 0
+        navigate(to: routes[(current + offset + routes.count) % routes.count])
+    }
     private func clearRegistrations() {
         protectionTimer?.invalidate(); protectionTimer = nil
         hotkeyCoordinator?.shutdown(); hotkeyCoordinator = nil

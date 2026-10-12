@@ -19,21 +19,26 @@ import Observation
 }
 
 /// An explicit local key loop keeps mixed SwiftUI/AppKit controls in visual order.
-/// Popovers and the Secret editor retain their native key loops.
+/// Popovers retain their native key loops.
 @Observable @MainActor final class CaptureKeyboardNavigation {
-    var current: String?
+    var current: String? {
+        didSet { if current?.hasPrefix("tab:") != true { keepTabFocus = false } }
+    }
     var isPopoverPresented = false
     @ObservationIgnored var tokenActions: [Bool: () -> Void] = [:]
+    @ObservationIgnored var onTaskSearch: (() -> Void)?
+    @ObservationIgnored var keepTabFocus = false
     @ObservationIgnored private var stops: [String: (order: Int, focus: () -> Void)] = [:]
 
     func register(_ id: String, order: Int, focus: @escaping () -> Void) {
         stops[id] = (order, focus)
     }
     func remove(_ id: String) { stops[id] = nil }
-    func focus(_ id: String) {
-        guard let stop = stops[id] else { return }
+    @discardableResult func focus(_ id: String) -> Bool {
+        guard let stop = stops[id] else { return false }
         current = id
         stop.focus()
+        return true
     }
     func move(backwards: Bool) {
         let ids = stops.keys.sorted {
@@ -279,6 +284,7 @@ extension View {
 
     override func sendEvent(_ event: NSEvent) {
         guard event.type == .keyDown else { super.sendEvent(event); return }
+        guard attachedSheet == nil else { super.sendEvent(event); return }
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let isTypeShortcut = modifiers == [.command] && [18, 19, 20].contains(event.keyCode)
@@ -295,6 +301,7 @@ extension View {
            editor.handleCandidateKey(event) { return }
         if isTypeShortcut {
             if !event.isARepeat {
+                navigation?.keepTabFocus = false
                 switch event.keyCode {
                 case 18: onSelectTab?(.memo)
                 case 19: onSelectTab?(.task)
@@ -303,8 +310,24 @@ extension View {
             }
             return
         }
-        if event.keyCode == 48 && (modifiers == [.control] || modifiers == [.control, .shift]) {
-            if !event.isARepeat { onCycleTab?(modifiers.contains(.shift)) }
+        let controlTab = event.keyCode == 48 && (modifiers == [.control] || modifiers == [.control, .shift])
+        let commandBracket = modifiers == [.command, .shift] && [33, 30].contains(event.keyCode)
+        if controlTab || commandBracket {
+            if !event.isARepeat {
+                navigation?.keepTabFocus = false
+                onCycleTab?(commandBracket ? event.keyCode == 33 : modifiers.contains(.shift))
+            }
+            return
+        }
+        if modifiers == [.command], event.keyCode == 37, let onTaskSearch = navigation?.onTaskSearch {
+            if !event.isARepeat { onTaskSearch() }
+            return
+        }
+        if modifiers == [.command], event.keyCode == 14, let navigation {
+            if !event.isARepeat {
+                if layoutTab == .secret { navigation.focus("secretTitle") }
+                else if !navigation.focus("body") { navigation.focus("targetStatus") }
+            }
             return
         }
         if modifiers == [.option], let index = [18, 19, 20, 21, 23].firstIndex(of: event.keyCode),
@@ -393,6 +416,9 @@ extension View {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isVisible, request == self.focusRequest else { return }
             self.contentView?.layoutSubtreeIfNeeded()
+            if self.navigation?.keepTabFocus == true {
+                if self.navigation?.focus("tab:\(tab.rawValue)") == true { return }
+            }
             switch tab {
             case .memo:
                 if let editor = self.findView(in: self.contentView, matching: { $0 is CaptureNSTextView }) {
@@ -408,8 +434,10 @@ extension View {
                     _ = self.focusAccessibleElement(in: self.contentView, label: "완료 확인 취소")
                 }
             case .secret:
-                // SecretEditorView focuses its title on appearance. Its locked/draft
-                // states use SwiftUI buttons, represented in the accessibility tree.
+                if let navigation,
+                   ["secretTitle", "secretUnlock", "secretContinue", "secretRetry"].contains(where: { navigation.focus($0) }) {
+                    return
+                }
                 for label in ["Secret 제목", "잠금 해제", "이어서 편집", "다시 시도"] {
                     if self.focusAccessibleElement(in: self.contentView, label: label) { break }
                 }
@@ -466,7 +494,7 @@ extension View {
                     .overlay(CaptureWindowDragArea())
                 Button(action: onDismiss) { Image(systemName: "xmark").frame(width: 24, height: 24) }
                     .buttonStyle(.plain)
-                    .captureFocus("close", order: 950, action: onDismiss)
+                    .captureFocus("close", order: Int.max - 100, action: onDismiss)
                     .accessibilityLabel("빠른 입력 닫기")
                     .worklogHelp("닫기 (초안 보존)", keys: "Esc")
                     .disabled(saveState.isSaving)
@@ -509,7 +537,7 @@ extension View {
                 .allowsHitTesting(false)
         }
         .environment(navigation)
-        .background(CaptureFocusAnchor(tab: session.tab, navigation: session.isSecretTab ? nil : navigation,
+        .background(CaptureFocusAnchor(tab: session.tab, navigation: navigation,
             onDate: dateHandler, onStatus: statusHandler, onBackToActions: backHandler))
     }
 
@@ -602,9 +630,12 @@ extension View {
     private func tab(_ kind: CaptureKind, title: String, symbol: String) -> some View {
         let selected = session.tab == kind
         let hasDraft = kind == .secret ? secrets.hasUnsavedRows : session.hasDraft(kind)
-        return Button { session.select(kind) } label: {
+        let select = { navigation.keepTabFocus = false; session.select(kind) }
+        return Button(action: select) {
             HStack(spacing: 6) {
                 Label(title, systemImage: symbol)
+                Keycap(kind == .memo ? "⌘1" : kind == .task ? "⌘2" : "⌘3")
+                    .accessibilityHidden(true)
                 if hasDraft {
                     Circle().fill(WorkLogTheme.muted).frame(width: 4, height: 4)
                         .accessibilityHidden(true)
@@ -624,12 +655,20 @@ extension View {
         }
         .buttonStyle(.plain)
         .worklogHelp("\(title) 입력", keys: kind == .memo ? "⌘1" : kind == .task ? "⌘2" : "⌘3")
-        .captureFocus("tab:\(kind.rawValue)", order: 960 + (kind == .memo ? 0 : kind == .task ? 1 : 2),
-                      action: { session.select(kind) })
+        .captureFocus("tab:\(kind.rawValue)", order: Int.max - 10 + (kind == .memo ? 0 : kind == .task ? 1 : 2),
+                      action: select)
         .disabled(saveState.isSaving || session.activeDraft?.pendingCompletion != nil)
         .accessibilityLabel(hasDraft ? "\(title), 초안 있음" : title)
         .accessibilityValue(selected ? "선택됨" : "")
         .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .onKeyPress(keys: [.leftArrow, .rightArrow], phases: .down) { press in
+            guard press.modifiers.isEmpty, !saveState.isSaving,
+                  session.activeDraft?.pendingCompletion == nil,
+                  (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
+            navigation.keepTabFocus = true
+            session.cycleTab(backwards: press.key == .leftArrow)
+            return .handled
+        }
     }
 
     private func footer(draft: CaptureModel) -> some View {
@@ -671,13 +710,13 @@ extension View {
     }
 
     private var keyboardHints: some View {
-        Text("Esc 닫기 · 초안 보존")
+        Text("⌃Tab / ⌃⇧Tab 유형 · Tab / ⇧Tab 이동 · ⌘E 본문 · Esc 초안 보존")
             .font(.caption).foregroundStyle(WorkLogTheme.muted)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel(session.tab == .task
-                ? "Command 1, 2, 3 유형. Tab 이동. Option 1부터 5 상태. Command D 날짜. Command Return 저장. Escape 닫기, 초안 보존."
-                : "Command 1, 2, 3 유형. Tab 이동. Command D 날짜. Command Return 저장. Escape 닫기, 초안 보존.")
-            .worklogHelp("⌃Tab 유형 순환 · 본문 Return 줄바꿈 · ⌘← 동작으로 · ⌘⇧P 프로젝트 · ⌘⇧T 태그")
+                ? "Command 1, 2, 3 유형. Control Tab 다음 유형, Control Shift Tab 이전 유형. Tab 다음, Shift Tab 이전 항목. Command E 본문, Command L 업무 검색. Option 1부터 5 상태. Command D 날짜. Command Return 저장. Escape 닫기, 초안 보존."
+                : "Command 1, 2, 3 유형. Control Tab 다음 유형, Control Shift Tab 이전 유형. Tab 다음, Shift Tab 이전 항목. Command E 본문. Command D 날짜. Command Return 저장. Escape 닫기, 초안 보존.")
+            .worklogHelp("⌘⇧[ / ] 유형 순환 · ⌘L 업무 검색 · 본문 Return 줄바꿈 · ⌘← 동작으로 · ⌘⇧P 프로젝트 · ⌘⇧T 태그")
     }
 
     private func saveButton(draft: CaptureModel) -> some View {
@@ -787,6 +826,7 @@ extension View {
                         Button("업무 변경", action: changeTask)
                             .controlSize(.small).disabled(isLocked)
                             .captureFocus("changeTask", order: 200, action: changeTask)
+                            .worklogHelp("업무 검색으로 이동", keys: "⌘L")
                     }
                 }
                 if model.pendingCompletion != nil {
@@ -836,7 +876,11 @@ extension View {
         .onChange(of: model.taskQuery) { _, _ in
             highlighted = keys.contains(selectedTaskKey) ? selectedTaskKey : "new"
         }
-        .onAppear { highlighted = selectedTaskKey }
+        .onAppear {
+            highlighted = selectedTaskKey
+            navigation.onTaskSearch = changeTask
+        }
+        .onDisappear { navigation.onTaskSearch = nil }
         .onChange(of: model.pendingCompletion != nil) { _, pending in
             if pending { DispatchQueue.main.async { navigation.focus("cancelCompletion") } }
         }
@@ -975,6 +1019,7 @@ extension View {
     }
 
     private func changeTask() {
+        guard !isLocked else { return }
         choosingTask = true
         DispatchQueue.main.async { navigation.focus("search") }
     }

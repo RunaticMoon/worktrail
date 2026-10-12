@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import WorkLogCore
 
@@ -7,6 +8,7 @@ import WorkLogCore
     let calendar: WorkCalendar
     let onOpen: (String) -> Void
     let onCapture: () -> Void
+    var detailDismissalRevision: Int = 0
     @State private var taskSelection: String?
     @State private var showsProjectTasks = false
     @FocusState private var projectsFocused: Bool
@@ -31,7 +33,7 @@ import WorkLogCore
                             }
                         } else if showsProjectTasks, model.selectedProjectId != nil {
                             VStack(alignment: .leading, spacing: 12) {
-                                Button("프로젝트 목록", systemImage: "chevron.left") { showsProjectTasks = false }
+                                Button("프로젝트 목록", systemImage: "chevron.left") { focusProjectList() }
                                     .keyboardShortcut(.leftArrow, modifiers: .command)
                                 projectTasks
                             }
@@ -45,7 +47,7 @@ import WorkLogCore
                             if showingTasks {
                                 guard model.selectedProjectId != nil else { return }
                                 projectsFocused = false
-                                tasksFocused = !model.tasks.isEmpty
+                                tasksFocused = true
                             } else {
                                 tasksFocused = false
                                 projectsFocused = true
@@ -53,11 +55,21 @@ import WorkLogCore
                         }
                     }
                 }
+                Text(tasksFocused ? "↑↓ 업무 선택 · Return 상세 열기 · ← 프로젝트" : "↑↓ 프로젝트 선택 · → 또는 Return 업무 목록")
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
             Spacer(minLength: 0)
         }
         .padding(WorkLogTheme.contentInset)
-        .onAppear { model.load() }
+        .worklogFocusContent {
+            if showsProjectTasks { focusProjectTasks() }
+            else { focusProjectList() }
+        }
+        .onAppear {
+            model.load()
+            DispatchQueue.main.async { focusProjectList() }
+        }
+        .onChange(of: detailDismissalRevision) { _, _ in focusProjectTasks() }
         .onChange(of: model.selectedProjectId) { _, _ in
             taskSelection = tasksFocused ? model.tasks.first?.id : nil
         }
@@ -94,8 +106,8 @@ import WorkLogCore
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(Text("\(project.name), 진행 중 업무 \(project.openTaskCount)개, 전체 업무 \(project.totalTaskCount)개"))
                         .accessibilityAddTraits(model.selectedProjectId == project.id ? .isSelected : [])
-                        .accessibilityHint("↑↓로 선택, Return으로 프로젝트 업무 보기")
-                        .worklogHelp("프로젝트 업무 보기", keys: "Return")
+                        .accessibilityHint("↑↓로 선택, → 또는 Return으로 프로젝트 업무 보기")
+                        .worklogHelp("프로젝트 업무 보기", keys: "→ / Return")
                         .id(project.id)
                     }
                 }
@@ -105,10 +117,10 @@ import WorkLogCore
             .focusEffectDisabled()
             .focused($projectsFocused)
             .accessibilityLabel("프로젝트 목록")
-            .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
-                guard press.modifiers.isEmpty else { return .ignored }
-                if press.key == .return {
-                    if press.phase == .down, model.selectedProjectId != nil { showsProjectTasks = true }
+            .onKeyPress(keys: [.upArrow, .downArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
+                guard press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
+                if press.key == .return || press.key == .rightArrow {
+                    if press.phase == .down { focusProjectTasks() }
                 } else { moveProjectSelection(press.key == .upArrow ? -1 : 1) }
                 return .handled
             }
@@ -120,6 +132,27 @@ import WorkLogCore
             }
             .onAppear { if let id = model.selectedProjectId { proxy.scrollTo(id) } }
         }
+    }
+
+    private var hasMarkedText: Bool {
+        (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
+    }
+
+    private func focusProjectList() {
+        showsProjectTasks = false
+        tasksFocused = false
+        if model.selectedProjectId == nil { model.select(model.projects.first?.id) }
+        DispatchQueue.main.async { projectsFocused = true }
+    }
+
+    private func focusProjectTasks() {
+        guard model.selectedProjectId != nil else { focusProjectList(); return }
+        showsProjectTasks = true
+        projectsFocused = false
+        if !model.tasks.contains(where: { $0.id == taskSelection }) {
+            taskSelection = model.tasks.first?.id
+        }
+        DispatchQueue.main.async { tasksFocused = true }
     }
 
     private func moveProjectSelection(_ offset: Int) {
@@ -139,6 +172,14 @@ import WorkLogCore
                 if model.tasks.isEmpty {
                     StateView(kind: .empty, title: "연결된 업무가 없습니다", detail: "빠른 입력에서 이 프로젝트를 업무에 연결하세요.",
                         actionTitle: "업무 기록 추가 ⌘N", action: onCapture)
+                        .focusable()
+                        .focusEffectDisabled()
+                        .focused($tasksFocused)
+                        .onKeyPress(keys: [.leftArrow], phases: [.down]) { press in
+                            guard press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
+                            focusProjectList()
+                            return .handled
+                        }
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
@@ -162,9 +203,11 @@ import WorkLogCore
                         .focusEffectDisabled()
                         .focused($tasksFocused)
                         .accessibilityLabel("프로젝트 업무 목록")
-                        .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
-                            guard press.modifiers.isEmpty else { return .ignored }
-                            if press.key == .return {
+                        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .return], phases: [.down, .repeat]) { press in
+                            guard press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
+                            if press.key == .leftArrow {
+                                if press.phase == .down { focusProjectList() }
+                            } else if press.key == .return {
                                 if press.phase == .down, let taskSelection { onOpen(taskSelection) }
                             } else { moveTaskSelection(press.key == .upArrow ? -1 : 1) }
                             return .handled
@@ -176,6 +219,9 @@ import WorkLogCore
                             if let id { proxy.scrollTo(id) }
                         }
                         .onAppear { if let taskSelection { proxy.scrollTo(taskSelection) } }
+                        .onChange(of: detailDismissalRevision) { _, _ in
+                            if let taskSelection { proxy.scrollTo(taskSelection) }
+                        }
                     }
                     Button("선택한 업무 상세 열기") { if let taskSelection { onOpen(taskSelection) } }
                         .disabled(taskSelection == nil).worklogHelp("업무 상세 열기", keys: "Return")

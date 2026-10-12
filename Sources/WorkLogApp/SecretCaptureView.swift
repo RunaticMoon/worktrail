@@ -9,6 +9,7 @@ import WorkLogCore
     @Bindable var model: SecretsModel
     let onSaved: () -> Void
     let onCancel: () -> Void
+    @Environment(CaptureKeyboardNavigation.self) private var navigation
     private enum Phase { case waiting, draftChoice, editing }
     @State private var phase: Phase = .waiting
     @State private var isActive = false
@@ -29,20 +30,21 @@ import WorkLogCore
                 Spacer()
                 if model.isUnlocking { ProgressView().controlSize(.small) }
                 if !model.isLocked {
-                    Button("지금 잠금") { model.lock() }.worklogHelp("Secret 보관함 잠금")
+                    Button("지금 잠금") { model.lock() }
+                        .captureFocus("secretLock", order: Int.max - 200, action: { model.lock() })
+                        .worklogHelp("Secret 보관함 잠금")
                 }
-                Button("닫기") { leaveEditor(); onCancel() }.worklogHelp("초안을 보존하고 닫기", keys: "Esc")
+                Button("닫기", action: closePreservingDraft)
+                    .captureFocus("secretClose", order: Int.max - 150, action: closePreservingDraft)
+                    .worklogHelp("초안을 보존하고 닫기", keys: "Esc")
             }
             if let message = model.message { InlineNotice(message: message) }
             if model.isLocked {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Secret 입력은 기기 인증 후 사용할 수 있습니다.").foregroundStyle(.secondary)
-                    Button("잠금 해제") {
-                        Task {
-                            await model.unlock()
-                            prepareEditor()
-                        }
-                    }.disabled(model.isUnlocking).worklogHelp("기기 인증으로 Secret 잠금 해제")
+                    Button("잠금 해제", action: unlock)
+                        .captureFocus("secretUnlock", order: 100, action: unlock)
+                        .disabled(model.isUnlocking).worklogHelp("기기 인증으로 Secret 잠금 해제")
                 }
             } else if !model.canEdit(from: .capture) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -50,33 +52,35 @@ import WorkLogCore
                     Text("메인 창의 Secret 화면을 나간 뒤 다시 시도하세요. 초안은 보존됩니다.")
                         .foregroundStyle(.secondary)
                     Button("다시 시도") { prepareEditor() }
+                        .captureFocus("secretRetry", order: 100, action: prepareEditor)
                 }
             } else if phase == .draftChoice {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("저장하지 않은 Secret 초안이 있습니다.")
                     Text("이어서 편집하거나 초안을 버리고 새 항목을 입력하세요.").foregroundStyle(.secondary)
-                    ViewThatFits(in: .horizontal) {
-                        HStack {
-                            Button("이어서 편집") { continueDraft() }
-                            Button("초안 버리고 새 항목", role: .destructive) { confirmsDiscard = true }
-                        }
-                        VStack(alignment: .leading, spacing: 8) {
-                            Button("이어서 편집") { continueDraft() }
-                            Button("초안 버리고 새 항목", role: .destructive) { confirmsDiscard = true }
-                        }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("이어서 편집", action: continueDraft)
+                            .captureFocus("secretContinue", order: 100, action: continueDraft)
+                        Button("초안 버리고 새 항목", role: .destructive) { confirmsDiscard = true }
+                            .captureFocus("secretDiscard", order: 110, action: { confirmsDiscard = true })
                     }
                 }
             } else if phase == .editing {
-                ScrollView {
-                    SecretEditorView(model: model, host: .capture, keyboardMode: .panel, onSave: save,
-                                     onCancel: requestCancel)
-                        .padding(12)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        SecretEditorView(model: model, host: .capture, keyboardMode: .panel, onSave: save,
+                                         onCancel: requestCancel, captureNavigation: navigation)
+                            .padding(12)
+                    }
+                    .onChange(of: navigation.current) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
                 }
             }
             if phase != .editing || model.isLocked || !model.canEdit(from: .capture) {
                 Spacer(minLength: 0)
             }
-            Text("⌘1–3 유형 · ⌃Tab 유형 순환 · Tab 필드 이동 · ⌘Return 저장 · Esc 초안 보존")
+            Text("⌃Tab / ⌃⇧Tab 유형 · Tab / ⇧Tab 이동 · ⌘E 제목 · Esc 초안 보존")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -84,10 +88,13 @@ import WorkLogCore
             isActive = true
             model.tick()
             prepareEditor()
+            focusDefaultControl()
         }
+        .onChange(of: phase) { _, _ in focusDefaultControl() }
         .onChange(of: model.isLocked) { _, locked in
             if locked { phase = .waiting; confirmsDiscard = false; confirmsCancel = false }
             else { prepareEditor() }
+            focusDefaultControl()
         }
         .onChange(of: model.editorOwner) { _, owner in
             if owner != .capture { phase = .waiting; confirmsDiscard = false; confirmsCancel = false }
@@ -103,6 +110,27 @@ import WorkLogCore
             Button("계속 편집", role: .cancel) {}
             Button("변경 버리고 닫기", role: .destructive) { cancelEditing() }
         } message: { Text("저장하지 않은 제목·그룹·행을 버립니다. 초안 보존은 ‘닫기’ 또는 Esc를 사용하세요.") }
+    }
+
+    private func unlock() {
+        guard !model.isUnlocking else { return }
+        Task {
+            await model.unlock()
+            prepareEditor()
+            focusDefaultControl()
+        }
+    }
+
+    private func closePreservingDraft() { leaveEditor(); onCancel() }
+
+    private func focusDefaultControl() {
+        DispatchQueue.main.async {
+            guard isActive, !navigation.keepTabFocus else { return }
+            if model.isLocked { navigation.focus("secretUnlock") }
+            else if !model.canEdit(from: .capture) { navigation.focus("secretRetry") }
+            else if phase == .draftChoice { navigation.focus("secretContinue") }
+            else if phase == .editing { navigation.focus("secretTitle") }
+        }
     }
 
     private func prepareEditor() {

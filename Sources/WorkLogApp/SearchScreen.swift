@@ -13,6 +13,7 @@ import WorkLogCore
     @State private var query = ""
     @State private var recordQuery = ""
     @State private var secretQuery = ""
+    @State private var completedQuery = ""
     @State private var secretTitles: [SecretMetadata] = []
     @State private var secretSearchError: String?
     @State private var selectedResult: SearchResultSelection?
@@ -26,6 +27,8 @@ import WorkLogCore
     @State private var source: SearchHit?
     @State private var sourceBody: String?
     @State private var sourceError: String?
+    @State private var sourceMemoDetail: MemoDetailModel?
+    @State private var sourceTaskDetail: TaskDetailModel?
     @State private var projects: [Project] = []
     @State private var tags: [Tag] = []
     @State private var filterStart: WorkDate?
@@ -39,14 +42,14 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("검색 범위", selection: $scope) {
-                Text(isPanel ? "전체 (⌘1)" : "전체").tag(SearchScope.all)
-                Text(isPanel ? "기록 (⌘2)" : "기록").tag(SearchScope.records)
-                Text(isPanel ? "Secret (⌘3)" : "Secret").tag(SearchScope.secret)
+                Text("전체 (\(scopeModifier)1)").tag(SearchScope.all)
+                Text("기록 (\(scopeModifier)2)").tag(SearchScope.records)
+                Text("Secret (\(scopeModifier)3)").tag(SearchScope.secret)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 320)
-            .worklogHelp(isPanel ? "검색 범위 · ⌘1 전체 · ⌘2 기록 · ⌘3 Secret" : "검색 범위 · Tab으로 포커스한 뒤 화살표로 전환")
+            .frame(maxWidth: 360)
+            .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 Secret · ⌃Tab 다음 범위")
             queryField
             if showsSecretKeys, let secrets {
                 SearchSecretScope(model: secrets, selection: $secretSelection,
@@ -54,12 +57,14 @@ import WorkLogCore
             } else {
                 unifiedResults
             }
+            keyboardHints
         }
         .padding(16)
         .background(WorkLogTheme.canvas)
         .tint(WorkLogTheme.accent)
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
+        .worklogFocusContent { returnToResults() }
         .onChange(of: scope) { previous, current in
             cancelSecretOpening()
             secretSelection.openedId = nil
@@ -74,7 +79,7 @@ import WorkLogCore
             }
             updateSearch()
             validateSelection()
-            focused = true
+            focusQuery()
         }
         .onChange(of: secrets?.isLocked) { _, locked in
             if locked == true { returnToResults() }
@@ -108,16 +113,32 @@ import WorkLogCore
             validateSelection()
         }
         .onChange(of: focusedResult) { _, key in if let key { selectResult(key) } }
+        .onChange(of: filtersExpanded) { _, expanded in
+            if !expanded { focusQuery() }
+        }
         .onDisappear { isActive = false; cancelSecretOpening() }
         .task(id: openingId) { await openSecretSelection() }
         .sheet(isPresented: Binding(get: { source != nil }, set: { if !$0 { source = nil } }), onDismiss: {
-            if sourceOpenedFromQuery { focused = true }
-            else { focusedResult = selectedResult }
+            updateSearch()
+            validateSelection()
+            if sourceOpenedFromQuery || selectedResult == nil { focusQuery() }
+            else { focusResults() }
         }) {
-            SourceRecordSheet(bodyText: sourceBody, error: sourceError, snippet: source?.snippet ?? "",
-                sourceTitle: source.map { sourceLabel($0.sourceType) } ?? "기록",
-                workDate: source?.workDate, onClose: { source = nil })
+            sourceSheet
         }
+    }
+
+    private var scopeModifier: String { isPanel ? "⌘" : "⌃" }
+
+    private var keyboardHints: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(scopeModifier)1–3 범위 · ⌃Tab 다음 범위 · ⌃⇧Tab 이전 범위 · ⌘F 검색어")
+            if !showsSecretKeys {
+                Text("↑↓ 선택 · Tab 결과로 · ⇧Tab 검색어로 · Return 원문 · ⌘E 메모·업무 편집 · ⌘⌥F 필터")
+            }
+        }
+        .font(.caption).foregroundStyle(WorkLogTheme.muted)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var unifiedResults: some View {
@@ -240,6 +261,7 @@ import WorkLogCore
             model.search()
         }
         refreshSecretTitles()
+        completedQuery = query
     }
 
     private func refreshSecretTitles() {
@@ -273,7 +295,30 @@ import WorkLogCore
     private func returnToResults() {
         cancelSecretOpening()
         secretSelection.openedId = nil; secretSelection.selectedRowId = nil
+        focusQuery()
+    }
+
+    private func focusQuery() {
+        focusedResult = nil
         focused = true
+    }
+
+    private func focusResults() {
+        guard let key = selectedResult ?? resultIDs.first else { focusQuery(); return }
+        selectResult(key)
+        focused = false
+        focusedResult = key
+    }
+
+    private func changeScope(to next: SearchScope) {
+        if scope == next { returnToResults() }
+        else { scope = next }
+    }
+
+    private func cycleScope(backwards: Bool) {
+        let scopes: [SearchScope] = [.all, .records, .secret]
+        guard let current = scopes.firstIndex(of: scope) else { return }
+        changeScope(to: scopes[(current + (backwards ? scopes.count - 1 : 1)) % scopes.count])
     }
 
     private func cancelSecretOpening() { openingId = nil; secretNotice = nil }
@@ -335,14 +380,29 @@ import WorkLogCore
     private func handleKey(_ event: NSEvent, editingText: Bool) -> Bool {
         guard source == nil else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if modifiers == .command, event.keyCode == 3 { focused = true; return true }
-        if isPanel, modifiers == .command {
+        if modifiers == .command, event.keyCode == 3 {
+            filtersExpanded = false
+            returnToResults(); return true
+        }
+        if filtersExpanded {
+            if modifiers.isEmpty, event.keyCode == 53 { filtersExpanded = false; return true }
+            return false
+        }
+        if modifiers == .control || (isPanel && modifiers == .command) {
             switch event.keyCode {
-            case 18: scope = .all; return true
-            case 19: scope = .records; return true
-            case 20: scope = .secret; return true
+            case 18: changeScope(to: .all); return true
+            case 19: changeScope(to: .records); return true
+            case 20: changeScope(to: .secret); return true
             default: break
             }
+        }
+        if event.keyCode == 48, modifiers == .control || modifiers == [.control, .shift] {
+            cycleScope(backwards: modifiers.contains(.shift)); return true
+        }
+        if modifiers == [.command, .option], event.keyCode == 3, scope != .secret, !showsSecretKeys {
+            focused = false; focusedResult = nil
+            filtersExpanded = true
+            return true
         }
         if modifiers == .command, event.keyCode == 36 || event.keyCode == 76 {
             guard scope != .secret, !secretSelected else { return false }
@@ -367,9 +427,30 @@ import WorkLogCore
                    let row = secrets.rows.first(where: { $0.id == secretSelection.selectedRowId }) { secrets.copyRow(row) }
                 return true
             }
+            if modifiers == .command, event.keyCode == 14, let onOpenSecrets {
+                if !event.isARepeat { onOpenSecrets() }
+                return true
+            }
             return false
         }
         let navigatingResults = focused || focusedResult != nil
+        if navigatingResults, completedQuery != query,
+           [UInt16(48), 125, 126, 36, 76].contains(event.keyCode)
+            || (modifiers == .command && event.keyCode == 14) {
+            // Return immediately after typing must not open an old debounced result.
+            updateSearch()
+            validateSelection()
+        }
+        if event.keyCode == 48 {
+            if focused, modifiers.isEmpty, !resultIDs.isEmpty { focusResults(); return true }
+            if focusedResult != nil, modifiers == .shift { focusQuery(); return true }
+        }
+        if navigatingResults, modifiers == .command, event.keyCode == 14,
+           case .record(let key) = selectedResult ?? resultIDs.first,
+           let hit = model.hits.first(where: { $0.key == key }), hit.sourceType != .report {
+            if !event.isARepeat { selectResult(.record(key)); openSource(hit, editing: true) }
+            return true
+        }
         if navigatingResults, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
             let ids = resultIDs
             guard !ids.isEmpty else { return true }
@@ -386,7 +467,8 @@ import WorkLogCore
             model.togglePreview(); return true
         }
         if navigatingResults, modifiers.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
-            if !event.isARepeat, let selectedResult {
+            if !event.isARepeat, let selectedResult = selectedResult ?? resultIDs.first {
+                selectResult(selectedResult)
                 switch selectedResult {
                 case .record(let key):
                     if let hit = model.hits.first(where: { $0.key == key }) { openSource(hit) }
@@ -420,7 +502,7 @@ import WorkLogCore
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).focused($focusedResult, equals: key)
+        .buttonStyle(.plain).focusable().focused($focusedResult, equals: key)
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(Text(["Secret", item.title, item.groupName].compactMap { $0 }.joined(separator: ", ")))
@@ -438,8 +520,8 @@ import WorkLogCore
             SearchQueryField(text: $query, isFocused: $focused, allowsAIQuestion: scope != .secret)
                 .frame(minHeight: 22)
                 .accessibilityLabel(scope == .secret ? "Secret 제목 검색" : "원문 검색")
-                .accessibilityHint("↑↓로 기록과 Secret 선택, Return 열기. Secret은 AI로 보내지 않습니다")
-                .worklogHelp("원문 검색", keys: "↑↓ 선택 · ⌥Space 미리보기 · Return 원문")
+                .accessibilityHint("↑↓로 기록과 Secret 선택, Tab으로 결과 이동, Return 열기. Secret은 AI로 보내지 않습니다")
+                .worklogHelp("원문 검색", keys: "↑↓ 선택 · Tab 결과로 · ⌥Space 미리보기 · Return 원문")
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -473,7 +555,7 @@ import WorkLogCore
             }
             .popover(isPresented: $filtersExpanded, arrowEdge: .bottom) { filterPopover }
             .accessibilityValue("\(model.activeFilterCount)개 적용 중")
-            .worklogHelp("유형 · 프로젝트 · 태그 · 기간 필터")
+            .worklogHelp("유형 · 프로젝트 · 태그 · 기간 필터", keys: "⌘⌥F")
             if model.activeFilterCount > 0 {
                 Button("초기화", action: resetFilters).font(.caption)
             }
@@ -500,7 +582,7 @@ import WorkLogCore
             HStack {
                 Text("검색 필터").font(.headline)
                 Spacer()
-                Button("완료") { filtersExpanded = false }
+                Button("완료") { filtersExpanded = false }.keyboardShortcut(.cancelAction)
             }
             Picker("유형", selection: Binding(get: { model.types?.first?.rawValue ?? "all" }, set: {
                 model.types = SearchSourceType(rawValue: $0).map { Set([$0]) }
@@ -591,6 +673,7 @@ import WorkLogCore
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusable()
         .focused($focusedResult, equals: SearchResultSelection.record(hit.key))
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
@@ -686,9 +769,51 @@ import WorkLogCore
         model.search()
     }
 
-    private func openSource(_ hit: SearchHit) {
+    @ViewBuilder private var sourceSheet: some View {
+        if let detail = sourceMemoDetail {
+            MemoDetailScreen(model: detail, onClose: { source = nil }, onSaveBody: { body in
+                guard let memo = detail.memo else { throw WorkLogError.notFound("memo") }
+                _ = try environment.repo.updateMemoBody(id: memo.id, body: body, workDate: memo.workDate)
+                detail.load(id: memo.id)
+                model.search()
+            }, initiallyEditing: true)
+        } else if let detail = sourceTaskDetail {
+            TaskDetailScreen(model: detail, onClose: { source = nil })
+                .buttonStyle(WorkLogButtonStyle())
+                .frame(minWidth: 560, minHeight: 480)
+        } else {
+            SourceRecordSheet(bodyText: sourceBody, error: sourceError, snippet: source?.snippet ?? "",
+                sourceTitle: source.map { sourceLabel($0.sourceType) } ?? "기록",
+                workDate: source?.workDate, onClose: { source = nil },
+                onEdit: source?.sourceType != .report && sourceBody != nil ? editSource : nil)
+        }
+    }
+
+    private func editSource() {
+        guard let hit = source else { return }
+        switch hit.sourceType {
+        case .memo:
+            let detail = MemoDetailModel(environment: environment)
+            detail.load(id: hit.sourceId)
+            sourceMemoDetail = detail
+        case .task, .activity:
+            do {
+                let taskId: String?
+                if hit.sourceType == .task { taskId = hit.sourceId }
+                else { taskId = try hit.taskId ?? environment.repo.activity(id: hit.sourceId)?.taskId }
+                guard let taskId else { sourceError = "업무가 없거나 삭제되었습니다."; return }
+                let detail = TaskDetailModel(environment: environment)
+                detail.load(taskId: taskId)
+                sourceTaskDetail = detail
+            } catch { sourceError = "업무를 불러오지 못했습니다. 다시 시도하세요." }
+        case .report: break
+        }
+    }
+
+    private func openSource(_ hit: SearchHit, editing: Bool = false) {
         sourceOpenedFromQuery = focused
         source = hit; sourceBody = nil; sourceError = nil
+        sourceMemoDetail = nil; sourceTaskDetail = nil
         do {
             switch hit.sourceType {
             case .memo: sourceBody = try environment.repo.memo(id: hit.sourceId)?.body
@@ -701,6 +826,7 @@ import WorkLogCore
             }
             if sourceBody == nil { sourceError = "원문이 없거나 삭제되었습니다. 검색을 새로고침하세요." }
         } catch { sourceError = "원문을 불러오지 못했습니다. 다시 시도하세요." }
+        if editing, sourceBody != nil { editSource() }
     }
 
     private func sourceLabel(_ type: SearchSourceType) -> String {
@@ -724,6 +850,7 @@ import WorkLogCore
     let sourceTitle: String
     let workDate: WorkDate?
     let onClose: () -> Void
+    var onEdit: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -739,6 +866,12 @@ import WorkLogCore
                         .font(.caption).foregroundStyle(WorkLogTheme.muted)
                 }
                 Spacer()
+                if let onEdit {
+                    Button(sourceTitle == "메모" ? "본문 편집" : "업무 관리", action: onEdit)
+                        .buttonStyle(WorkLogButtonStyle())
+                        .keyboardShortcut("e", modifiers: .command)
+                        .worklogHelp(sourceTitle == "메모" ? "저장된 메모 편집" : "업무 상태·진행 기록 관리", keys: "⌘E")
+                }
                 Button("닫기", action: onClose)
                     .buttonStyle(WorkLogButtonStyle())
                     .keyboardShortcut(.cancelAction)
