@@ -15,7 +15,11 @@
       "purpose": "Compile the reviewed macOS app with isolated DEBUG fixture support",
       "before": "Remote test session available",
       "after": "Inspect build exit code",
-      "argv": ["/bin/bash", "scripts/maclab/build-remote.sh", "after"],
+      "argv": [
+        "/bin/bash",
+        "scripts/maclab/build-remote.sh",
+        "after"
+      ],
       "timeout_seconds": 600
     }
   ],
@@ -30,7 +34,14 @@
           "purpose": "Start one fresh synthetic fixture process; never use the normal application data store",
           "before": "After build succeeded and no other UIReview instance is running",
           "after": "Fixture startup pending",
-          "argv": ["/usr/bin/open", "-n", "After.app", "--args", "--ui-test-fixture", "many"],
+          "argv": [
+            "/usr/bin/open",
+            "-n",
+            "After.app",
+            "--args",
+            "--ui-test-fixture",
+            "many"
+          ],
           "timeout_seconds": 30
         },
         {
@@ -56,7 +67,14 @@
           "purpose": "Verify actual launch arguments, numbered tabs, CtrlTab, Cmd0/CmdShift0, Return, CmdE, CmdS, Escape and restored focus without clicking",
           "before": "Fresh many fixture with no existing panels or sheets",
           "after": "Inspect sanitized JSON booleans and stage; any failed assertion exits nonzero",
-          "argv": ["/usr/bin/osascript", "-l", "JavaScript", "scripts/maclab/keyboard-flow.js", "--fixture", "many"],
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/keyboard-flow.js",
+            "--fixture",
+            "many"
+          ],
           "timeout_seconds": 180
         },
         {
@@ -68,16 +86,45 @@
           "after": "Visual evidence retained for focus and layout review"
         },
         {
+          "id": "visible-after-keyboard",
+          "kind": "osascript",
+          "purpose": "Confirm the fixture main window is still available after the keyboard workflow",
+          "before": "Keyboard workflow finished",
+          "after": "GUI boolean recorded",
+          "script": "tell application \"System Events\"\nreturn exists window 1 of process \"WorkLogApp\"\nend tell",
+          "timeout_seconds": 15
+        },
+        {
           "id": "keyboard-flow-assert",
           "kind": "assert",
           "purpose": "Every keyboard-only assertion must pass on the actual Mac",
           "before": "Keyboard helper finished",
           "after": "Regression exit status recorded",
-          "assertion": { "type": "exit_code", "source_step": "keyboard-flow", "equals": 0 }
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "keyboard-flow",
+            "equals": 0
+          }
+        },
+        {
+          "id": "visible-after-keyboard-assert",
+          "kind": "assert",
+          "purpose": "Pair visible GUI evidence with the keyboard helper assertions",
+          "before": "Final visibility query completed",
+          "after": "GUI assertion recorded",
+          "assertion": {
+            "type": "gui_boolean",
+            "source_step": "visible-after-keyboard",
+            "equals": true,
+            "before_screenshot": "before-keyboard",
+            "after_screenshot": "after-keyboard"
+          }
         }
       ]
     }
   ],
   "collect": [],
-  "explore": { "hold_s": 900 }
+  "explore": {
+    "hold_s": 900
+  }
 }
