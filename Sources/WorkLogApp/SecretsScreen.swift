@@ -46,6 +46,7 @@ import WorkLogCore
                     if !model.hasRecoverableDraft { lockedSelection = nil; newAfterUnlock = false }
                 })
                 Button("초안 버리기…", role: .destructive) { confirmsDiscardDraft = true }
+                    .focusable().worklogKeyboardActivation { confirmsDiscardDraft = true }
             }
             GeometryReader { geometry in
                 Group {
@@ -54,6 +55,7 @@ import WorkLogCore
                 } else if geometry.size.width < 700 {
                     VStack(alignment: .leading, spacing: 12) {
                         Button("보관함 목록", systemImage: "list.bullet") { showsTitlePicker.toggle() }
+                            .focusable().worklogKeyboardActivation { showsTitlePicker.toggle() }
                             .popover(isPresented: $showsTitlePicker, arrowEdge: .bottom) {
                                 titleList.padding(12).frame(width: 320, height: 380)
                             }
@@ -99,6 +101,7 @@ import WorkLogCore
             VStack(alignment: .leading, spacing: 12) {
                 ScreenHeader(title: "Secret 휴지통", purpose: "항목과 이전 버전을 함께 복원") {
                     Button("닫기") { showsTrash = false }.worklogHelp("휴지통 닫기")
+                        .focusable().worklogKeyboardActivation { showsTrash = false }
                         .keyboardShortcut(.cancelAction)
                 }
                 SecretTrashList(model: model)
@@ -139,16 +142,22 @@ import WorkLogCore
             .font(.callout).foregroundStyle(WorkLogTheme.muted)
         Button("새 Secret", systemImage: "plus") { requestNew() }
             .focusable()
+            .worklogKeyboardActivation { requestNew() }
             .worklogHelp("새 Secret 입력")
             .disabled(model.isUnlocking || model.hasRecoverableDraft || (!model.isLocked && !model.canEdit(from: .main)))
         Button("휴지통", systemImage: "trash") { showsTrash = true }
             .focusable()
+            .worklogKeyboardActivation { showsTrash = true }
             .worklogHelp("Secret 휴지통 열기")
             .disabled(!canUseEditor)
         if model.isLocked {
-            Button("잠금 해제", systemImage: "lock.open") { unlock() }.disabled(model.isUnlocking).focusable()
+            Button("잠금 해제", systemImage: "lock.open") { unlock() }
+                .focusable().worklogKeyboardActivation { unlock() }
+                .disabled(model.isUnlocking)
         } else {
-            Button("지금 잠금", systemImage: "lock") { model.lock() }.worklogHelp("Secret 보관함 잠금").focusable()
+            Button("지금 잠금", systemImage: "lock") { model.lock() }
+                .focusable().worklogKeyboardActivation { model.lock() }
+                .worklogHelp("Secret 보관함 잠금")
         }
     }
 
@@ -211,6 +220,7 @@ import WorkLogCore
                           title: model.isUnlocking ? "잠금 해제 중…" : "값은 잠겨 있습니다",
                           detail: "기기 인증 한 번으로 값 조회·복사·편집을 사용할 수 있습니다.")
                 Button("잠금 해제") { unlock() }.buttonStyle(.borderedProminent)
+                    .focusable().worklogKeyboardActivation { unlock() }
                     .disabled(model.isUnlocking).worklogHelp("기기 인증으로 Secret 잠금 해제")
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else if !model.canEdit(from: .main) {
@@ -240,6 +250,7 @@ import WorkLogCore
                         SecretViewerTable(model: model, focusRequest: viewerFocusRequest)
                         versionHistory
                         Button("휴지통으로 이동…", role: .destructive) { confirmsTrash = true }
+                            .focusable().worklogKeyboardActivation { confirmsTrash = true }
                             .worklogHelp("항목과 이전 버전을 휴지통으로 이동")
                     }
                 }
@@ -252,12 +263,9 @@ import WorkLogCore
 
     @ViewBuilder private var viewerActions: some View {
         SecretValueVisibilityButton(model: model)
-        Button("편집", systemImage: "pencil") {
-            guard canUseEditor, !hasMarkedText else { return }
-            model.showsValues = false
-            model.beginEditing()
-            titleFocusRequest += 1
-        }.keyboardShortcut("e", modifiers: .command).worklogHelp("Secret 표 편집", keys: "⌘E")
+        Button("편집", systemImage: "pencil") { editSelectedSecret() }
+            .focusable().worklogKeyboardActivation { editSelectedSecret() }
+            .keyboardShortcut("e", modifiers: .command).worklogHelp("Secret 표 편집", keys: "⌘E")
     }
 
     @ViewBuilder private var versionHistory: some View {
@@ -267,6 +275,9 @@ import WorkLogCore
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(model.revisions, id: \.id) { revision in
                         Button("버전 \(revision.version) · \(revision.createdAt.formatted(Date.FormatStyle(date: .numeric, time: .shortened, timeZone: calendar.timeZone)))") {
+                            if canUseEditor { model.selectRevision(revision) }
+                        }
+                        .focusable().worklogKeyboardActivation {
                             if canUseEditor { model.selectRevision(revision) }
                         }
                     }
@@ -282,6 +293,7 @@ import WorkLogCore
                             }
                         }
                         Button("선택한 버전 복원…") { confirmsVersion = true }
+                            .focusable().worklogKeyboardActivation { confirmsVersion = true }
                             .worklogHelp("이전 내용을 새 버전으로 복원")
                     }
                 }.padding(.top, 8)
@@ -290,6 +302,12 @@ import WorkLogCore
     }
 
     private var canOwnEditor: Bool { isActive && !model.isLocked && model.canEdit(from: .main) }
+    private func editSelectedSecret() {
+        guard canUseEditor, !hasMarkedText else { return }
+        model.showsValues = false
+        model.beginEditing()
+        titleFocusRequest += 1
+    }
     private func focusTitleSearch() {
         if usesTitlePopover && hasDetail { showsTitlePicker = true }
         DispatchQueue.main.async { queryFocused = true }
@@ -394,8 +412,11 @@ import WorkLogCore
             if model.isLocked {
                 StateView(kind: model.isUnlocking ? .loading : .empty, title: "휴지통이 잠겨 있습니다",
                           detail: "기기 인증 후 항목을 복원하거나 영구 삭제하세요.")
-                Button("잠금 해제") { Task { await model.unlock(); prepare() } }
+                Button("잠금 해제", action: unlockTrash)
                     .focusable().focused($focusedAction, equals: "unlock")
+                    .worklogKeyboardActivation {
+                        if focusedAction == "unlock" { unlockTrash() }
+                    }
                     .disabled(model.isUnlocking).worklogHelp("Secret 휴지통 잠금 해제")
             } else if !model.canEdit(from: .main) {
                 StateView(kind: .failure, title: "빠른 입력창에서 편집 중입니다", detail: "빠른 입력창을 닫은 뒤 다시 시도하세요.",
@@ -413,9 +434,11 @@ import WorkLogCore
                         HStack {
                             Button("복원") { if canMutate { model.restoreTrash(item.id) } }
                                 .focusable().focused($focusedAction, equals: item.id)
+                                .worklogKeyboardActivation { if canMutate { model.restoreTrash(item.id) } }
                                 .accessibilityLabel(Text("\(item.title) 복원")).worklogHelp("항목과 이전 버전 복원")
                             Button("영구 삭제…", role: .destructive) { purgeId = item.id }
                                 .focusable()
+                                .worklogKeyboardActivation { purgeId = item.id }
                                 .accessibilityLabel(Text("\(item.title) 영구 삭제")).worklogHelp("현재 보관함에서 영구 삭제")
                         }.disabled(!canMutate)
                     }.padding(.vertical, 4)
@@ -447,6 +470,10 @@ import WorkLogCore
     }
 
     private var canMutate: Bool { isActive && !model.isLocked && model.canEdit(from: .main) && !model.hasRecoverableDraft }
+    private func unlockTrash() {
+        guard isActive, model.isLocked, !model.isUnlocking else { return }
+        Task { await model.unlock(); prepare() }
+    }
     private func focusFirstAction() {
         focusedAction = model.isLocked ? "unlock" : model.trashItems.first?.id
     }

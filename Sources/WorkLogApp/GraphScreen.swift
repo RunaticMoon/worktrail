@@ -78,6 +78,7 @@ struct GraphScreen: View {
                         .lineLimit(1).help(model.snapshot.nodes.first(where: { $0.id == focus })?.title ?? "선택한 기록")
                     Spacer(minLength: 8)
                     Button("전체 보기") { model.clearFocus() }.focusable()
+                        .worklogKeyboardActivation { model.clearFocus() }
                 }.font(.callout)
             }
         }
@@ -134,6 +135,7 @@ struct GraphScreen: View {
     private var refreshButton: some View {
         Button { reloadAndFit() } label: { Image(systemName: "arrow.clockwise") }
             .focusable()
+            .worklogKeyboardActivation(reloadAndFit)
             .accessibilityLabel("그래프 새로고침").help("그래프 새로고침")
             .disabled(model.phase == .loading)
     }
@@ -150,6 +152,7 @@ struct GraphScreen: View {
                 Label(message, systemImage: "exclamationmark.triangle")
                     .multilineTextAlignment(.center)
                 Button("다시 시도") { reloadAndFit() }.focusable()
+                    .worklogKeyboardActivation(reloadAndFit)
             }.padding(WorkLogTheme.contentInset).frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded:
             GeometryReader { geometry in
@@ -214,14 +217,18 @@ struct GraphScreen: View {
                 .accessibilityLabel("그래프 이동").help("드래그 대신 메뉴로 그래프 이동")
             Button { changeZoom(by: 1 / 1.25) } label: { Image(systemName: "minus.magnifyingglass") }
                 .focusable()
+                .worklogKeyboardActivation { changeZoom(by: 1 / 1.25) }
                 .disabled(zoom <= 0.35).accessibilityLabel("그래프 축소").help("축소")
             Text("\(Int(effectiveZoom * 100))%")
                 .font(.caption).monospacedDigit().frame(minWidth: 34)
                 .accessibilityLabel("확대율 \(Int(effectiveZoom * 100))퍼센트")
             Button { changeZoom(by: 1.25) } label: { Image(systemName: "plus.magnifyingglass") }
                 .focusable()
+                .worklogKeyboardActivation { changeZoom(by: 1.25) }
                 .disabled(zoom >= 4).accessibilityLabel("그래프 확대").help("확대")
-            Button("맞춤") { fit() }.focusable().help("이동과 확대를 초기화해 전체 그래프를 표시합니다.")
+            Button("맞춤") { fit() }.focusable()
+                .worklogKeyboardActivation(fit)
+                .help("이동과 확대를 초기화해 전체 그래프를 표시합니다.")
         }.fixedSize()
     }
 
@@ -364,6 +371,7 @@ struct GraphScreen: View {
                 if model.selectedNodeID != nil {
                     Button { model.select(nil) } label: { Image(systemName: "xmark.circle") }
                         .focusable()
+                        .worklogKeyboardActivation { model.select(nil) }
                         .buttonStyle(.borderless).accessibilityLabel("노드 선택 해제").help("선택 해제")
                 }
             }.padding(12)
@@ -443,8 +451,10 @@ struct GraphScreen: View {
             HStack {
                 Button("열기", systemImage: "arrow.up.forward.square") { open(node) }
                     .focusable()
+                    .worklogKeyboardActivation { open(node) }
                     .disabled(node.record == nil || node.id.kind == .historicalSource)
                 Button("주변 보기", systemImage: "scope") { model.focusOnSelection() }.focusable()
+                    .worklogKeyboardActivation { model.focusOnSelection() }
             }
             let neighbors = model.neighbors(of: node.id)
             Divider()
@@ -472,7 +482,9 @@ struct GraphScreen: View {
                             Text("당시 원문 개정 \(revision)").font(.caption).foregroundStyle(.secondary)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.plain).focusable().accessibilityHint("연결된 노드 선택")
+                }.buttonStyle(.plain).focusable()
+                    .worklogKeyboardActivation { model.select(item.node.id) }
+                    .accessibilityHint("연결된 노드 선택")
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

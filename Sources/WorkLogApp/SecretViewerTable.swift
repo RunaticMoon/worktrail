@@ -146,15 +146,18 @@ import WorkLogCore
     var host: SecretEditorHost = .main
 
     var body: some View {
-        Button {
-            guard !model.isLocked, model.canEdit(from: host) else { return }
-            model.showsValues.toggle()
-        } label: {
+        Button(action: toggleVisibility) {
             Label(model.showsValues ? "값 가리기" : "값 보기", systemImage: model.showsValues ? "eye.slash" : "eye")
         }
         .buttonStyle(.bordered)
+        .worklogKeyboardActivation(toggleVisibility)
         .worklogHelp(model.showsValues ? "값 가리기" : "값 보기")
         .disabled(model.isLocked || !model.canEdit(from: host) || model.hasRecoverableDraft)
+    }
+
+    private func toggleVisibility() {
+        guard !model.isLocked, model.canEdit(from: host), !model.hasRecoverableDraft else { return }
+        model.showsValues.toggle()
     }
 }
 #endif

@@ -399,7 +399,7 @@ private extension View {
     @MainActor @ViewBuilder func secretControlFocus(_ navigation: CaptureKeyboardNavigation?, _ id: String,
                                                     order: Int, action: @escaping () -> Void) -> some View {
         if navigation != nil { captureFocus(id, order: order, action: action) }
-        else { self.focusable() }
+        else { self.worklogKeyboardActivation(action).focusable() }
     }
 
     /// The panel owns Tab; the main window retains its row-to-row cell shortcuts.

@@ -34,6 +34,7 @@ import WorkLogCore
                 Button(model.completionCheck == nil ? "닫기" : "완료 취소", action: requestClose)
                     .keyboardShortcut(.cancelAction)
                     .focusable()
+                    .worklogKeyboardActivation(requestClose)
             }
             if model.completionCheck != nil {
                 completionConfirmation
@@ -196,10 +197,12 @@ import WorkLogCore
     @ViewBuilder private var completionActions: some View {
         Button("계속 작업") { model.cancelCompletion() }
             .focusable()
+            .worklogKeyboardActivation { model.cancelCompletion() }
             .worklogHelp("전체 완료를 취소하고 작성 중인 내용으로 돌아가기", keys: "Esc")
         Button("남겨두고 Task 전체 완료") { model.complete(confirmRemaining: true) }
             .buttonStyle(.borderedProminent)
             .focusable()
+            .worklogKeyboardActivation { model.complete(confirmRemaining: true) }
     }
 
     @ViewBuilder private func taskStatus(_ detail: TaskDetail) -> some View {
@@ -222,8 +225,10 @@ import WorkLogCore
         Button("진행 기록 추가") { activityFocused = true }
             .buttonStyle(.borderedProminent)
             .focusable().focused($actionsFocused)
+            .worklogKeyboardActivation { activityFocused = true }
         Button("Task 전체 완료") { model.complete() }
             .focusable()
+            .worklogKeyboardActivation { model.complete() }
             .disabled(detail.status == .completed)
             .worklogHelp("Task 전체 완료. 체크리스트·프로젝트 상태는 별도입니다")
     }
@@ -234,12 +239,30 @@ import WorkLogCore
 
     private func statusActions(_ detail: TaskDetail) -> some View {
         HStack(spacing: 8) {
-            if detail.status == .planned { Button("시작") { model.changeStatus(.started) }.focusable() }
-            if detail.status == .inProgress { Button("보류") { model.changeStatus(.paused) }.focusable() }
-            if detail.status == .onHold { Button("재개") { model.changeStatus(.resumed) }.focusable() }
-            if detail.status == .completed { Button("재개") { model.changeStatus(.reopened) }.focusable() }
-            if detail.status == .cancelled { Button("예정으로") { model.changeStatus(.replanned) }.focusable() }
-            if detail.status != .cancelled { Button("Task 취소") { model.changeStatus(.cancelled) }.focusable() }
+            if detail.status == .planned {
+                Button("시작") { model.changeStatus(.started) }.focusable()
+                    .worklogKeyboardActivation { model.changeStatus(.started) }
+            }
+            if detail.status == .inProgress {
+                Button("보류") { model.changeStatus(.paused) }.focusable()
+                    .worklogKeyboardActivation { model.changeStatus(.paused) }
+            }
+            if detail.status == .onHold {
+                Button("재개") { model.changeStatus(.resumed) }.focusable()
+                    .worklogKeyboardActivation { model.changeStatus(.resumed) }
+            }
+            if detail.status == .completed {
+                Button("재개") { model.changeStatus(.reopened) }.focusable()
+                    .worklogKeyboardActivation { model.changeStatus(.reopened) }
+            }
+            if detail.status == .cancelled {
+                Button("예정으로") { model.changeStatus(.replanned) }.focusable()
+                    .worklogKeyboardActivation { model.changeStatus(.replanned) }
+            }
+            if detail.status != .cancelled {
+                Button("Task 취소") { model.changeStatus(.cancelled) }.focusable()
+                    .worklogKeyboardActivation { model.changeStatus(.cancelled) }
+            }
         }
     }
 
@@ -262,7 +285,12 @@ import WorkLogCore
                         if model.asOf == nil {
                             Button("\(project.project.name)에 적용 완료") {
                                 model.changeProjectStatus(projectId: project.project.id, kind: .completed)
-                            }.disabled(project.status == .completed).focusable()
+                            }
+                            .focusable()
+                            .worklogKeyboardActivation {
+                                model.changeProjectStatus(projectId: project.project.id, kind: .completed)
+                            }
+                            .disabled(project.status == .completed)
                             Menu("다른 적용 상태") {
                                 if project.status == .planned { Button("시작") { model.changeProjectStatus(projectId: project.project.id, kind: .started) } }
                                 if project.status == .inProgress { Button("보류") { model.changeProjectStatus(projectId: project.project.id, kind: .paused) } }
@@ -297,6 +325,7 @@ import WorkLogCore
                         }
                     Button("항목 추가") { model.addChecklistItem() }
                         .focusable()
+                        .worklogKeyboardActivation { model.addChecklistItem() }
                         .disabled(model.checklistText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Text("체크리스트를 모두 체크해도 Task 전체 상태는 바뀌지 않습니다.")
@@ -311,6 +340,7 @@ import WorkLogCore
                 HStack(spacing: 12) {
                     Button("진행 기록 추가 ⌘E") { activityFocused = true }
                         .buttonStyle(.plain).font(.headline).focusable()
+                        .worklogKeyboardActivation { activityFocused = true }
                     Spacer(minLength: 8)
                     Picker("범위", selection: $model.activityProjectId) {
                         ForEach(model.activityScopeOptions, id: \.id) { option in

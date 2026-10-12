@@ -152,6 +152,31 @@ function main(args) {
         }
         return false;
     }
+    function trashUnlockFocusReady() {
+        var root = mainWindow(), unlock = labelled(root, '잠금 해제', 'AXButton');
+        if (focusInside(unlock)) return true;
+        var focused = emptyAXRead(appAX, 'AXFocusedUIElement');
+        // SwiftUI can export its focused Button through the content AXGroup.
+        // This is only a precondition: the next Space MUST actually unlock the
+        // fixture, and the final empty-content focus assertion must also pass.
+        if (!unlock || !focused || emptyText(focused, 'AXRole') !== 'AXGroup' ||
+            emptySame(focused, root) || !emptySame(owningWindow(focused), root) ||
+            containsSidebar(focused) || !knownTitle(focused, '휴지통이 잠겨 있습니다')) return false;
+        var isFocused = emptyAXRead(focused, 'AXFocused');
+        if (isFocused === null || !Boolean(ObjC.unwrap(isFocused))) return false;
+        function unlockCount(container) {
+            var count = 0;
+            walk(container, function (node, role) {
+                if (role === 'AXButton' && (emptyText(node, 'AXDescription') === '잠금 해제' ||
+                    emptyText(node, 'AXTitle') === '잠금 해제')) count += 1;
+                return count > 1;
+            }, false);
+            return count;
+        }
+        if (unlockCount(root) !== 1 || unlockCount(focused) !== 1) return false;
+        result.observations.trashUnlockFocusProxyRequiresSpaceConfirmation = true;
+        return true;
+    }
     function front() {
         return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
     }
@@ -243,7 +268,7 @@ function main(args) {
         focusSidebar('휴지통', 'lockedTrashSidebarFocused');
         key(29, ['command down', 'shift down']);
         check('trashUnlockFocused', waitFor(function () {
-            return focusInside(labelled(mainWindow(), '잠금 해제', 'AXButton'));
+            return trashUnlockFocusReady();
         }, 'TRASH_UNLOCK_NOT_FOCUSED'));
         stage = 'empty_trash_fake_unlock';
         key(49); // Fixture-only fake authenticator, verified by actual launch args.

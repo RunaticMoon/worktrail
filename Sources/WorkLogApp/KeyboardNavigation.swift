@@ -26,6 +26,25 @@ extension View {
     func worklogFocusContent(_ action: @escaping () -> Void) -> some View {
         focusedSceneValue(\.worklogFocusContent, action)
     }
+
+    /// SwiftUI focus can live in the hosting view instead of the native button.
+    /// Keep activation available with Full Keyboard Access off as well.
+    func worklogKeyboardActivation(_ action: @escaping () -> Void) -> some View {
+        modifier(WorkLogKeyboardActivation(action: action))
+    }
+}
+
+private struct WorkLogKeyboardActivation: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.onKeyPress(keys: [.return, .space], phases: [.down, .repeat]) { press in
+            guard isEnabled, press.modifiers.isEmpty, !worklogHasMarkedText else { return .ignored }
+            if press.phase == .down { action() }
+            return .handled
+        }
+    }
 }
 
 @MainActor struct WorkLogFocusCommands: Commands {

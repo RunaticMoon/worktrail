@@ -325,7 +325,8 @@ private struct ReportWorkspace: View {
         Button("본문 복사") { copyReport() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
-        Button("편집 ⌘E") { focusContent() }.disabled(!model.canEdit).focusable()
+        Button("편집 ⌘E", action: focusContent)
+            .focusable().worklogKeyboardActivation(focusContent).disabled(!model.canEdit)
         Button("저장") {
             guard !worklogHasMarkedText else { return }
             retryAction = .save; model.saveEdits()
@@ -348,6 +349,7 @@ private struct ReportWorkspace: View {
     @ViewBuilder private var generationActions: some View {
         Button(model.version == nil ? "초안 만들기" : model.regenerateTitle) { generate() }
             .focusable().focused($generateFocused)
+            .worklogKeyboardActivation { generate() }
             .disabled(selectionLocked || model.pendingRegeneration != nil)
             .worklogHelp("기록과 확정 계획으로 새 버전 만들기 · 저장한 수정본과 확정본 보존")
         Button("다시 불러오기") { loadSelection() }.disabled(selectionLocked)

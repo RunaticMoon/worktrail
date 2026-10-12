@@ -62,13 +62,14 @@ struct SettingsScreen: View {
             }.formStyle(.grouped)
             Divider()
             HStack {
-                Button("변경 되돌리기") { model.reset() }.disabled(!model.hasChanges)
+                Button("변경 되돌리기") { model.reset() }.worklogKeyboardActivation { model.reset() }.disabled(!model.hasChanges)
                     .focusable()
                     .worklogHelp("마지막 저장 설정으로 되돌리기")
                 Spacer()
                 Button { onSave(); errorFocused = !model.errors.isEmpty } label: {
                     ShortcutLabel(title: "설정 저장", keys: "⌘S")
                 }
+                .worklogKeyboardActivation { onSave(); errorFocused = !model.errors.isEmpty }
                 .keyboardShortcut("s", modifiers: .command).disabled(!model.hasChanges)
                 .focusable()
                 .worklogHelp("설정 검증 후 저장 · 단축키 적용", keys: "⌘S")
@@ -119,6 +120,7 @@ struct SettingsScreen: View {
                            onBeginRecording: onBeginHotkeyRecording, onEndRecording: onEndHotkeyRecording)
             hotkeyStatus(.search)
             Button("단축키 기본값으로 되돌리기") { model.restoreDefaultHotkeys() }
+                .worklogKeyboardActivation { model.restoreDefaultHotkeys() }
                 .focusable()
                 .worklogHelp("빠른 입력·검색 전역 단축키 기본값 복원 · 설정 저장 후 적용")
             Text("칸을 누른 뒤 원하는 조합을 누르세요. 기본값: 빠른 입력 ⌃⌥Space, 검색 ⌃⌥D. 변경은 ‘설정 저장’ 후 적용됩니다.")
@@ -169,7 +171,8 @@ struct SettingsScreen: View {
                     .foregroundStyle(WorkLogTheme.muted)
                 TextField("Codex 실행 경로 (비우면 자동 탐색)", text: Binding(
                     get: { model.draft.codexExecutablePath ?? "" }, set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }))
-                Button("로그인 상태 확인") { Task { await model.checkAccount() } }.disabled(model.isCheckingAccount)
+                Button("로그인 상태 확인") { Task { await model.checkAccount() } }
+                    .worklogKeyboardActivation { Task { await model.checkAccount() } }.disabled(model.isCheckingAccount)
                     .focusable()
                     .worklogHelp("설치된 Codex의 로그인 상태 확인")
                 if model.isCheckingAccount {
@@ -187,6 +190,7 @@ struct SettingsScreen: View {
                             get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
                             .accessibilityLabel("\(jobTitle(type)) 스킬")
                         Button("프롬프트 편집…") { promptEditor = PromptEditorSelection(job: type) }
+                            .worklogKeyboardActivation { promptEditor = PromptEditorSelection(job: type) }
                             .focusable()
                             .accessibilityLabel("\(jobTitle(type)) 프롬프트 편집")
                             .worklogHelp("\(jobTitle(type)) 지침과 출력 예시 편집")
@@ -225,18 +229,19 @@ struct SettingsScreen: View {
                 Text("백업 위치와 복원 지점은 사이드바의 백업 화면에서 확인하세요.")
                     .foregroundStyle(WorkLogTheme.muted)
                 if let onOpenBackups {
-                    Button("백업·복원 열기", action: onOpenBackups).focusable().worklogHelp("백업 위치와 복원 지점 확인")
+                    Button("백업·복원 열기", action: onOpenBackups).worklogKeyboardActivation(onOpenBackups).focusable().worklogHelp("백업 위치와 복원 지점 확인")
                 }
             }
             TextField("백업 보관 (일, 1~3650)", value: $model.draft.backupRetentionDays, format: .number)
         }
     }
     @ViewBuilder private func backupActions(_ backups: BackupModel) -> some View {
-        Button("지금 백업") { Task { await backups.create() } }.disabled(backups.isBusy)
+        Button("지금 백업") { Task { await backups.create() } }
+            .worklogKeyboardActivation { Task { await backups.create() } }.disabled(backups.isBusy)
             .focusable()
             .worklogHelp("현재 기록·설정과 암호화된 Secret을 백업")
         if let onOpenBackups {
-            Button("복원…", action: onOpenBackups).disabled(backups.isBusy)
+            Button("복원…", action: onOpenBackups).worklogKeyboardActivation(onOpenBackups).disabled(backups.isBusy)
                 .focusable()
                 .worklogHelp("백업 화면에서 복원 지점 선택")
         } else {
