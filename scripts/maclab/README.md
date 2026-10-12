@@ -23,7 +23,7 @@ Maclab의 `mac_test_start`에 아래 `test_name`과 검증 목적을 전달한�
 | `ui-review` | [ui-review.json](../../.maclab/tests/ui-review.json) | Before/After 빌드, `many` 데이터, 날짜 화면 크기별·주요 화면 스크린샷, AX 창/컨트롤 범위 점검 |
 | `ui-flows` | [ui-flows.json](../../.maclab/tests/ui-flows.json) | After 빌드, Memo 핫키 입력·저장·이전 앱 복귀, ⌘N 입력창 회귀 검사 |
 | `ui-edge-cases` | [ui-edge-cases.json](../../.maclab/tests/ui-edge-cases.json) | After 빌드, `empty`·`few`의 세 가지 창 크기와 `many` 화면 비교 |
-| `keyboard-ux` | [keyboard-ux.json](../../.maclab/tests/keyboard-ux.json) | After 빌드, 실제 fixture 실행 인자 검증, 클릭 없는 탭·화면 이동·검색·메모 편집·저장·복귀 |
+| `keyboard-ux` | [keyboard-ux.json](../../.maclab/tests/keyboard-ux.json) | After 빌드, 실제 fixture 실행 인자 검증, 클릭 없는 탭·화면 이동·검색·메모 편집·저장·복귀, 미저장 확인·체크리스트 입력·Secret Tab 순서 |
 
 `ui-review`는 약 960×640, 1280×800, 1440×875pt를 요청한다. 호스트의 화면 작업 영역과 앱 최소 크기에 따라 실제 크기는 달라질 수 있으므로 AX 결과의 실제 frame을 기록한다. 스크린샷 이름만으로 해당 화면이 열렸다고 판단하지 않는다.
 
@@ -45,7 +45,9 @@ open -n After.app --args --ui-test-fixture many
 
 ## 추가 동선 검사
 
-`keyboard-ux`는 `scripts/maclab/keyboard-flow.js --fixture many`를 실행한다. 필요하면 `--action capture|main|search`로 동선을 나눠 실행한다. AX는 상태 확인에만 사용하고 조작은 실제 키 이벤트로 수행한다. 검색 테스트는 고정된 가짜 메모 하나를 수정하므로 반드시 새로운 `many` fixture에서 시작한다. 실제 실행 결과는 run별로 확인하며 스크립트 구문 검사만으로 통과했다고 판단하지 않는다.
+`keyboard-ux`는 `scripts/maclab/keyboard-flow.js --fixture many`와 `keyboard-safety.js --fixture many`를 순서대로 실행한다. 필요하면 `--action capture|main|search`로 동선을 나눠 실행한다. AX는 상태 확인에만 사용하고 조작은 실제 키 이벤트로 수행한다. 검색 테스트는 고정된 가짜 메모 하나를 수정하므로 반드시 새로운 `many` fixture에서 시작한다. 실제 실행 결과는 run별로 확인하며 스크립트 구문 검사만으로 통과했다고 판단하지 않는다.
+
+`keyboard-safety.js`는 `--action checklist|memo|secret`로 분리할 수 있다. 체크리스트의 Space·좌우 커서 입력, 메모 CmdW 확인·Esc 계속 편집·CmdD 버리기 후 원문 보존, Secret의 순방향·역방향 Tab과 빈 행 추가·삭제를 검사한다. Secret 값은 읽지 않고 저장 버튼은 포커스만 확인한다. SwiftUI의 목록 AX 프록시가 서로 다르면 같은 창의 유일한 AXScrollArea 역할·라벨·식별자로 포커스를 대조하고 JSON에 보정 사용을 기록한다.
 
 JXA는 **파일 경로로 실행한다**. 특히 `capture-search-flow.js`는 16KB를 넘으므로 실행 도구에 전체 내용을 `osascript -e`로 전달하지 않는다. Maclab `exec`에는 아래 명령을 각각 argv 배열로 전달한다.
 

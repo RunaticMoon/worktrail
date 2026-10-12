@@ -78,6 +78,22 @@
           "timeout_seconds": 180
         },
         {
+          "id": "keyboard-safety",
+          "kind": "exec",
+          "purpose": "Verify checklist cursor typing, unsaved memo close protection and Secret tab order without saving Secret data",
+          "before": "Keyboard workflow closed its panel",
+          "after": "Inspect sanitized safety assertions; failures exit nonzero",
+          "argv": [
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "scripts/maclab/keyboard-safety.js",
+            "--fixture",
+            "many"
+          ],
+          "timeout_seconds": 180
+        },
+        {
           "id": "after-keyboard",
           "kind": "screenshot",
           "target": "screen",
@@ -103,6 +119,18 @@
           "assertion": {
             "type": "exit_code",
             "source_step": "keyboard-flow",
+            "equals": 0
+          }
+        },
+        {
+          "id": "keyboard-safety-assert",
+          "kind": "assert",
+          "purpose": "Require actual safety and Secret keyboard assertions to pass",
+          "before": "Safety helper finished",
+          "after": "Safety regression result recorded",
+          "assertion": {
+            "type": "exit_code",
+            "source_step": "keyboard-safety",
             "equals": 0
           }
         },

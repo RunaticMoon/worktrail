@@ -104,11 +104,41 @@ function run(args) {
         var attached = keyboardArray(keyboardAXRead(root, 'AXSheets'));
         return attached[0] || walk(root, function (_, role) { return role === 'AXSheet'; }, true);
     }
+    function owningWindow(node) {
+        var window = keyboardAXRead(node, 'AXWindow');
+        if (window) return window;
+        for (var depth = 0; node && depth < 35; depth += 1) {
+            if (keyboardText(node, 'AXRole') === 'AXWindow') return node;
+            node = keyboardAXRead(node, 'AXParent');
+        }
+        return null;
+    }
+    function sameFocusedScrollArea(focused, target) {
+        // SwiftUI can export different AX proxies for its focus owner and its
+        // tree node. Match only a uniquely labelled scroll area in the SAME
+        // native window; never infer focus from selection or appearance.
+        if (keyboardText(focused, 'AXRole') !== 'AXScrollArea' ||
+            keyboardText(target, 'AXRole') !== 'AXScrollArea') return false;
+        var label = keyboardLabel(target);
+        if (!label || keyboardLabel(focused) !== label) return false;
+        var focusedWindow = owningWindow(focused), targetWindow = owningWindow(target);
+        if (!keyboardSame(focusedWindow, targetWindow)) return false;
+        var focusedID = keyboardText(focused, 'AXIdentifier'), targetID = keyboardText(target, 'AXIdentifier');
+        if (focusedID && targetID && focusedID !== targetID) return false;
+        var matches = 0;
+        walk(targetWindow, function (node, role) {
+            if (role === 'AXScrollArea' && keyboardLabel(node) === label) matches += 1;
+            return matches > 1;
+        }, false);
+        if (matches !== 1) return false;
+        result.observations.scrollFocusProxyMatchedByUniqueLabelAndWindow = true;
+        return true;
+    }
     function focusInside(root) {
         if (!root) return false;
         var focused = keyboardAXRead(appAX, 'AXFocusedUIElement');
         for (var depth = 0; focused && depth < 35; depth += 1) {
-            if (keyboardSame(focused, root)) return true;
+            if (keyboardSame(focused, root) || sameFocusedScrollArea(focused, root)) return true;
             focused = keyboardAXRead(focused, 'AXParent');
         }
         var value = keyboardAXRead(root, 'AXFocused');
@@ -179,7 +209,9 @@ function run(args) {
     function mainFlow() {
         stage = 'main_numbered_screens';
         key(19, ['command down']);
-        waitFor(function () { return labelled(mainWindow(), '업무 목록'); }, 'COMMAND_2_TASKS_FAILED');
+        // The keyboard focus owner is an AXScrollArea; SwiftUI may export a
+        // different tree proxy. focusInside checks its unique label and window.
+        waitFor(function () { return labelled(mainWindow(), '업무 목록', 'AXScrollArea'); }, 'COMMAND_2_TASKS_FAILED');
         key(20, ['command down']);
         waitFor(function () { return labelled(mainWindow(), '프로젝트 목록'); }, 'COMMAND_3_PROJECTS_FAILED');
         key(18, ['command down']);
@@ -188,20 +220,20 @@ function run(args) {
         check('mainNumberedScreens', true);
         stage = 'main_content_focus';
         key(19, ['command down']);
-        waitFor(function () { return labelled(mainWindow(), '업무 목록'); }, 'TASK_LIST_MISSING');
+        waitFor(function () { return labelled(mainWindow(), '업무 목록', 'AXScrollArea'); }, 'TASK_LIST_MISSING');
         key(29, ['command down']);
         check('mainSidebarFocus', waitFor(function () {
             return focusInside(labelled(mainWindow(), '사이드바')) || focusInside(labelled(mainWindow(), '업무', 'AXButton'));
         }, 'COMMAND_0_SIDEBAR_NOT_FOCUSED'));
         key(29, ['command down', 'shift down']);
-        check('mainContentFocus', waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록')); }, 'COMMAND_SHIFT_0_CONTENT_NOT_FOCUSED'));
+        check('mainContentFocus', waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록', 'AXScrollArea')); }, 'COMMAND_SHIFT_0_CONTENT_NOT_FOCUSED'));
         stage = 'main_task_roundtrip';
         key(125);
         key(36);
         waitFor(function () { return sheet(mainWindow()); }, 'TASK_DETAIL_NOT_OPENED');
         key(53);
         waitFor(function () { return !sheet(mainWindow()); }, 'TASK_DETAIL_NOT_CLOSED');
-        check('taskFocusRestored', waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록')); }, 'TASK_LIST_FOCUS_NOT_RESTORED'));
+        check('taskFocusRestored', waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록', 'AXScrollArea')); }, 'TASK_LIST_FOCUS_NOT_RESTORED'));
         stage = 'main_day_tabs';
         key(18, ['command down']);
         key(18, ['command down', 'option down']);

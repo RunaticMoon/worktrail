@@ -335,6 +335,7 @@ struct SectionDisclosure<Content: View>: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
+            .accessibilityValue(Text(isExpanded ? "펼침" : "접힘"))
         }
         .focusable().focused($headerFocused)
         .onKeyPress(keys: [.return, .space, .leftArrow, .rightArrow], phases: .down) { press in
@@ -346,7 +347,6 @@ struct SectionDisclosure<Content: View>: View {
             else { isExpanded.toggle() }
             return .handled
         }
-        .accessibilityValue(Text(isExpanded ? "펼침" : "접힘"))
         .worklogAnimation(.easeInOut(duration: 0.16), value: isExpanded)
     }
 }

@@ -13,15 +13,26 @@ import WorkLogCore
     @State private var showsProjectTasks = false
     @FocusState private var projectsFocused: Bool
     @FocusState private var tasksFocused: Bool
+    @FocusState private var fallbackFocused: Bool
+
+    private var needsFallbackFocus: Bool { model.errorMessage != nil || model.projects.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ScreenHeader(title: "프로젝트", purpose: "전체 업무 상태와 프로젝트별 적용 상태를 구분합니다")
             if let error = model.errorMessage {
                 RecoveryNotice(failed: error, preserved: "저장된 프로젝트와 업무는 그대로입니다.", retry: { model.load() })
+                    .focusable().focused($fallbackFocused)
             } else if model.projects.isEmpty {
                 StateView(kind: .empty, title: "아직 프로젝트가 없습니다", detail: "빠른 입력에서 프로젝트를 만들고 업무에 연결하세요.",
                     actionTitle: "기록 추가 ⌘N", action: onCapture)
+                    .focusable().focused($fallbackFocused)
+                    .onKeyPress(keys: [.return, .space], phases: .down) { press in
+                        guard fallbackFocused, press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
+                        onCapture()
+                        return .handled
+                    }
+                    .accessibilityHint("Return 또는 Space로 기록 추가")
             } else {
                 GeometryReader { geometry in
                     Group {
@@ -141,11 +152,19 @@ import WorkLogCore
     private func focusProjectList() {
         showsProjectTasks = false
         tasksFocused = false
+        if needsFallbackFocus {
+            projectsFocused = false
+            DispatchQueue.main.async { fallbackFocused = true }
+            return
+        }
+        fallbackFocused = false
         if model.selectedProjectId == nil { model.select(model.projects.first?.id) }
         DispatchQueue.main.async { projectsFocused = true }
     }
 
     private func focusProjectTasks() {
+        guard !needsFallbackFocus else { focusProjectList(); return }
+        fallbackFocused = false
         guard model.selectedProjectId != nil else { focusProjectList(); return }
         showsProjectTasks = true
         projectsFocused = false
