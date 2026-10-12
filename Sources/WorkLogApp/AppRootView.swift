@@ -244,7 +244,7 @@ struct AppRootView: View {
             Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .worklogHelp("새로고침").accessibilityLabel("새로고침")
             Button { openWindow(id: "keyboard-shortcuts") } label: { Image(systemName: "keyboard") }
-                .worklogHelp("키보드 단축키", keys: "⌘⇧/").accessibilityLabel("키보드 단축키")
+                .worklogHelp("키보드 단축키", keys: "⌘⌥K").accessibilityLabel("키보드 단축키")
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
     }

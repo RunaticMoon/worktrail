@@ -55,7 +55,7 @@ extension View {
         }
         CommandGroup(replacing: .help) {
             Button("키보드 단축키") { openWindow(id: "keyboard-shortcuts") }
-                .keyboardShortcut("/", modifiers: [.command, .shift])
+                .keyboardShortcut("k", modifiers: [.command, .option])
         }
     }
 }

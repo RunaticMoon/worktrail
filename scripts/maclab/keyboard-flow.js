@@ -47,7 +47,9 @@ function keyboardSame(a, b) { return Boolean(a && b && $.CFEqual(a, b)); }
 function run(args) {
     var stage = 'fixture_guard', appAX, reviewPID, running, events, entryMethod;
     var started = Number($.NSProcessInfo.processInfo.systemUptime);
-    var result = { ok: false, tests: {}, observations: { keyboardOnly: true, fixtureMemoChanged: false } };
+    var result = { ok: false, tests: {}, observations: {
+        keyboardOnly: true, fixtureMemoChanged: false, foregroundUsesSystemEvents: true
+    } };
     function fail(code) { var error = new Error(code); error.keyboardCode = code; throw error; }
     function need(value, code) { if (!value) fail(code); }
     function check(name, value) { result.tests[name] = Boolean(value); need(value, 'ASSERTION_' + name); }
@@ -146,11 +148,20 @@ function run(args) {
         var value = keyboardAXRead(root, 'AXFocused');
         return value !== null && Boolean(ObjC.unwrap(value));
     }
+    function foregroundProcess() {
+        // NSWorkspace can retain a stale frontmostApplication in a synchronous
+        // JXA run without its notification run loop. Each Apple event asks the
+        // window server's current System Events process state instead.
+        var foreground = events.processes.whose({ frontmost: true })();
+        return foreground.length === 1 ? foreground[0] : null;
+    }
     function front() {
-        return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
+        var process = foregroundProcess();
+        return process !== null && Number(process.unixId()) === reviewPID;
     }
     function frontBundle() {
-        return keyboardString($.NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier);
+        var process = foregroundProcess();
+        return process !== null ? String(process.bundleIdentifier()) : '';
     }
     function key(code, modifiers) {
         deadline();

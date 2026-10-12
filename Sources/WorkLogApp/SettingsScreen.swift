@@ -137,7 +137,7 @@ struct SettingsScreen: View {
                 shortcutRow("목록 선택 / 열기", keys: "↑↓ / Return")
                 shortcutRow("메모 편집 / 업무 진행 기록", keys: "⌘E")
                 shortcutRow("업무 이름 검색", keys: "⌘⌥F")
-                shortcutRow("전체 단축키 도움말", keys: "⌘⇧/")
+                shortcutRow("전체 단축키 도움말", keys: "⌘⌥K")
                 shortcutRow("입력 저장 / 검색 AI 답변", keys: "⌘↩")
                 shortcutRow("본문·설정 저장", keys: "⌘S")
                 shortcutRow("후보·시트·패널 닫기", keys: "Esc")

@@ -280,7 +280,7 @@ function run(args) {
         pasteKnown(changed);
         waitFor(function () { return editor() && keyboardText(editor(), 'AXValue') === changed; }, 'MEMO_DRAFT_NOT_CHANGED');
         stage = 'memo_dirty_help_window';
-        key(44, ['command down', 'shift down']);
+        key(40, ['command down', 'option down']);
         waitFor(function () {
             return windowNamed('키보드 단축키') &&
                 keyboardText(keyboardAXRead(appAX, 'AXFocusedWindow'), 'AXTitle') === '키보드 단축키';
