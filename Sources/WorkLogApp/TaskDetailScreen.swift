@@ -12,9 +12,15 @@ import WorkLogCore
     @State private var checklistExpanded = false
     @State private var evidenceExpanded = false
     @State private var activitiesExpanded = true
+    @State private var confirmsDiscardInput = false
+    @State private var resumeChecklistAfterClose = false
     @FocusState private var activityFocused: Bool
     @FocusState private var checklistFocused: Bool
     @FocusState private var actionsFocused: Bool
+
+    private var hasUnsavedInput: Bool {
+        !model.activityText.isEmpty || !model.checklistText.isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -25,11 +31,8 @@ import WorkLogCore
                         .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
                 }
                 Spacer(minLength: 0)
-                Button(model.completionCheck == nil ? "닫기" : "완료 취소") {
-                    guard !hasMarkedText else { return }
-                    if model.completionCheck != nil { model.cancelCompletion() }
-                    else { onClose() }
-                }.keyboardShortcut(.cancelAction)
+                Button(model.completionCheck == nil ? "닫기" : "완료 취소", action: requestClose)
+                    .keyboardShortcut(.cancelAction)
                     .focusable()
             }
             if model.completionCheck != nil {
@@ -78,37 +81,80 @@ import WorkLogCore
                     }
                 } else {
                     StateView(kind: model.errorMessage == nil ? .empty : .failure, title: "업무를 불러올 수 없습니다",
-                              detail: "목록으로 돌아가 업무를 다시 선택하세요.", actionTitle: "목록으로", action: onClose)
+                              detail: "목록으로 돌아가 업무를 다시 선택하세요.", actionTitle: "목록으로", action: requestClose)
                 }
             }
         }
         .padding(WorkLogTheme.contentInset)
-        .background(WorkLogKeyHandler { event in
-            guard model.asOf == nil, model.completionCheck == nil else { return false }
-            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            if modifiers == .command, event.keyCode == 14 {
-                if !event.isARepeat { activityFocused = true }
-                return true
+        .interactiveDismissDisabled(hasUnsavedInput)
+        .background(WorkLogKeyHandler(handle: handleKey))
+        .alert("업무 입력을 버리고 닫을까요?", isPresented: $confirmsDiscardInput) {
+            Button("계속 편집", role: .cancel, action: resumeEditing)
+                .keyboardShortcut(.cancelAction)
+            Button("입력 버리고 닫기", role: .destructive, action: discardInputAndClose)
+                .keyboardShortcut("d", modifiers: .command)
+        } message: {
+            Text("저장하지 않은 진행 기록 또는 추가하지 않은 체크리스트 입력이 있습니다. 계속 편집하여 각각 저장하거나 입력을 버린 뒤 닫으세요.")
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers == .command, event.keyCode == 13 {
+            if !event.isARepeat { requestClose() }
+            return true
+        }
+        guard model.asOf == nil, model.completionCheck == nil else { return false }
+        if modifiers == .command, event.keyCode == 14 {
+            if !event.isARepeat { activityFocused = true }
+            return true
+        }
+        if modifiers == .command, event.keyCode == 37 {
+            if !event.isARepeat { activityFocused = false; actionsFocused = true }
+            return true
+        }
+        if activityFocused, event.keyCode == 48, modifiers.isEmpty || modifiers == .shift {
+            // Leave the multiline editor without inserting an invisible tab.
+            activityFocused = false
+            actionsFocused = true
+            return true
+        }
+        if modifiers == [.command, .shift], event.keyCode == 38 {
+            if !event.isARepeat {
+                checklistExpanded = true
+                DispatchQueue.main.async { checklistFocused = true }
             }
-            if modifiers == .command, event.keyCode == 37 {
-                if !event.isARepeat { activityFocused = false; actionsFocused = true }
-                return true
-            }
-            if activityFocused, event.keyCode == 48, modifiers.isEmpty || modifiers == .shift {
-                // Leave the multiline editor without inserting an invisible tab.
-                activityFocused = false
-                actionsFocused = true
-                return true
-            }
-            if modifiers == [.command, .shift], event.keyCode == 38 {
-                if !event.isARepeat {
-                    checklistExpanded = true
-                    DispatchQueue.main.async { checklistFocused = true }
-                }
-                return true
-            }
-            return false
-        })
+            return true
+        }
+        return false
+    }
+
+    private func requestClose() {
+        guard !hasMarkedText else { return }
+        if model.completionCheck != nil {
+            model.cancelCompletion()
+        } else if hasUnsavedInput {
+            resumeChecklistAfterClose = checklistFocused || (model.activityText.isEmpty && !model.checklistText.isEmpty)
+            confirmsDiscardInput = true
+        } else {
+            onClose()
+        }
+    }
+
+    private func resumeEditing() {
+        guard model.asOf == nil, model.detail != nil else { return }
+        if resumeChecklistAfterClose { checklistExpanded = true }
+        DispatchQueue.main.async {
+            if resumeChecklistAfterClose { checklistFocused = true }
+            else { activityFocused = true }
+        }
+    }
+
+    private func discardInputAndClose() {
+        guard !hasMarkedText else { return }
+        model.activityText = ""
+        model.checklistText = ""
+        onClose()
     }
 
     private var completionConfirmation: some View {

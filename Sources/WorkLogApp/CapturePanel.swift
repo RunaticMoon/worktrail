@@ -287,7 +287,6 @@ extension View {
         guard attachedSheet == nil else { super.sendEvent(event); return }
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        let isTypeShortcut = modifiers == [.command] && [18, 19, 20].contains(event.keyCode)
         // Every custom shortcut defers to marked text, including Option-number and Command-Left.
         if hasMarkedText {
             forwardingIME = true
@@ -299,26 +298,7 @@ extension View {
         if navigation?.isPopoverPresented == true { super.sendEvent(event); return }
         if let editor = firstResponder as? CaptureNSTextView,
            editor.handleCandidateKey(event) { return }
-        if isTypeShortcut {
-            if !event.isARepeat {
-                navigation?.keepTabFocus = false
-                switch event.keyCode {
-                case 18: onSelectTab?(.memo)
-                case 19: onSelectTab?(.task)
-                default: onSelectTab?(.secret)
-                }
-            }
-            return
-        }
-        let controlTab = event.keyCode == 48 && (modifiers == [.control] || modifiers == [.control, .shift])
-        let commandBracket = modifiers == [.command, .shift] && [33, 30].contains(event.keyCode)
-        if controlTab || commandBracket {
-            if !event.isARepeat {
-                navigation?.keepTabFocus = false
-                onCycleTab?(commandBracket ? event.keyCode == 33 : modifiers.contains(.shift))
-            }
-            return
-        }
+        if handleTabShortcut(event) { return }
         if modifiers == [.command], event.keyCode == 37, let onTaskSearch = navigation?.onTaskSearch {
             if !event.isARepeat { onTaskSearch() }
             return
@@ -369,6 +349,41 @@ extension View {
             // SecretCaptureView -> SecretEditorView owns the save callback and guards.
         }
         super.sendEvent(event)
+    }
+
+    // SwiftUI button focus can consume Command key equivalents before sendEvent.
+    // Resolve only this panel's tab chords before forwarding to the hosting view.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isKeyWindow, isVisible, handleTabShortcut(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private func handleTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, attachedSheet == nil,
+              navigation?.isPopoverPresented != true else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let numbered = modifiers == .command && [18, 19, 20].contains(event.keyCode)
+        let controlTab = event.keyCode == 48 && (modifiers == .control || modifiers == [.control, .shift])
+        let commandBracket = modifiers == [.command, .shift] && [33, 30].contains(event.keyCode)
+        guard numbered || controlTab || commandBracket else { return false }
+        if hasMarkedText {
+            forwardingIME = true
+            defer { forwardingIME = false }
+            firstResponder?.keyDown(with: event)
+            return true
+        }
+        guard isSaving?() != true, !event.isARepeat else { return true }
+        navigation?.keepTabFocus = false
+        if numbered {
+            switch event.keyCode {
+            case 18: onSelectTab?(.memo)
+            case 19: onSelectTab?(.task)
+            default: onSelectTab?(.secret)
+            }
+        } else {
+            onCycleTab?(commandBracket ? event.keyCode == 33 : modifiers.contains(.shift))
+        }
+        return true
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -633,7 +648,7 @@ extension View {
         let select = { navigation.keepTabFocus = false; session.select(kind) }
         return Button(action: select) {
             HStack(spacing: 6) {
-                Label(title, systemImage: symbol)
+                Label(title, systemImage: symbol).fixedSize()
                 Keycap(kind == .memo ? "⌘1" : kind == .task ? "⌘2" : "⌘3")
                     .accessibilityHidden(true)
                 if hasDraft {

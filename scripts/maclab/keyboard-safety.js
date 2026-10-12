@@ -4,8 +4,9 @@
  * Optional: --action checklist|memo|secret (default all).
  * Start exactly one fresh After.app --args --ui-test-fixture many, with no panel
  * or sheet. The actual target PID's launch arguments are checked first.
- * Checklist input is cleared without saving. Memo changes are discarded and the
- * stored original is rechecked. Secret uses fake authentication, creates/removes
+ * Checklist and Memo dirty-close confirmations preserve input on Escape and
+ * discard only on Command-D. Help-window navigation cannot replace a dirty
+ * Memo's underlying screen. Secret uses fake authentication, creates/removes
  * one blank unsaved row, and focuses Save without activating it. No Secret field
  * values are read. Run secret in each desired caller-configured window size.
  * No clicks, AX writes, original text, clipboard text or Secret values in output.
@@ -73,7 +74,7 @@ function run(args) {
     function mainWindow() {
         return windows().filter(function (node) {
             return keyboardText(node, 'AXSubrole') === 'AXStandardWindow' &&
-                ['빠른 입력', 'WorkLog 검색'].indexOf(keyboardText(node, 'AXTitle')) < 0;
+                ['빠른 입력', 'WorkLog 검색', '키보드 단축키'].indexOf(keyboardText(node, 'AXTitle')) < 0;
         })[0] || null;
     }
     function walk(root, visit, includeSheets) {
@@ -205,11 +206,27 @@ function run(args) {
             var current = detailField();
             return current && focusInside(current) && keyboardText(current, 'AXValue') === 'KeyboardSafetyX Y';
         }, 'CHECKLIST_RIGHT_INTERCEPTED'));
-        stage = 'checklist_close_without_save';
-        key(0, ['command down']); key(51);
-        waitFor(function () { return keyboardText(detailField(), 'AXValue') === ''; }, 'CHECKLIST_DRAFT_NOT_CLEARED');
+        stage = 'checklist_command_w_unsaved_alert';
+        key(13, ['command down']);
+        check('taskCommandWShowsUnsavedAlert', waitFor(taskUnsavedAlert, 'TASK_COMMAND_W_BYPASSED_UNSAVED_ALERT'));
         key(53);
-        waitFor(function () { return !sheet(mainWindow()); }, 'CHECKLIST_DETAIL_NOT_CLOSED');
+        waitFor(function () { return !taskUnsavedAlert() && detailField() && focusInside(detailField()); }, 'TASK_ESCAPE_DID_NOT_CONTINUE_EDITING');
+        check('taskEscapeKeepsChecklistDraft', keyboardText(detailField(), 'AXValue') === 'KeyboardSafetyX Y');
+        stage = 'checklist_explicit_discard';
+        key(13, ['command down']);
+        waitFor(taskUnsavedAlert, 'TASK_SECOND_COMMAND_W_ALERT_MISSING');
+        key(2, ['command down']);
+        waitFor(function () { return !sheet(mainWindow()) && !taskUnsavedAlert(); }, 'TASK_COMMAND_D_DID_NOT_DISCARD');
+        check('taskCommandDClosesDiscardedDraft', true);
+        stage = 'checklist_reopen_after_discard';
+        waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록', 'AXScrollArea')); }, 'TASK_LIST_NOT_RESTORED_AFTER_DISCARD');
+        key(36);
+        waitFor(function () { return sheet(mainWindow()); }, 'TASK_REOPEN_AFTER_DISCARD_FAILED');
+        key(38, ['command down', 'shift down']);
+        field = waitFor(detailField, 'CHECKLIST_REOPEN_AFTER_DISCARD_FAILED');
+        check('taskChecklistDraftClearedByExplicitDiscard', keyboardText(field, 'AXValue') === '');
+        key(53);
+        waitFor(function () { return !sheet(mainWindow()); }, 'CLEAN_TASK_DETAIL_NOT_CLOSED');
         check('checklistClosedWithoutSubmitting', true);
     }
     function findInWindows(label, role) {
@@ -229,11 +246,20 @@ function run(args) {
     function unsavedAlert() {
         return findInWindows('계속 편집', 'AXButton') && findInWindows('수정 버리고 닫기', 'AXButton');
     }
+    function taskUnsavedAlert() {
+        return findInWindows('계속 편집', 'AXButton') && findInWindows('입력 버리고 닫기', 'AXButton');
+    }
     function editor() { return labelled(sheet(windowNamed('WorkLog 검색')), '메모 본문 편집', 'AXTextArea', true); }
     function fixtureBody(number) {
         return '검증 메모 ' + number + ' · 업무 도중 빠르게 기록한 내용\n첫 번째 관찰: 검색 결과와 원문을 바로 연결할 수 있어야 합니다.\n두 번째 관찰: 화면 크기가 달라도 긴 한국어 문장이 잘리지 않아야 합니다.';
     }
     function memoFlow() {
+        stage = 'memo_underlying_day_screen';
+        // Start on a different route so Cmd2 from Help cannot pass accidentally
+        // just because the main window was already showing the task list.
+        key(18, ['command down']);
+        key(18, ['command down', 'option down']);
+        waitFor(function () { return labelled(mainWindow(), '활동 기록 목록', 'AXScrollArea'); }, 'MEMO_UNDERLYING_DAY_NOT_READY');
         stage = 'memo_search_open';
         key(3, ['command down']);
         var query = waitFor(function () { return labelled(windowNamed('WorkLog 검색'), '원문 검색', 'AXTextField'); }, 'SEARCH_NOT_OPENED');
@@ -253,6 +279,23 @@ function run(args) {
         var changed = original + '\nKeyboard safety discard check.';
         pasteKnown(changed);
         waitFor(function () { return editor() && keyboardText(editor(), 'AXValue') === changed; }, 'MEMO_DRAFT_NOT_CHANGED');
+        stage = 'memo_dirty_help_window';
+        key(44, ['command down', 'shift down']);
+        waitFor(function () {
+            return windowNamed('키보드 단축키') &&
+                keyboardText(keyboardAXRead(appAX, 'AXFocusedWindow'), 'AXTitle') === '키보드 단축키';
+        }, 'HELP_WINDOW_NOT_KEY');
+        check('memoDirtyHelpWindowOpens', true);
+        key(19, ['command down']);
+        delay(0.4);
+        check('memoHelpBlocksMainNavigation', Boolean(
+            labelled(mainWindow(), '활동 기록 목록', 'AXScrollArea') &&
+            !labelled(mainWindow(), '업무 목록', 'AXScrollArea') &&
+            editor() && keyboardText(editor(), 'AXValue') === changed));
+        key(53);
+        waitFor(function () { return !windowNamed('키보드 단축키'); }, 'HELP_ESCAPE_DID_NOT_CLOSE');
+        check('memoDraftPreservedAfterHelp', Boolean(editor()) && keyboardText(editor(), 'AXValue') === changed);
+        check('memoFocusRestoredAfterHelp', waitFor(function () { return editor() && focusInside(editor()); }, 'MEMO_FOCUS_NOT_RESTORED_AFTER_HELP'));
         stage = 'memo_command_w_unsaved_alert';
         key(13, ['command down']);
         check('memoCommandWShowsUnsavedAlert', waitFor(unsavedAlert, 'COMMAND_W_BYPASSED_UNSAVED_ALERT'));
@@ -361,6 +404,7 @@ function run(args) {
         $.AXUIElementSetMessagingTimeout(appAX, 0.6);
         need(mainWindow(), 'REVIEW_MAIN_WINDOW_MISSING');
         need(!windowNamed('빠른 입력') && !windowNamed('WorkLog 검색'), 'CLOSE_EXISTING_PANELS_FIRST');
+        need(!windowNamed('키보드 단축키'), 'CLOSE_EXISTING_HELP_FIRST');
         windows().forEach(function (window) { need(!sheet(window), 'CLOSE_EXISTING_SHEET_FIRST'); });
         events = Application('System Events');
         activateMain();

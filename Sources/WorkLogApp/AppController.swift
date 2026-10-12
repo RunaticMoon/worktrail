@@ -114,6 +114,7 @@ import WorkLogCore
     func navigate(to route: SidebarRoute) {
         guard let window = NSApp.keyWindow, !(window is NSPanel),
               window.attachedSheet == nil, window.sheetParent == nil,
+              !NSApp.windows.contains(where: { $0.isVisible && ($0.attachedSheet != nil || $0.sheetParent != nil) }),
               selectedTaskId == nil, selectedMemoId == nil, !worklogHasMarkedText else { return }
         self.route = route
     }
@@ -304,7 +305,11 @@ import WorkLogCore
             })
         observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
             object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.isPanelKeyWindow = false }
+                // A previous window can resign after the panel becomes key.
+                // Resolve the current key window after the notification sequence.
+                DispatchQueue.main.async { [weak self] in
+                    self?.isPanelKeyWindow = NSApp.keyWindow is NSPanel
+                }
             })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
             object: nil, queue: .main) { [weak self] _ in

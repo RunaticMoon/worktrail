@@ -1,7 +1,9 @@
 /*
  * Keyboard-only regression for a fresh, isolated DEBUG UIReview fixture.
  *   osascript -l JavaScript scripts/maclab/keyboard-flow.js --fixture many
- * Optional: --action capture|main|search (default all).
+ * Optional: --action capture|main|search (default all), --entry global|command
+ * (default command). Global opens from verified foreground TextEdit using the
+ * fixture's Ctrl+Option+Space / Ctrl+Option+D shortcuts.
  * Start exactly one After.app --args --ui-test-fixture many, with no open panel
  * or sheet. The actual target PID's launch arguments are checked before AX reads
  * or input. Native AX is read-only; all UI interaction uses System Events keys.
@@ -43,7 +45,7 @@ function keyboardLabel(node) {
 function keyboardSame(a, b) { return Boolean(a && b && $.CFEqual(a, b)); }
 
 function run(args) {
-    var stage = 'fixture_guard', appAX, reviewPID, running, events;
+    var stage = 'fixture_guard', appAX, reviewPID, running, events, entryMethod;
     var started = Number($.NSProcessInfo.processInfo.systemUptime);
     var result = { ok: false, tests: {}, observations: { keyboardOnly: true, fixtureMemoChanged: false } };
     function fail(code) { var error = new Error(code); error.keyboardCode = code; throw error; }
@@ -147,6 +149,9 @@ function run(args) {
     function front() {
         return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
     }
+    function frontBundle() {
+        return keyboardString($.NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier);
+    }
     function key(code, modifiers) {
         deadline();
         need(front(), 'REVIEW_LOST_FOREGROUND');
@@ -164,6 +169,20 @@ function run(args) {
         waitFor(function () { return front() && mainWindow(); }, 'MAIN_WINDOW_NOT_ACTIVE');
         delay(0.2);
     }
+    function openPanel(title, commandCode, globalCode) {
+        if (entryMethod === 'global') {
+            Application('TextEdit').activate();
+            waitFor(function () { return frontBundle() === 'com.apple.TextEdit'; }, 'TEXTEDIT_NOT_FOREGROUND');
+            deadline();
+            need(frontBundle() === 'com.apple.TextEdit', 'TEXTEDIT_LOST_FOREGROUND');
+            // This fixed global-hotkey event is the only permitted exception to
+            // key()'s UIReview foreground guard. No typing goes to TextEdit.
+            events.keyCode(globalCode, { using: ['control down', 'option down'] });
+        } else {
+            key(commandCode, ['command down']);
+        }
+        waitFor(function () { return front() && windowNamed(title); }, 'PANEL_NOT_OPENED_IN_REVIEW_FOREGROUND');
+    }
     function selectedCaptureTab(title) {
         var node = labelled(windowNamed('빠른 입력'), title, 'AXButton');
         return node && keyboardText(node, 'AXValue') === '선택됨';
@@ -171,24 +190,40 @@ function run(args) {
     function expectTab(title, code) {
         waitFor(function () { return selectedCaptureTab(title); }, code);
     }
+    function expectSecretUnlockFocus() {
+        return waitFor(function () {
+            return focusInside(labelled(windowNamed('빠른 입력'), '잠금 해제', 'AXButton'));
+        }, 'SECRET_UNLOCK_NOT_FOCUSED_BEFORE_TAB_SHORTCUT');
+    }
     function captureFlow() {
-        stage = 'capture_command_n';
-        key(45, ['command down']);
+        stage = entryMethod === 'global' ? 'capture_global_hotkey' : 'capture_command_n';
+        openPanel('빠른 입력', 45, 49);
+        check('captureEntryForegroundVerified', true);
         var body = waitFor(function () {
             return labelled(windowNamed('빠른 입력'), '메모 본문', 'AXTextArea');
         }, 'CAPTURE_MEMO_NOT_OPENED');
         need(keyboardText(body, 'AXValue') === '', 'NONEMPTY_CAPTURE_DRAFT_ABORTED');
         check('captureMemoFocused', waitFor(function () { return focusInside(body); }, 'MEMO_NOT_FOCUSED'));
-        stage = 'capture_numbered_tabs';
-        key(19, ['command down']); expectTab('업무', 'COMMAND_2_TASK_TAB_FAILED');
-        key(20, ['command down']); expectTab('Secret', 'COMMAND_3_SECRET_TAB_FAILED');
-        key(18, ['command down']); expectTab('메모', 'COMMAND_1_MEMO_TAB_FAILED');
+        for (var round = 1; round <= 3; round += 1) {
+            stage = 'capture_numbered_tabs_round_' + round;
+            key(19, ['command down']); expectTab('업무', 'COMMAND_2_TASK_TAB_FAILED');
+            check('captureTaskNativeFocusRound' + round, waitFor(function () {
+                return focusInside(labelled(windowNamed('빠른 입력'), '업무 검색 또는 새 업무 이름', 'AXTextField'));
+            }, 'TASK_NATIVE_SEARCH_NOT_FOCUSED'));
+            key(20, ['command down']); expectTab('Secret', 'COMMAND_3_SECRET_TAB_FAILED');
+            check('captureSecretUnlockFocusRound' + round, expectSecretUnlockFocus());
+            key(18, ['command down']); expectTab('메모', 'COMMAND_1_MEMO_TAB_FAILED');
+            check('captureMemoNativeFocusRound' + round, waitFor(function () {
+                return focusInside(labelled(windowNamed('빠른 입력'), '메모 본문', 'AXTextArea'));
+            }, 'MEMO_NATIVE_EDITOR_NOT_FOCUSED'));
+        }
         check('captureNumberedTabs', true);
         stage = 'capture_tab_cycle';
         key(48, ['control down']); expectTab('업무', 'CONTROL_TAB_TASK_FAILED');
         key(48, ['control down']); expectTab('Secret', 'CONTROL_TAB_SECRET_FAILED');
         key(48, ['control down']); expectTab('메모', 'CONTROL_TAB_WRAP_FAILED');
         key(48, ['control down', 'shift down']); expectTab('Secret', 'REVERSE_TAB_WRAP_FAILED');
+        expectSecretUnlockFocus();
         key(18, ['command down']); expectTab('메모', 'RETURN_TO_MEMO_FAILED');
         body = waitFor(function () { return labelled(windowNamed('빠른 입력'), '메모 본문', 'AXTextArea'); }, 'MEMO_BODY_MISSING');
         check('captureTabCycle', true);
@@ -263,8 +298,9 @@ function run(args) {
     }
     function editor() { return labelled(sheet(windowNamed('WorkLog 검색')), '메모 본문 편집', 'AXTextArea', true); }
     function searchFlow() {
-        stage = 'search_command_f';
-        key(3, ['command down']);
+        stage = entryMethod === 'global' ? 'search_global_hotkey' : 'search_command_f';
+        openPanel('WorkLog 검색', 3, 2);
+        check('searchEntryForegroundVerified', true);
         var opened = waitFor(function () { var state = searchSnapshot(); return state.queryNode ? state : null; }, 'SEARCH_PANEL_NOT_OPENED');
         need(opened.query === '' || opened.query === KEYBOARD_QUERY, 'UNEXPECTED_SEARCH_QUERY_ABORTED');
         check('searchQueryFocused', waitFor(function () { return focusInside(opened.queryNode); }, 'SEARCH_QUERY_NOT_FOCUSED'));
@@ -320,6 +356,9 @@ function run(args) {
         need(option('--fixture', '') === 'many', 'REQUIRE_EXPLICIT_MANY_FIXTURE');
         var action = option('--action', 'all');
         need(['all', 'capture', 'main', 'search'].indexOf(action) >= 0, 'INVALID_ACTION');
+        entryMethod = option('--entry', 'command');
+        need(['global', 'command'].indexOf(entryMethod) >= 0, 'INVALID_ENTRY_METHOD');
+        result.entryMethod = entryMethod;
         var apps = keyboardArray($.NSWorkspace.sharedWorkspace.runningApplications).filter(function (app) {
             return keyboardString(app.bundleIdentifier) === KEYBOARD_BUNDLE;
         });
