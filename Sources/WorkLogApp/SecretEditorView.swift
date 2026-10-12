@@ -125,39 +125,39 @@ import WorkLogCore
     private var editorRows: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach($model.rows) { $row in
+                ForEach(model.rows.map(\.id), id: \.self) { rowID in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .top, spacing: 8) {
-                            TextField("key", text: $row.key).frame(width: 132)
-                                .accessibilityLabel("행 \(row.order + 1) key")
-                                .modifier(fieldFocus(.key(row.id), id: "secretKey:\(row.id)", order: rowFocusOrder(row.id)))
-                                .secretCellNavigation(keyboardMode) { moveCell(from: .key(row.id), backwards: $0.modifiers.contains(.shift)) }
+                            TextField("key", text: rowText(rowID, \.key)).frame(width: 132)
+                                .accessibilityLabel("행 \(rowNumber(rowID)) key")
+                                .modifier(fieldFocus(.key(rowID), id: "secretKey:\(rowID)", order: rowFocusOrder(rowID)))
+                                .secretCellNavigation(keyboardMode) { moveCell(from: .key(rowID), backwards: $0.modifiers.contains(.shift)) }
                             Group {
                                 if model.showsValues && model.canEdit(from: host) {
-                                    TextField("값", text: $row.value, axis: .vertical).lineLimit(1...6)
-                                        .accessibilityLabel("행 \(row.order + 1) 값")
+                                    TextField("값", text: rowText(rowID, \.value), axis: .vertical).lineLimit(1...6)
+                                        .accessibilityLabel("행 \(rowNumber(rowID)) 값")
                                 } else {
-                                    SecureField("값", text: $row.value).accessibilityLabel("가려진 값")
-                                        .accessibilityHint("행 \(row.order + 1) 값 편집")
+                                    SecureField("값", text: rowText(rowID, \.value)).accessibilityLabel("가려진 값")
+                                        .accessibilityHint("행 \(rowNumber(rowID)) 값 편집")
                                 }
                             }
-                            .modifier(fieldFocus(.value(row.id), id: "secretValue:\(row.id)", order: rowFocusOrder(row.id) + 1))
-                            .secretCellNavigation(keyboardMode) { moveCell(from: .value(row.id), backwards: $0.modifiers.contains(.shift)) }
-                            Button { removeRow(row.id) } label: { Image(systemName: "minus.circle") }
-                                .accessibilityLabel("행 \(row.order + 1) 삭제")
-                                .secretControlFocus(captureNavigation, "secretDelete:\(row.id)", order: rowFocusOrder(row.id) + 2,
-                                                    action: { removeRow(row.id) })
+                            .modifier(fieldFocus(.value(rowID), id: "secretValue:\(rowID)", order: rowFocusOrder(rowID) + 1))
+                            .secretCellNavigation(keyboardMode) { moveCell(from: .value(rowID), backwards: $0.modifiers.contains(.shift)) }
+                            Button { removeRow(rowID) } label: { Image(systemName: "minus.circle") }
+                                .accessibilityLabel("행 \(rowNumber(rowID)) 삭제")
+                                .secretControlFocus(captureNavigation, "secretDelete:\(rowID)", order: rowFocusOrder(rowID) + 2,
+                                                    action: { removeRow(rowID) })
                                 .worklogHelp("현재 행 삭제 · 저장하면 이전 버전에서 복원 가능", keys: "⌘⇧⌫")
                         }.frame(minHeight: 34)
-                        if model.duplicateRowIds.contains(row.id) {
+                        if model.duplicateRowIds.contains(rowID) {
                             Label("중복 key · 수정 후 저장하세요", systemImage: "exclamationmark.circle")
                                 .font(.callout).foregroundStyle(WorkLogTheme.text)
                         }
-                        if model.maskedRowIds.contains(row.id) {
+                        if model.maskedRowIds.contains(rowID) {
                             Label("가림 문자만 있는 값은 저장하지 않습니다 · 실제 값을 입력하세요", systemImage: "exclamationmark.triangle")
                                 .font(.callout).foregroundStyle(WorkLogTheme.text)
                         }
-                    }.padding(.vertical, 3).id(row.id)
+                    }.padding(.vertical, 3).id(rowID)
                     Divider()
                 }
             }
@@ -203,22 +203,22 @@ import WorkLogCore
                 ForEach(model.preview.indices, id: \.self) { index in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            TextField("자동 key", text: $model.preview[index].input.key).frame(maxWidth: 180)
+                            TextField("자동 key", text: previewText(index, \.key)).frame(maxWidth: 180)
                                 .accessibilityLabel("미리보기 행 \(index + 1) key")
                                 .modifier(fieldFocus(.previewKey(index), id: "secretPreviewKey:\(index)", order: rowControlsOrder + 5 + index * 2))
                             Group {
                                 if model.showsValues && model.canEdit(from: host) {
-                                    TextField("값", text: $model.preview[index].input.value, axis: .vertical)
+                                    TextField("값", text: previewText(index, \.value), axis: .vertical)
                                         .accessibilityLabel("미리보기 행 \(index + 1) 값")
                                 } else {
-                                    SecureField("가려진 값", text: $model.preview[index].input.value)
+                                    SecureField("가려진 값", text: previewText(index, \.value))
                                         .accessibilityLabel("가려진 값")
                                         .accessibilityHint("미리보기 행 \(index + 1) 값 편집")
                                 }
                             }
                             .modifier(fieldFocus(.previewValue(index), id: "secretPreviewValue:\(index)", order: rowControlsOrder + 6 + index * 2))
                         }
-                        if model.preview[index].ambiguous {
+                        if model.preview.indices.contains(index), model.preview[index].ambiguous {
                             Label("구분이 모호해 원문 전체를 값으로 보존했습니다. 확인하세요.", systemImage: "exclamationmark.circle")
                                 .font(.caption)
                         }
@@ -284,6 +284,32 @@ import WorkLogCore
 
     private var rowControlsOrder: Int { 300 + model.rows.count * 3 }
     private var actionControlsOrder: Int { rowControlsOrder + 8 + model.preview.count * 2 }
+    private func rowNumber(_ id: String) -> Int {
+        (model.rows.first { $0.id == id }?.order ?? 0) + 1
+    }
+    /// SwiftUI may read or finish editing a removed field after a row deletion
+    /// or panel dismissal. Resolve the current row by identity on every access;
+    /// never retain a collection-index binding or resurrect a deleted row.
+    private func rowText(_ id: String, _ keyPath: WritableKeyPath<SecretRow, String>) -> Binding<String> {
+        Binding(get: {
+            guard canEdit, let row = model.rows.first(where: { $0.id == id }) else { return "" }
+            return row[keyPath: keyPath]
+        }, set: { value in
+            guard canEdit, let index = model.rows.firstIndex(where: { $0.id == id }) else { return }
+            model.rows[index][keyPath: keyPath] = value
+        })
+    }
+    /// Applying or canceling a paste clears the preview before its native text
+    /// fields are necessarily detached. Late accesses must tolerate that clear.
+    private func previewText(_ index: Int, _ keyPath: WritableKeyPath<SecretRowInput, String>) -> Binding<String> {
+        Binding(get: {
+            guard canEdit, model.preview.indices.contains(index) else { return "" }
+            return model.preview[index].input[keyPath: keyPath]
+        }, set: { value in
+            guard canEdit, model.preview.indices.contains(index) else { return }
+            model.preview[index].input[keyPath: keyPath] = value
+        })
+    }
     private func rowFocusOrder(_ id: String) -> Int {
         300 + (model.rows.firstIndex { $0.id == id } ?? 0) * 3
     }

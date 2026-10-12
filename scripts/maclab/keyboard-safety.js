@@ -148,6 +148,11 @@ function run(args) {
     function front() {
         return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === reviewPID;
     }
+    function originalFixtureAlive() {
+        var live = keyboardArray($.NSRunningApplication.runningApplicationsWithBundleIdentifier(KEYBOARD_BUNDLE));
+        return live.length === 1 && Number(live[0].processIdentifier) === reviewPID &&
+            !Boolean(live[0].isTerminated);
+    }
     function key(code, modifiers) {
         deadline();
         need(front(), 'REVIEW_LOST_FOREGROUND');
@@ -296,6 +301,18 @@ function run(args) {
         waitFor(function () { return !windowNamed('키보드 단축키'); }, 'HELP_ESCAPE_DID_NOT_CLOSE');
         check('memoDraftPreservedAfterHelp', Boolean(editor()) && keyboardText(editor(), 'AXValue') === changed);
         check('memoFocusRestoredAfterHelp', waitFor(function () { return editor() && focusInside(editor()); }, 'MEMO_FOCUS_NOT_RESTORED_AFTER_HELP'));
+        stage = 'memo_dirty_help_reopen';
+        key(40, ['command down', 'option down']);
+        check('memoHelpReopens', waitFor(function () {
+            return windowNamed('키보드 단축키') &&
+                keyboardText(keyboardAXRead(appAX, 'AXFocusedWindow'), 'AXTitle') === '키보드 단축키';
+        }, 'HELP_WINDOW_DID_NOT_REOPEN'));
+        key(13, ['command down']);
+        waitFor(function () { return !windowNamed('키보드 단축키'); }, 'HELP_COMMAND_W_DID_NOT_CLOSE');
+        check('memoFocusRestoredAfterHelpCommandW', waitFor(function () {
+            return !unsavedAlert() && editor() && focusInside(editor());
+        }, 'MEMO_FOCUS_NOT_RESTORED_AFTER_HELP_COMMAND_W'));
+        check('memoDraftPreservedAfterHelpCommandW', Boolean(editor()) && keyboardText(editor(), 'AXValue') === changed);
         stage = 'memo_command_w_unsaved_alert';
         key(13, ['command down']);
         check('memoCommandWShowsUnsavedAlert', waitFor(unsavedAlert, 'COMMAND_W_BYPASSED_UNSAVED_ALERT'));
@@ -376,6 +393,12 @@ function run(args) {
         expectFocus(function () { return captureControl('행 1 key', 'AXTextField'); }, 'SECRET_KEY_CLEANUP_FOCUS_FAILED');
         key(51, ['command down', 'shift down']);
         waitFor(function () { return !captureControl('행 1 key'); }, 'EMPTY_SECRET_ROW_NOT_REMOVED');
+        // A missing AX row can also mean the process crashed during an async
+        // SwiftUI update. Keep the original fixture alive before sending Escape.
+        stage = 'secret_blank_row_survival';
+        delay(0.4);
+        check('secretFixtureSurvivesBlankRowRemoval', originalFixtureAlive() &&
+            Boolean(mainWindow()) && Boolean(windowNamed('빠른 입력')));
         key(53);
         waitFor(function () { return !windowNamed('빠른 입력'); }, 'EMPTY_SECRET_CAPTURE_NOT_CLOSED');
         check('secretClosedWithoutSaving', true);
@@ -411,6 +434,9 @@ function run(args) {
         if (action === 'all' || action === 'checklist') checklistFlow();
         if (action === 'all' || action === 'memo') memoFlow();
         if (action === 'all' || action === 'secret') secretFlow();
+        stage = 'fixture_survival_after_workflow';
+        delay(1);
+        check('originalFixtureSurvivesWorkflow', originalFixtureAlive() && Boolean(mainWindow()));
         result.ok = true;
         result.stage = 'complete';
         return JSON.stringify(result);

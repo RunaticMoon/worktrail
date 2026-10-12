@@ -204,16 +204,15 @@
         {
           "id": "launch-empty",
           "kind": "exec",
-          "purpose": "Open fresh empty synthetic data",
-          "before": "Previous step completed",
+          "purpose": "Open fresh empty synthetic data only when no UIReview process remains",
+          "before": "Verify the exact UIReview bundle has zero running processes",
           "after": "Inspect captured result",
           "argv": [
-            "/usr/bin/open",
-            "-n",
-            "After.app",
-            "--args",
-            "--ui-test-fixture",
-            "empty"
+            "/usr/bin/osascript",
+            "-l",
+            "JavaScript",
+            "-e",
+            "ObjC.import('AppKit');if(Number($.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.worklog.UIReview').count)!==0)throw Error('FIXTURE_ALREADY_RUNNING');const task=$.NSTask.alloc.init;task.launchPath='/usr/bin/open';task.arguments=$(['-n','After.app','--args','--ui-test-fixture','empty']);task.currentDirectoryPath=$.NSFileManager.defaultManager.currentDirectoryPath;task.launch;task.waitUntilExit;if(Number(task.terminationStatus)!==0)throw Error('EMPTY_FIXTURE_OPEN_FAILED');"
           ],
           "timeout_seconds": 30
         },

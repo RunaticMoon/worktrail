@@ -54,8 +54,85 @@ extension View {
             .disabled(focusContent == nil || !canMoveFocus)
         }
         CommandGroup(replacing: .help) {
-            Button("키보드 단축키") { openWindow(id: "keyboard-shortcuts") }
+            Button("키보드 단축키") { KeyboardHelpFocusRestoration.shared.open(using: openWindow) }
                 .keyboardShortcut("k", modifiers: [.command, .option])
+        }
+    }
+}
+
+/// Help is a separate window, so AppKit does not always restore the originating
+/// sheet's text editor when it closes. Keep only weak references to that context.
+@MainActor final class KeyboardHelpFocusRestoration {
+    static let shared = KeyboardHelpFocusRestoration()
+    private weak var originWindow: NSWindow?
+    private weak var originResponder: NSResponder?
+    private weak var helpWindow: NSWindow?
+    private var closeObserver: NSObjectProtocol?
+    private var request = 0
+
+    func open(using openWindow: OpenWindowAction) {
+        request += 1
+        if let window = NSApp.keyWindow, window !== helpWindow {
+            var origin = window
+            while let sheet = origin.attachedSheet, sheet.isVisible { origin = sheet }
+            originWindow = origin
+            if let editor = origin.firstResponder as? NSTextView, editor.isFieldEditor,
+               let field = editor.delegate as? NSView {
+                // A shared field editor can detach on focus loss; restore its control.
+                originResponder = field
+            } else {
+                originResponder = origin.firstResponder
+            }
+        }
+        openWindow(id: "keyboard-shortcuts")
+    }
+
+    fileprivate func observe(_ window: NSWindow) {
+        guard helpWindow !== window || closeObserver == nil else { return }
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        helpWindow = window
+        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+            object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.helpWillClose() }
+            }
+    }
+
+    private func helpWillClose() {
+        // SwiftUI can reopen this same NSWindow without moving its hosting view.
+        // Keep its observer until observe(_:) attaches to a different window.
+        let currentRequest = request
+        // Wait only for this close event to finish; never reactivate the app or
+        // retain a closed editor while the user switches to another application.
+        DispatchQueue.main.async { [weak self, weak window = originWindow, weak responder = originResponder] in
+            guard let self, self.request == currentRequest else { return }
+            self.originWindow = nil
+            self.originResponder = nil
+            guard NSApp.isActive, let window, window.isVisible else { return }
+            var parent = window
+            while let sheetParent = parent.sheetParent { parent = sheetParent }
+            guard parent.isVisible else { return }
+            parent.makeKeyAndOrderFront(nil)
+            var destination = window
+            while let sheet = destination.attachedSheet, sheet.isVisible { destination = sheet }
+            destination.makeKeyAndOrderFront(nil)
+            // A newly presented sheet takes precedence over the old responder.
+            guard destination === window, let responder else { return }
+            if let view = responder as? NSView {
+                guard view.window === destination, !view.isHiddenOrHasHiddenAncestor else { return }
+            }
+            destination.makeFirstResponder(responder)
+        }
+    }
+}
+
+@MainActor private struct KeyboardHelpWindowObserver: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowView { WindowView() }
+    func updateNSView(_ view: WindowView, context: Context) {}
+
+    final class WindowView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { KeyboardHelpFocusRestoration.shared.observe(window) }
         }
     }
 }
@@ -161,6 +238,7 @@ struct KeyboardShortcutsView: View {
         }
         .padding(20)
         .frame(minWidth: 620, idealWidth: 680, minHeight: 480, idealHeight: 720)
+        .background(KeyboardHelpWindowObserver())
     }
 
     private func shortcuts(_ title: String, rows: [(String, String)]) -> some View {

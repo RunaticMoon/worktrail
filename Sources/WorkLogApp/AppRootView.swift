@@ -243,7 +243,7 @@ struct AppRootView: View {
                 .worklogHelp("검색 패널 열기", keys: "⌘F")
             Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .worklogHelp("새로고침").accessibilityLabel("새로고침")
-            Button { openWindow(id: "keyboard-shortcuts") } label: { Image(systemName: "keyboard") }
+            Button { KeyboardHelpFocusRestoration.shared.open(using: openWindow) } label: { Image(systemName: "keyboard") }
                 .worklogHelp("키보드 단축키", keys: "⌘⌥K").accessibilityLabel("키보드 단축키")
         }
         .padding(.horizontal, 16).padding(.vertical, 8)

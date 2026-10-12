@@ -96,8 +96,10 @@ function main(args) {
         // a text/secure field's AXValue is never requested.
         return walk(root, function (node, role) {
             if (role === 'AXTextField' || role === 'AXTextArea') return false;
-            return emptyLabel(node).indexOf(title) >= 0 ||
-                (role === 'AXStaticText' && emptyText(node, 'AXValue') === title);
+            if (emptyLabel(node).indexOf(title) >= 0) return true;
+            if (role !== 'AXStaticText') return false;
+            var value = emptyText(node, 'AXValue');
+            return value === title || value.indexOf(title + ', ') === 0;
         }, false);
     }
     function containsSidebar(root) {
