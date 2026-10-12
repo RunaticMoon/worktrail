@@ -4,7 +4,8 @@
  * Optional: --action checklist|memo|secret (default all).
  * Start exactly one fresh After.app --args --ui-test-fixture many, with no panel
  * or sheet. The actual target PID's launch arguments are checked first.
- * Checklist and Memo dirty-close confirmations preserve input on Escape and
+ * Task primary-action buttons activate with Space and Return. Checklist and
+ * Memo dirty-close confirmations preserve input on Escape and
  * discard only on Command-D. Help-window navigation cannot replace a dirty
  * Memo's underlying screen. Secret uses fake authentication, creates/removes
  * one blank unsaved row, and focuses Save without activating it. No Secret field
@@ -178,6 +179,7 @@ function run(args) {
         key(9, ['command down']);
     }
     function detailField() { return labelled(sheet(mainWindow()), '새 체크리스트 항목', 'AXTextField', true); }
+    function activityField() { return labelled(sheet(mainWindow()), '진행 기록 내용', 'AXTextArea', true); }
     function checklistFlow() {
         stage = 'checklist_open';
         key(19, ['command down']);
@@ -187,6 +189,22 @@ function run(args) {
         waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록', 'AXScrollArea')); }, 'TASK_LIST_NOT_FOCUSED');
         key(36);
         waitFor(function () { return sheet(mainWindow()); }, 'TASK_DETAIL_NOT_OPENED');
+        stage = 'task_primary_action_space';
+        waitFor(activityField, 'TASK_ACTIVITY_FIELD_MISSING');
+        key(37, ['command down']);
+        waitFor(function () { return !focusInside(activityField()); }, 'TASK_PRIMARY_ACTION_NOT_FOCUSED_FOR_SPACE');
+        key(49);
+        check('taskPrimaryActionSpaceFocusesActivity', waitFor(function () {
+            return focusInside(activityField());
+        }, 'TASK_PRIMARY_ACTION_SPACE_DID_NOT_ACTIVATE'));
+        stage = 'task_primary_action_return';
+        key(37, ['command down']);
+        waitFor(function () { return !focusInside(activityField()); }, 'TASK_PRIMARY_ACTION_NOT_FOCUSED_FOR_RETURN');
+        key(36);
+        check('taskPrimaryActionReturnFocusesActivity', waitFor(function () {
+            return focusInside(activityField());
+        }, 'TASK_PRIMARY_ACTION_RETURN_DID_NOT_ACTIVATE'));
+        stage = 'checklist_open_field';
         key(38, ['command down', 'shift down']);
         var field = waitFor(detailField, 'CHECKLIST_FIELD_NOT_OPENED');
         waitFor(function () { return focusInside(field); }, 'CHECKLIST_FIELD_NOT_FOCUSED');
