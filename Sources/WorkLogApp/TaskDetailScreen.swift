@@ -306,7 +306,7 @@ import WorkLogCore
                             }.focusable()
                         }
                     } else {
-                        Text("업무 전체 상태로 관리 · \(detail.status.koreanLabel)")
+                        Text("업무 전체 상태로 관리 · \(detail.status?.koreanLabel ?? "상태 없음")")
                             .font(.callout).foregroundStyle(WorkLogTheme.muted)
                     }
                 }.padding(.top, 8)
