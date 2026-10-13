@@ -30,7 +30,7 @@ struct HotkeyRecorder: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             Text(title)
-                .padding(.top, 7)
+                .frame(height: 28, alignment: .center)
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
                 HotkeyRecorderButton(
@@ -38,7 +38,7 @@ struct HotkeyRecorder: View {
                     display: binding?.displayString ?? rawValue,
                     onRecord: onRecord, onBegin: onBeginRecording, onEnd: onEndRecording
                 )
-                .frame(width: 184, height: 32)
+                .frame(width: 148, height: 28)
                 .background(WorkLogTheme.rowHover, in: RoundedRectangle(cornerRadius: 6))
                 .overlay {
                     if recorder.isRecording {
@@ -55,6 +55,7 @@ struct HotkeyRecorder: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .frame(width: 148, alignment: .trailing)
         }
         .onDisappear { recorder.finish() }
     }

@@ -277,6 +277,11 @@ import WorkLogCore
     private func projectStatuses(_ detail: TaskDetail) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if detail.projects.isEmpty { Text("연결된 프로젝트가 없습니다.").foregroundStyle(WorkLogTheme.muted) }
+            if detail.projects.contains(where: { $0.link.trackingEnabled }) {
+                Text("각 프로젝트에서 이 업무가 어디까지 진행됐는지 기록합니다. 프로젝트를 완료해도 업무 전체나 다른 프로젝트의 상태는 바뀌지 않습니다.")
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(detail.projects, id: \.link.id) { project in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(project.project.name).font(.headline)
@@ -300,7 +305,10 @@ import WorkLogCore
                                 if project.status != .cancelled { Button("적용 취소") { model.changeProjectStatus(projectId: project.project.id, kind: .cancelled) } }
                             }.focusable()
                         }
-                    } else { Text("전체 상태 따름").font(.callout).foregroundStyle(WorkLogTheme.muted) }
+                    } else {
+                        Text("업무 전체 상태로 관리 · \(detail.status.koreanLabel)")
+                            .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    }
                 }.padding(.top, 8)
             }
         }

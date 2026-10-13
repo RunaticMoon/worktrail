@@ -229,11 +229,12 @@ struct SettingsScreen: View {
 
     private var shortcutsSection: some View {
         VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 hotkeyRow(.capture, title: "빠른 입력", value: model.draft.captureHotkey, field: .capture)
                 Divider()
                 hotkeyRow(.search, title: "검색", value: model.draft.searchHotkey, field: .search)
             }
+            .frame(maxWidth: 420, alignment: .leading)
             Button("단축키 기본값으로 되돌리기") { model.restoreDefaultHotkeys() }
                 .worklogKeyboardActivation { model.restoreDefaultHotkeys() }
                 .focusable().worklogHelp("빠른 입력·검색 전역 단축키 기본값 복원 · 저장 후 적용")
@@ -242,7 +243,7 @@ struct SettingsScreen: View {
             Divider()
             Text("앱 내 단축키").font(.headline)
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 12) {
-                shortcutRow("빠른 입력", keys: "⌘N")
+                shortcutRow("프로젝트 화면: 프로젝트 추가 / 업무 화면: 새 업무 / 그 외: 빠른 입력", keys: "⌘N")
                 shortcutRow("검색", keys: "⌘F")
                 shortcutRow("앱 화면 이동", keys: "⌘1…9")
                 shortcutRow("사이드바 / 현재 화면 내용", keys: "⌘0 / ⌘⇧0")
@@ -276,7 +277,7 @@ struct SettingsScreen: View {
                 if registered {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption).foregroundStyle(WorkLogTheme.muted)
-                        .frame(width: 16, height: 32)
+                        .frame(width: 16, height: 28)
                         .help([diagnostic.registrationText, diagnostic.recentPressText].compactMap { $0 }.joined(separator: " · "))
                         .accessibilityLabel("\(title) 단축키 등록됨")
                 }
@@ -338,7 +339,7 @@ struct SettingsScreen: View {
     private var aiTasksSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
-                hint("작업마다 모델과 사고 수준(Effort)을 정할 수 있습니다. 기본 설정은 작업 성격에 맞춰 적용되며, 변경사항을 저장하면 다음 AI 작업부터 사용합니다.")
+                hint("자동으로 선택되는 모델은 로컬 Codex의 모델 목록을 기준으로 표시합니다. 작업마다 모델과 사고 수준(Effort)을 정할 수 있으며, 변경사항을 저장하면 다음 AI 작업부터 사용합니다.")
                 HStack(spacing: 12) {
                     Button("모델 목록 불러오기") { Task { await model.refreshModels() } }
                         .worklogKeyboardActivation { Task { await model.refreshModels() } }
@@ -359,6 +360,7 @@ struct SettingsScreen: View {
             hint("스킬 이름 또는 SKILL.md 경로를 입력하세요. 비우면 추가 스킬 없이 작업 프롬프트를 사용합니다. 기존 스킬 파일은 수정하지 않습니다.")
             hint("프롬프트 편집 창의 저장은 일반 설정 저장과 별도로 적용됩니다.")
         }
+        .task { await model.loadModelsIfNeeded() }
     }
 
     private func aiTaskCard(_ type: AIJobType) -> some View {

@@ -72,6 +72,11 @@ public struct AITaskProfiles: Codable, Equatable, Sendable {
 
     public func selectedModel(for type: AIJobType) -> DiscoveredAIModel? {
         if let id = self[type].model { return models.first { $0.id == id } }
+        return automaticModel(for: type)
+    }
+
+    /// The automatic option must describe the same catalog-based choice used at execution.
+    public func automaticModel(for type: AIJobType) -> DiscoveredAIModel? {
         let preferred: [String]
         switch type {
         case .memoTaskSuggestions, .queryPlan, .evidenceQuiz:

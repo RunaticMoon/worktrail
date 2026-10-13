@@ -45,6 +45,8 @@ public enum AIConnectionSummary: Equatable, Sendable {
     @ObservationIgnored private var savedProfiles = AITaskProfiles()
     @ObservationIgnored private var profileLoadFailed = false
     @ObservationIgnored private var catalogGeneration = 0
+    @ObservationIgnored private var hasRequestedModels = false
+    @ObservationIgnored private var requestedModelsExecutablePath: String?
     @ObservationIgnored private var environment: AppEnvironment?
     public static let transmissionNotice = "회사 AI에는 일반 메모·업무·활동·계획·리포트와 관련 근거·질문·스킬 지침을 작업에 필요한 범위로 전송합니다. Secret은 제목·그룹·key·값·이전 버전·초안까지 모두 제외합니다."
     public init(environment: AppEnvironment) {
@@ -182,7 +184,13 @@ public enum AIConnectionSummary: Equatable, Sendable {
         aiTaskProfiles[type].effort = value.isEmpty ? nil : value
     }
     public func modelOptions(for type: AIJobType) -> [AIModelOption] {
-        var options = [AIModelOption(id: "", title: "자동 · 작업별 추천")]
+        let automaticTitle: String
+        if let model = aiTaskProfiles.automaticModel(for: type) {
+            automaticTitle = "자동 · \(model.id)"
+        } else {
+            automaticTitle = isLoadingModels ? "자동 · 모델 확인 중…" : "자동 · Codex 기본값 (미확인)"
+        }
+        var options = [AIModelOption(id: "", title: automaticTitle)]
         options += aiTaskProfiles.models.map { AIModelOption(id: $0.id, title: $0.title) }
         if let selected = aiTaskProfiles[type].model, !options.contains(where: { $0.id == selected }) {
             options.append(AIModelOption(id: selected, title: "\(selected) · 목록 확인 필요"))
@@ -190,8 +198,11 @@ public enum AIConnectionSummary: Equatable, Sendable {
         return options
     }
     public func effortOptions(for type: AIJobType) -> [AIEffortOption] {
-        let recommended = AITaskProfiles.effortTitle(AITaskProfiles.recommendedEffort(for: type))
-        var options = [AIEffortOption(id: "", title: "자동 · \(recommended) 권장")]
+        var automaticProfiles = aiTaskProfiles
+        automaticProfiles[type].effort = nil
+        let automaticEffort = automaticProfiles.executionProfile(for: type).effort
+            .map(AITaskProfiles.effortTitle) ?? "모델 기본값"
+        var options = [AIEffortOption(id: "", title: "자동 · \(automaticEffort)")]
         options += (aiTaskProfiles.selectedModel(for: type)?.supportedEfforts ?? []).map {
             AIEffortOption(id: $0, title: "\(AITaskProfiles.effortTitle($0)) (\($0))")
         }
@@ -215,16 +226,25 @@ public enum AIConnectionSummary: Equatable, Sendable {
                 let effort = aiTaskProfiles[type].effort.map(AITaskProfiles.effortTitle) ?? "모델 기본값"
                 return purpose + " 저장된 선택: \(model) · 추론 \(effort). 모델 목록을 확인하세요."
             }
-            return purpose + " 처음 실행할 때 사용 가능한 모델을 확인해 추천을 적용합니다. 확인할 수 없으면 Codex 기본값을 사용합니다."
+            return purpose + " 로컬 Codex에서 사용 가능한 모델을 확인합니다. 확인할 수 없으면 Codex 기본값을 사용합니다."
         }
         let effective = aiTaskProfiles.executionProfile(for: type)
         let effort = effective.effort.map(AITaskProfiles.effortTitle) ?? "모델 기본값"
-        return purpose + " 적용: \(model.title) · 추론 \(effort)."
+        return purpose + " 적용: \(model.id) · 추론 \(effort)."
     }
     public func restoreDefaultAIProfiles() { aiTaskProfiles.profiles = [:] }
 
+    /// Called only when the user opens task AI settings, never during app initialization.
+    public func loadModelsIfNeeded(provider: AIModelCatalogProvider? = nil) async {
+        guard draft.aiEnabled else { return }
+        guard !hasRequestedModels || requestedModelsExecutablePath != draft.codexExecutablePath else { return }
+        await refreshModels(provider: provider)
+    }
+
     public func refreshModels(provider: AIModelCatalogProvider? = nil) async {
         guard !isLoadingModels, let environment else { return }
+        hasRequestedModels = true
+        requestedModelsExecutablePath = draft.codexExecutablePath
         isLoadingModels = true; defer { isLoadingModels = false }
         let generation = catalogGeneration
         let executablePath = draft.codexExecutablePath
