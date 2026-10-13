@@ -28,14 +28,18 @@ struct HotkeyRecorder: View {
     }
 
     var body: some View {
-        LabeledContent {
+        HStack(alignment: .top, spacing: 16) {
+            Text(title)
+                .padding(.top, 7)
+            Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
                 HotkeyRecorderButton(
                     recorder: recorder, title: title,
                     display: binding?.displayString ?? rawValue,
                     onRecord: onRecord, onBegin: onBeginRecording, onEnd: onEndRecording
                 )
-                .frame(minWidth: 170, minHeight: 28)
+                .frame(width: 184, height: 32)
+                .background(WorkLogTheme.rowHover, in: RoundedRectangle(cornerRadius: 6))
                 .overlay {
                     if recorder.isRecording {
                         RoundedRectangle(cornerRadius: 6)
@@ -51,8 +55,6 @@ struct HotkeyRecorder: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-        } label: {
-            Text(title)
         }
         .onDisappear { recorder.finish() }
     }
@@ -210,6 +212,7 @@ private struct HotkeyRecorderButton: NSViewRepresentable {
         let button = HotkeyRecordingButton()
         button.setButtonType(.momentaryPushIn)
         button.bezelStyle = .rounded
+        button.isBordered = false
         button.controlSize = .regular
         button.font = .systemFont(ofSize: NSFont.systemFontSize)
         button.focusRingType = .exterior

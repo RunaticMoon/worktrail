@@ -42,10 +42,19 @@ struct WorkLogSourceRowStyle: ButtonStyle {
             .background(background(pressed: configuration.isPressed),
                         in: RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius))
             .overlay {
-                if isFocused || (isSelected && contrast == .increased) {
+                if isSelected && contrast == .increased {
                     RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius)
-                        .strokeBorder(contrast == .increased ? WorkLogTheme.text : WorkLogTheme.accent,
-                                      lineWidth: 2)
+                        .strokeBorder(WorkLogTheme.text, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .leading) {
+                if isFocused {
+                    Capsule()
+                        .fill(contrast == .increased ? WorkLogTheme.text : WorkLogTheme.accent)
+                        .frame(width: 3)
+                        .padding(.vertical, 7)
+                        .padding(.leading, 2)
                         .allowsHitTesting(false)
                 }
             }
@@ -93,24 +102,19 @@ struct WorkLogButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.callout.weight(.medium))
-            .padding(.horizontal, 10).padding(.vertical, 5)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .frame(minHeight: 30)
             .foregroundStyle(foreground(role: configuration.role))
-            .background(background(pressed: configuration.isPressed, role: configuration.role), in: RoundedRectangle(cornerRadius: 6))
+            .background(background(pressed: configuration.isPressed, role: configuration.role), in: RoundedRectangle(cornerRadius: 7))
             .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(outline,
-                                  lineWidth: isFocused ? 2 : WorkLogTheme.outlineWidth(for: contrast))
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                if isFocused {
-                    RoundedRectangle(cornerRadius: 8)
+                if isFocused || contrast == .increased {
+                    RoundedRectangle(cornerRadius: 7)
                         .strokeBorder(contrast == .increased ? WorkLogTheme.text : WorkLogTheme.accent,
-                                      lineWidth: 2)
-                        .padding(-3)
+                                      lineWidth: isFocused ? 1.5 : 1)
                         .allowsHitTesting(false)
                 }
             }
+            .focusEffectDisabled()
             .opacity(isEnabled ? 1 : (contrast == .increased ? 0.7 : 0.45))
             .contentShape(RoundedRectangle(cornerRadius: 6))
             .onHover { isHovering = $0 }
@@ -123,17 +127,13 @@ struct WorkLogButtonStyle: ButtonStyle {
         return role == .destructive ? Color(nsColor: .systemRed) : WorkLogTheme.text
     }
 
-    private var outline: Color {
-        if contrast == .increased { return WorkLogTheme.text }
-        return isFocused || prominent ? WorkLogTheme.accent : WorkLogTheme.border
-    }
-
     private func background(pressed: Bool, role: ButtonRole?) -> Color {
         if prominent {
             let color = role == .destructive ? Color(nsColor: .systemRed) : WorkLogTheme.accent
             return color.opacity(pressed ? 0.24 : (isHovering ? 0.18 : 0.12))
         }
-        return pressed || isHovering ? WorkLogTheme.elevated : WorkLogTheme.surface
+        if pressed { return WorkLogTheme.text.opacity(0.10) }
+        return isHovering ? WorkLogTheme.rowHover : .clear
     }
 }
 
@@ -147,12 +147,13 @@ struct Keycap: View {
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .foregroundStyle(WorkLogTheme.muted)
             .padding(.horizontal, 4).padding(.vertical, 2)
-            .background(WorkLogTheme.elevated, in: RoundedRectangle(cornerRadius: 4))
+            .background(WorkLogTheme.text.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
             .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
-                                  lineWidth: WorkLogTheme.outlineWidth(for: contrast))
-                    .allowsHitTesting(false)
+                if contrast == .increased {
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(WorkLogTheme.text, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
             }
             .fixedSize()
     }

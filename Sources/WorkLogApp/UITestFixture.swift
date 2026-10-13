@@ -24,6 +24,10 @@ enum UITestFixture: String {
         var settings = AppSettings()
         settings.aiEnabled = false
         try SettingsStore(fileURL: paths.settingsFile).save(settings)
+        // Public sample model metadata exercises settings pickers without contacting Codex.
+        // Use a fixture document so the same launcher also compiles with older UI baselines.
+        let profileFixture = #"{"profiles":{},"models":[{"id":"gpt-6-luna","title":"GPT-6 Luna · 검증용","isDefault":false,"supportedEfforts":["low","medium","high"],"defaultEffort":"medium"},{"id":"gpt-6.1-sol","title":"GPT-6.1 Sol · 검증용","isDefault":true,"supportedEfforts":["low","medium","high","xhigh"],"defaultEffort":"medium"}]}"#
+        try Data(profileFixture.utf8).write(to: paths.dataRoot.appendingPathComponent("ai-task-profiles.json"), options: .atomic)
         let today = WorkDate("2026-10-10")!
         let clock = FixedClock(WorkCalendar().startOfDay(today).addingTimeInterval(10 * 60 * 60))
         let environment = try AppEnvironment.open(AppEnvironmentOptions(

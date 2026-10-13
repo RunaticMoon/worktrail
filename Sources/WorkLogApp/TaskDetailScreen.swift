@@ -200,7 +200,7 @@ import WorkLogCore
             .worklogKeyboardActivation { model.cancelCompletion() }
             .worklogHelp("전체 완료를 취소하고 작성 중인 내용으로 돌아가기", keys: "Esc")
         Button("남겨두고 Task 전체 완료") { model.complete(confirmRemaining: true) }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(WorkLogButtonStyle(prominent: true))
             .focusable()
             .worklogKeyboardActivation { model.complete(confirmRemaining: true) }
     }
@@ -223,7 +223,7 @@ import WorkLogCore
 
     @ViewBuilder private func primaryActions(_ detail: TaskDetail) -> some View {
         Button("진행 기록 추가") { activityFocused = true }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(WorkLogButtonStyle(prominent: true))
             .focusable().focused($actionsFocused)
             .worklogKeyboardActivation { activityFocused = true }
         Button("Task 전체 완료") { model.complete() }

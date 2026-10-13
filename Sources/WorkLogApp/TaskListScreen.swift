@@ -36,17 +36,21 @@ import WorkLogCore
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 2) {
-                            ForEach(model.filteredRows) { row in
-                                Button { selection = row.id; listFocused = true } label: { taskRow(row) }
-                                    .buttonStyle(WorkLogSourceRowStyle(isSelected: selection == row.id,
-                                        isFocused: listFocused && selection == row.id))
-                                    .focusable(false)
-                                    .id(row.id)
-                                    .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(row.id) })
-                                    .accessibilityAddTraits(selection == row.id ? .isSelected : [])
-                                    .accessibilityLabel(Text(rowLabel(row)))
-                                    .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            if !model.openRows.isEmpty {
+                                groupHeading("현재 업무", count: model.openRows.count)
+                                ForEach(model.openRows) { row in taskButton(row) }
+                            } else if !model.isSearching {
+                                Text("현재 진행할 업무가 없습니다.")
+                                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                                    .padding(.horizontal, 8).padding(.vertical, 16)
+                            }
+                            if !model.closedRows.isEmpty {
+                                closedHeading
+                                    .padding(.top, model.openRows.isEmpty ? 0 : 16)
+                                if model.showsClosedRows {
+                                    ForEach(model.closedRows) { row in taskButton(row) }
+                                }
                             }
                         }
                         .padding(2)
@@ -55,16 +59,19 @@ import WorkLogCore
                     .focusEffectDisabled()
                     .focused($listFocused)
                     .accessibilityLabel("업무 목록")
-                    .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
-                        guard press.modifiers.isEmpty,
+                    .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
+                        guard listFocused, press.modifiers.isEmpty,
                               (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
-                        if press.key == .return {
+                        if press.key == .leftArrow || press.key == .rightArrow {
+                            guard !model.isSearching, !model.closedRows.isEmpty else { return .ignored }
+                            model.isClosedExpanded = press.key == .rightArrow
+                        } else if press.key == .return {
                             if press.phase == .down, let selection { onOpen(selection) }
                         } else { moveSelection(press.key == .upArrow ? -1 : 1) }
                         return .handled
                     }
                     .onChange(of: listFocused) { _, focused in
-                        if focused && selection == nil { selection = model.filteredRows.first?.id }
+                        if focused && selection == nil { selection = model.visibleRows.first?.id }
                     }
                     .onChange(of: selection) { _, id in
                         if let id { proxy.scrollTo(id) }
@@ -90,22 +97,23 @@ import WorkLogCore
             model.load()
             DispatchQueue.main.async { focusContent() }
         }
-        .onChange(of: model.filteredRows.map(\.id)) { _, ids in
+        .onChange(of: model.visibleRows.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = listFocused ? ids.first : nil }
+            else if selection == nil && listFocused { selection = ids.first }
         }
     }
 
     private func focusContent() {
-        if model.filteredRows.isEmpty {
+        if model.visibleRows.isEmpty {
             listFocused = false
             queryFocused = true
         } else { focusList() }
     }
 
     private func focusList() {
-        guard !model.filteredRows.isEmpty else { return }
-        if !model.filteredRows.contains(where: { $0.id == selection }) {
-            selection = model.filteredRows.first?.id
+        guard !model.visibleRows.isEmpty else { return }
+        if !model.visibleRows.contains(where: { $0.id == selection }) {
+            selection = model.visibleRows.first?.id
         }
         queryFocused = false
         listFocused = true
@@ -121,15 +129,63 @@ import WorkLogCore
         guard queryFocused, modifiers.isEmpty, !model.filteredRows.isEmpty else { return false }
         switch event.keyCode {
         case 125: // Down leaves the single-line search field and enters the results.
+            if model.visibleRows.isEmpty { model.isClosedExpanded = true }
             focusList()
             return true
         case 36, 76:
             guard !event.isARepeat else { return true }
+            if model.visibleRows.isEmpty { model.isClosedExpanded = true }
             focusList()
             if let selection { onOpen(selection) }
             return true
         default: return false
         }
+    }
+
+    private func groupHeading(_ title: String, count: Int) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.callout.weight(.semibold))
+            Text("\(count)").font(.caption).monospacedDigit()
+        }
+        .foregroundStyle(WorkLogTheme.muted)
+        .padding(.horizontal, 8).padding(.vertical, 9)
+    }
+
+    @ViewBuilder private var closedHeading: some View {
+        if model.isSearching {
+            groupHeading("완료·취소", count: model.closedRows.count)
+        } else {
+            Button {
+                model.isClosedExpanded.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: model.isClosedExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold)).frame(width: 12)
+                    Text("완료·취소").font(.callout.weight(.semibold))
+                    Text("\(model.closedRows.count)").font(.caption).monospacedDigit()
+                    Spacer()
+                }
+                .foregroundStyle(WorkLogTheme.muted)
+                .padding(.horizontal, 8).padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("완료·취소 업무 \(model.closedRows.count)개")
+            .accessibilityValue(model.isClosedExpanded ? "펼쳐짐" : "접힘")
+            .help("완료·취소한 업무 기록 보기 · 목록에서 ← 접기 / → 펼치기")
+        }
+    }
+
+    private func taskButton(_ row: TaskListRow) -> some View {
+        Button { selection = row.id; listFocused = true } label: { taskRow(row) }
+            .buttonStyle(WorkLogSourceRowStyle(isSelected: selection == row.id,
+                isFocused: listFocused && selection == row.id))
+            .focusable(false)
+            .id(row.id)
+            .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(row.id) })
+            .accessibilityAddTraits(selection == row.id ? .isSelected : [])
+            .accessibilityLabel(Text(rowLabel(row)))
+            .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
     }
 
     private func taskRow(_ row: TaskListRow) -> some View {
@@ -176,7 +232,7 @@ import WorkLogCore
     }
 
     private func moveSelection(_ offset: Int) {
-        let ids = model.filteredRows.map(\.id)
+        let ids = model.visibleRows.map(\.id)
         guard !ids.isEmpty else { return }
         if let selection, let index = ids.firstIndex(of: selection) {
             self.selection = ids[min(max(index + offset, 0), ids.count - 1)]

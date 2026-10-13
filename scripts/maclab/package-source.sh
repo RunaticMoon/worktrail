@@ -35,20 +35,27 @@ if [[ -f "$REVIEW_REPO_ROOT/Package.resolved" ]]; then
     cp "$REVIEW_REPO_ROOT/Package.resolved" "$REVIEW_STAGE/after/Package.resolved"
 fi
 # Both versions use the same synthetic records and isolated environment factory.
-# Preserve the baseline controller's own hotkey and other API calls: copying the
-# entire current controller can break a baseline built against older app APIs.
+# Preserve the baseline controller's own hotkey and other API calls. Its review
+# factory uses only the shared fixture, avoiding newer production provider APIs.
 cp "$REVIEW_FIXTURE" "$REVIEW_STAGE/baseline/Sources/WorkLogApp/UITestFixture.swift"
-python3 - "$REVIEW_REPO_ROOT/Sources/WorkLogApp/AppController.swift" \
-    "$REVIEW_STAGE/baseline/Sources/WorkLogApp/AppController.swift" <<'PY'
+python3 - "$REVIEW_STAGE/baseline/Sources/WorkLogApp/AppController.swift" <<'PY'
 from pathlib import Path
 import sys
 
-current = Path(sys.argv[1]).read_text()
-baseline_path = Path(sys.argv[2])
+baseline_path = Path(sys.argv[1])
 baseline = baseline_path.read_text()
-factory_start = current.index("    private func openEnvironment() async throws -> AppEnvironment {")
-factory_end = current.index("    func retryStart()", factory_start)
-factory = current[factory_start:factory_end]
+factory = '''    private func openEnvironment() async throws -> AppEnvironment {
+        #if DEBUG
+        guard let fixture = try UITestFixture.requested() else {
+            throw WorkLogError.validation("UI 검증은 가짜 데이터 실행 인자가 필요합니다.")
+        }
+        return try await fixture.makeEnvironment()
+        #else
+        throw WorkLogError.validation("UI 검증은 DEBUG 빌드만 지원합니다.")
+        #endif
+    }
+
+'''
 if "    private func openEnvironment() async throws -> AppEnvironment {" in baseline:
     start = baseline.index("    private func openEnvironment() async throws -> AppEnvironment {")
     end = baseline.index("    func retryStart()", start)

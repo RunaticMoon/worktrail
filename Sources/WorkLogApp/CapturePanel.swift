@@ -64,11 +64,12 @@ import Observation
     func body(content: Content) -> some View {
         content
             .focusable()
+            .focusEffectDisabled()
             .focused($focused)
             .overlay {
                 RoundedRectangle(cornerRadius: 5)
-                    .strokeBorder(focused ? Color(nsColor: .keyboardFocusIndicatorColor) : .clear, lineWidth: 2)
-                    .padding(-2).allowsHitTesting(false)
+                    .strokeBorder(focused ? WorkLogTheme.accent : .clear, lineWidth: 1.5)
+                    .allowsHitTesting(false)
             }
             .id(id)
             .onAppear { register() }

@@ -92,7 +92,7 @@ public final class BackupService: @unchecked Sendable {
         }
     }
 
-    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 work/vault 스냅샷 해시가
+    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 DB/AI 설정 스냅샷 해시가
     /// 달라졌을 때만 백업한다. 변경이 없으면 임시본을 삭제하고 nil을 돌려준다.
     public func createDailyBackupIfChanged(calendar: WorkCalendar) throws -> BackupInfo? {
         do {
@@ -221,6 +221,10 @@ public final class BackupService: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: paths.settingsFile.path) {
             sources.append(.file(paths.settingsFile, name: Self.settingsFileName))
         }
+        let profilesFile = paths.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)
+        if FileManager.default.fileExists(atPath: profilesFile.path) {
+            sources.append(.file(profilesFile, name: AITaskProfileStore.fileName))
+        }
         return sources
     }
 
@@ -336,10 +340,10 @@ public final class BackupService: @unchecked Sendable {
         return BackupInfo(id: staged.id, directory: finalDir, manifest: staged.manifest)
     }
 
-    /// 최신 백업 대비 work/vault 스냅샷 해시가 달라졌는지.
+    /// 최신 백업 대비 DB 또는 작업별 AI 설정이 달라졌는지.
     private static func snapshotChanged(staged: Staged, latest: BackupInfo?) -> Bool {
         guard let latest else { return true }
-        for name in [workFileName, vaultFileName] {
+        for name in [workFileName, vaultFileName, AITaskProfileStore.fileName] {
             let newHash = staged.manifest.files.first { $0.name == name }?.sha256
             let oldHash = latest.manifest.files.first { $0.name == name }?.sha256
             if newHash != oldHash { return true }
@@ -486,6 +490,9 @@ public final class BackupService: @unchecked Sendable {
         if includeVault, hasVault { restoreNames.append(vaultFileName) }
         if manifest.files.contains(where: { $0.name == settingsFileName }) {
             restoreNames.append(settingsFileName)
+        }
+        if manifest.files.contains(where: { $0.name == AITaskProfileStore.fileName }) {
+            restoreNames.append(AITaskProfileStore.fileName)
         }
 
         // 기존 데이터 보존(복원 지점).
@@ -634,6 +641,7 @@ public final class BackupService: @unchecked Sendable {
             (workFileName, target.workDatabase),
             (vaultFileName, target.vaultDatabase),
             (settingsFileName, target.settingsFile),
+            (AITaskProfileStore.fileName, target.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)),
         ]
         for (name, url) in candidates {
             var isDir: ObjCBool = false

@@ -386,11 +386,12 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     // MARK: - 업무 검색·선택
 
-    /// 업무 탭 목록. 제목 대소문자 무시 포함 검색, 삭제 제외,
+    /// 업무 탭 목록. 제목 대소문자 무시 포함 검색, 삭제·취소 제외,
     /// 미완료(진행·계획·보류 등) 우선 → 최근 생성 순, 최대 50개.
     public var filteredTasks: [WorkTask] {
         let query = taskQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return tasks
+            .filter { $0.cachedStatus != .cancelled }
             .filter { query.isEmpty || $0.title.lowercased().contains(query) }
             .sorted { lhs, rhs in
                 let lhsUnfinished = Self.isUnfinished(lhs)
