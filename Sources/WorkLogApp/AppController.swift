@@ -213,9 +213,9 @@ import WorkLogCore
     }
 
     func showTaskCapture() {
-        showCapture()
         captureSession?.taskDraft.cancelCompletion()
         captureSession?.taskDraft.taskSelection = .newTask
+        showCapture()
         captureSession?.select(.task)
     }
     var hotkeyDiagnostics: [HotkeyAction: HotkeyDiagnostic] { hotkeys?.diagnostics ?? [:] }

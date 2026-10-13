@@ -900,6 +900,7 @@ extension View {
             navigation.onTaskSearch = changeTask
         }
         .onDisappear { navigation.onTaskSearch = nil }
+        .onChange(of: model.taskSelection) { _, _ in highlighted = selectedTaskKey }
         .onChange(of: model.pendingCompletion != nil) { _, pending in
             if pending { DispatchQueue.main.async { navigation.focus("cancelCompletion") } }
         }
