@@ -98,9 +98,31 @@ function run(args) {
         events.keyCode(code, { using: modifiers || [] });
         pause();
     }
-    function input(node, value) {
+    function clickField(node) {
+        // SwiftUI plain fields can acknowledge AXFocused without becoming the
+        // text responder. Click the actual AX bounds to use native hit testing.
+        function coordinate(attribute, component) {
+            var nativeValue = need(reviewRead(node, attribute), 'FIELD_BOUNDS_MISSING');
+            var description = reviewString(ObjC.castRefToObject($.CFCopyDescription(nativeValue)));
+            var names = component === 'width' ? '(?:width|w)' : component === 'height' ? '(?:height|h)' : component;
+            var match = description.match(new RegExp('\\b' + names + '\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)'));
+            need(match, 'FIELD_BOUNDS_UNREADABLE');
+            return Number(match[1]);
+        }
+        var x = coordinate('AXPosition', 'x'), y = coordinate('AXPosition', 'y');
+        var width = coordinate('AXSize', 'width'), height = coordinate('AXSize', 'height');
+        need(width > 0 && height > 0, 'FIELD_BOUNDS_EMPTY');
+        var point = $.CGPointMake(x + width / 2, y + height / 2);
+        $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft));
+        $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, point, $.kCGMouseButtonLeft));
+        pause();
+    }
+    function input(fieldLabel, value) {
         need(front(), 'LOST_FOREGROUND');
-        need(Number($.AXUIElementSetAttributeValue(node, $('AXFocused'), $.kCFBooleanTrue)) === 0, 'AX_FOCUS_FAILED');
+        // SwiftUI can replace AX proxies when navigation or search rerenders.
+        // Resolve by the stable label both before input and on each value check.
+        var node = control('AXTextField', fieldLabel, true);
+        clickField(node);
         key(0, ['command down']);
         if (value) {
             var clipboard = $.NSPasteboard.generalPasteboard;
@@ -108,7 +130,10 @@ function run(args) {
             need(clipboard.setStringForType($(value), $.NSPasteboardTypeString), 'PASTE_FAILED');
             key(9, ['command down']);
         } else key(51);
-        waitFor(function () { return reviewText(node, 'AXValue') === value; }, 'SEARCH_TEXT_NOT_ENTERED');
+        waitFor(function () {
+            var current = find('AXTextField', fieldLabel, true);
+            return current && reviewText(current, 'AXValue') === value;
+        }, 'SEARCH_TEXT_NOT_ENTERED');
     }
     function cancelledTaskRow() {
         return walk(root, function (node, role) {
@@ -156,31 +181,32 @@ function run(args) {
             key(43, ['command down']); // Command-comma.
             var settingsSearch = waitFor(function () { return find('AXTextField', '설정 항목 검색', true); }, 'SETTINGS_SEARCH_MISSING');
             check('settingsSearchPresent', settingsSearch);
+            input('설정 항목 검색', '');
             press(control('AXButton', '단축키', true));
             check('hotkeyRecorderVisible', find(null, '빠른 입력 단축키') !== null);
             check('noStandaloneRegisteredRow', find('AXStaticText', '등록됨', true) === null);
             stage = 'settings_search';
-            input(settingsSearch, 'AI');
+            input('설정 항목 검색', 'AI');
             check('aiSettingsNavigationFound', find('AXButton', 'AI 연결', true) !== null);
             press(control('AXButton', 'AI 연결', true));
             check('aiSettingsContentVisible', find(null, '일반 기록에 AI 사용') !== null);
             check('unrelatedShortcutNavigationFiltered', find('AXButton', '단축키', true) === null);
-            input(settingsSearch, '모델');
+            input('설정 항목 검색', '모델');
             press(control('AXButton', '작업별 AI', true));
             check('taskModelPickerPresent', find(null, '주간보고 · 팀 제출용 모델', true) !== null);
             check('taskEffortPickerPresent', find(null, '주간보고 · 팀 제출용 사고 수준', true) !== null);
-            input(settingsSearch, '');
+            input('설정 항목 검색', '');
             check('settingsNavigationRestored', find('AXButton', '단축키', true) !== null);
         } else if (result.action === 'tasks') {
             stage = 'closed_tasks_default';
             key(19, ['command down']); // Command-2: tasks.
             var taskSearch = waitFor(function () { return find('AXTextField', '업무 이름 검색', true); }, 'TASK_SEARCH_MISSING');
-            input(taskSearch, '');
+            input('업무 이름 검색', '');
             check('cancelledTaskHiddenByDefault', cancelledTaskRow() === null);
             stage = 'closed_tasks_search';
-            input(taskSearch, cancelledTitle);
+            input('업무 이름 검색', cancelledTitle);
             check('cancelledTaskSearchable', waitFor(cancelledTaskRow, 'CANCELLED_HISTORY_NOT_SEARCHABLE'));
-            input(taskSearch, '');
+            input('업무 이름 검색', '');
             check('cancelledTaskHiddenAfterClearingSearch', cancelledTaskRow() === null);
             stage = 'closed_tasks_toggle';
             var closed = find('AXButton', '완료·취소 업무');
@@ -208,10 +234,10 @@ function run(args) {
                 return find('AXTextField', '업무 검색 또는 새 업무 이름', true);
             }, 'CAPTURE_TASK_SEARCH_MISSING');
             check('cancelledTaskAbsentFromDefaultCapture', cancelledTaskRow() === null);
-            input(captureSearch, cancelledTitle);
+            input('업무 검색 또는 새 업무 이름', cancelledTitle);
             check('cancelledTaskAbsentFromCaptureSearch', cancelledTaskRow() === null);
             check('newTaskActionRemainsAvailable', find('AXButton', '새 업무 만들기') !== null);
-            input(captureSearch, '');
+            input('업무 검색 또는 새 업무 이름', '');
             check('captureStillHasActiveTaskSuggestions', find('AXButton', '배포 파이프라인') !== null);
         }
         stage = 'complete';

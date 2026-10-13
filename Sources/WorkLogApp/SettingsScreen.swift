@@ -147,10 +147,10 @@ struct SettingsScreen: View {
                         selectedContent
                     }
                 }
-                .id("settings-top")
                 .frame(maxWidth: 760, alignment: .leading)
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .id("settings-top")
             }
             .onChange(of: destination) { _, _ in proxy.scrollTo("settings-top", anchor: .top) }
             .onChange(of: model.errors) { _, errors in

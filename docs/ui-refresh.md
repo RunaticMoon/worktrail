@@ -11,7 +11,11 @@
 
 모델 선택은 [공식 OpenAI 모델 안내](https://learn.chatgpt.com/docs/models)의 용도 구분을 참고한 앱 추천값이다. 메모 후보·검색 계획·질문 생성에는 사용 가능한 Luna, 주간보고·근거 답변·성과자료에는 사용 가능한 Sol을 우선한다. 추론 강도는 각각 빠른 추출/조건 정리에 low, 보고 문장/질문/근거 답변에 medium, 기간 성과 종합에 high를 권장한다. 실제 선택지는 [Codex app-server의 `model/list`](https://learn.chatgpt.com/docs/app-server)에서 반환한 계정별 모델과 지원 effort로 제한하며, 추천 모델이 없으면 계정 기본 모델을 쓴다.
 
-Linux Swift 6.3.3에서 `swift build --build-tests`와 전체 `swift test` 784개가 통과했다. macOS 대상 구문 검사, UI helper의 JavaScript 구문 검사, `git diff --check`도 통과했다. macOS 실제 빌드·GUI 결과는 별도로 확인한다.
+Linux Swift 6.3.3에서 `swift build --build-tests`와 전체 `swift test` 786개가 통과했다. macOS 대상 구문 검사, UI helper의 JavaScript 구문 검사, `git diff --check`도 통과했다. Maclab `bf5a5102-e6d0-459d-827d-961efa41a659`에서 macOS 앱 빌드와 기본 입력·저장·창 복귀 검사가 통과했다. 설정 화면은 라이트/다크로 확인했으며, 항목 전환 시 상단 여백이 없어지던 문제를 수정해 원격 재빌드했다.
+
+같은 가짜 `many` fixture에서 `settings-task-review.js --action settings|tasks|capture`를 각각 실행해 종료 코드 0과 모든 assertion을 확인했다. 설정 목차 검색·AI 연결/모델/effort 선택기, 별도 ‘등록됨’ 행 부재, 완료·취소 기본 접힘·검색·펼침·재접기, 빠른 입력의 취소 업무 제외·활성 후보 유지가 포함된다. 초기 helper는 SwiftUI의 AXFocused를 설정해도 텍스트 포커스가 이동하지 않는 문제와 CF 문자열 브리지 문제로 실패했으며, native 포인터 입력과 새 AX 참조를 사용하도록 고친 뒤 세 검사가 모두 통과했다. 앱 입력 자체는 마우스와 키보드로 별도 정상 동작을 확인했다.
+
+원격 재빌드한 `SettingsScreen.swift`와 최종 helper는 로컬 SHA-256과 일치한다(`f597dca3…`, `6c92877d…`). 작은 창의 모든 조합·한글 IME 전체 동선·실계정 AI 추론은 이번 실행의 검증 범위에 포함하지 않는다.
 
 검증 시 가짜 fixture만 사용하고 설정 검색·범주 이동·단축키 상태, 작은 창의 한글 줄바꿈, Tab 포커스, 종료 업무 펼침과 검색, 빠른 입력 재오픈을 확인한다. 실제 계정의 AI 추론이나 자격증명은 테스트하지 않는다.
 
