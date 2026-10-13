@@ -115,6 +115,18 @@ final class AITaskProfileTests: XCTestCase {
         XCTAssertEqual(settings.modelOptions(for: .queryPlan).count, 4)
     }
 
+    @MainActor func testResetDiscardsUnsavedCatalogAndRestoresEmptyCatalogMessage() async throws {
+        let settings = SettingsModel(environment: try environment())
+        let initialMessage = settings.modelCatalogMessage
+        await settings.refreshModels(provider: Catalog(models: models))
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).count, 4)
+        XCTAssertNotEqual(settings.modelCatalogMessage, initialMessage)
+        settings.reset()
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).map(\.id), [""])
+        XCTAssertEqual(settings.modelCatalogMessage, initialMessage)
+        XCTAssertFalse(settings.hasChanges)
+    }
+
     @MainActor func testCorruptProfilesAreNotOverwrittenByUnrelatedSettingsSave() throws {
         let env = try environment()
         let url = env.options.paths.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)
@@ -138,6 +150,30 @@ final class AITaskProfileTests: XCTestCase {
         let target = AppPaths(dataRoot: restoreRoot.appendingPathComponent("data"), backupRoot: restoreRoot.appendingPathComponent("backup"))
         try BackupService.restore(backup, into: target, keyStore: InMemoryVaultKeyStore(), includeVault: false, clock: clock)
         XCTAssertEqual(try AITaskProfileStore(dataRoot: target.dataRoot).load(), original)
+    }
+
+    func testDailyBackupDetectsProfileOnlyChangesAndSkipsUnchangedProfiles() throws {
+        let env = try environment()
+        let store = AITaskProfileStore(dataRoot: env.options.paths.dataRoot, ids: ids)
+        _ = try env.backup.createBackup(reason: .manual)
+        var profiles = AITaskProfiles(models: models)
+        profiles[.performanceReport] = AITaskProfile(model: "gpt-6-astra", effort: "high")
+        try store.save(profiles)
+
+        // A profile added after an older backup must be noticed even with unchanged DBs.
+        clock.advance(by: 24 * 60 * 60)
+        let added = try XCTUnwrap(env.backup.createDailyBackupIfChanged(calendar: env.calendar))
+        let backedUp = try AITaskProfileStore(dataRoot: added.directory).load()
+        XCTAssertEqual(backedUp, profiles)
+
+        // Detect edits as well as initial creation, and do not make redundant daily copies.
+        profiles[.performanceReport].effort = "medium"
+        try store.save(profiles)
+        clock.advance(by: 24 * 60 * 60)
+        let edited = try XCTUnwrap(env.backup.createDailyBackupIfChanged(calendar: env.calendar))
+        XCTAssertEqual(try AITaskProfileStore(dataRoot: edited.directory).load(), profiles)
+        clock.advance(by: 24 * 60 * 60)
+        XCTAssertNil(try env.backup.createDailyBackupIfChanged(calendar: env.calendar))
     }
 
     func testModelDiscoveryPaginatesAndUsesOnlyAdvertisedEfforts() async throws {

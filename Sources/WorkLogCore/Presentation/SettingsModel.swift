@@ -160,6 +160,8 @@ public enum AIConnectionSummary: Equatable, Sendable {
             profileLoadFailed = false
             if !aiTaskProfiles.models.isEmpty {
                 modelCatalogMessage = "저장된 모델 목록을 사용합니다. 계정이나 Codex가 바뀌었다면 새로 불러오세요."
+            } else {
+                modelCatalogMessage = "모델 목록을 불러오면 계정에서 사용할 수 있는 모델과 추론 강도를 선택할 수 있습니다."
             }
         } catch {
             profileLoadFailed = true
