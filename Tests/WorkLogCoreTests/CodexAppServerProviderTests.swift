@@ -7,6 +7,7 @@ import XCTest
 final class FakeCodexServer: LineTransport, @unchecked Sendable {
     struct Script {
         var results: [String: JSONValue] = [:]
+        var modelPages: [String: JSONValue] = [:]
         var errors: [String: (code: Int, message: String)] = [:]
         /// 응답 뒤에 이어서 보낼 알림/서버 요청(스크립트 메시지).
         var followups: [String: [JSONValue]] = [:]
@@ -73,7 +74,9 @@ final class FakeCodexServer: LineTransport, @unchecked Sendable {
             } else {
                 outgoing.append(.object([
                     "id": id,
-                    "result": snapshot.results[method] ?? defaultResult(for: method),
+                    "result": (method == "model/list"
+                        ? snapshot.modelPages[message["params"]?["cursor"]?.stringValue ?? ""] : nil)
+                        ?? snapshot.results[method] ?? defaultResult(for: method),
                 ]))
             }
         }

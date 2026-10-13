@@ -205,7 +205,7 @@ struct StateView: View {
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .font(.callout)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(WorkLogButtonStyle(prominent: true))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -256,10 +256,10 @@ struct RecoveryNotice: View {
     }
 
     @ViewBuilder private var recoveryActions: some View {
-        Button(retryTitle, action: retry).buttonStyle(.bordered)
+        Button(retryTitle, action: retry).buttonStyle(WorkLogButtonStyle())
         if let dismiss {
             Button(action: dismiss) { Label("닫기", systemImage: "xmark") }
-                .buttonStyle(.bordered)
+                .buttonStyle(WorkLogButtonStyle())
                 .accessibilityLabel("복구 안내 닫기")
         }
     }
@@ -289,7 +289,7 @@ struct PastDateBadge: View {
         StatusBadge(label: "과거 날짜 · \(label)", systemImage: "clock", tone: .warning)
         Button("오늘로", action: onReset)
             .font(.callout)
-            .buttonStyle(.bordered)
+            .buttonStyle(WorkLogButtonStyle())
             .accessibilityLabel("업무일을 오늘로 변경")
     }
 }
@@ -324,28 +324,37 @@ struct SectionDisclosure<Content: View>: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            content
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline).foregroundStyle(WorkLogTheme.text)
-                if !isExpanded {
-                    Text(summary).font(.callout).foregroundStyle(WorkLogTheme.muted)
+        VStack(alignment: .leading, spacing: 10) {
+            Button { isExpanded.toggle() } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 12)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.headline).foregroundStyle(WorkLogTheme.text)
+                        if !isExpanded {
+                            Text(summary).font(.callout).foregroundStyle(WorkLogTheme.muted)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityElement(children: .combine)
+            .buttonStyle(WorkLogButtonStyle())
+            .focusable().focusEffectDisabled().focused($headerFocused)
+            .accessibilityLabel(Text(title))
             .accessibilityValue(Text(isExpanded ? "펼침" : "접힘"))
-        }
-        .focusable().focused($headerFocused)
-        .onKeyPress(keys: [.return, .space, .leftArrow, .rightArrow], phases: .down) { press in
-            guard headerFocused, press.modifiers.isEmpty, !worklogHasMarkedText,
-                  !(NSApp.keyWindow?.firstResponder is NSTextView),
-                  !(NSApp.keyWindow?.firstResponder is NSTextField) else { return .ignored }
-            if press.key == .leftArrow { isExpanded = false }
-            else if press.key == .rightArrow { isExpanded = true }
-            else { isExpanded.toggle() }
-            return .handled
+            .onKeyPress(keys: [.return, .space, .leftArrow, .rightArrow], phases: .down) { press in
+                guard headerFocused, press.modifiers.isEmpty, !worklogHasMarkedText else { return .ignored }
+                if press.key == .leftArrow { isExpanded = false }
+                else if press.key == .rightArrow { isExpanded = true }
+                else { isExpanded.toggle() }
+                return .handled
+            }
+            if isExpanded {
+                content.frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .worklogAnimation(.easeInOut(duration: 0.16), value: isExpanded)
     }
@@ -371,7 +380,7 @@ struct ChipView: View {
             Text(label).fixedSize(horizontal: false, vertical: true)
             if let onRemove {
                 Button(action: onRemove) { Image(systemName: "xmark") }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(WorkLogButtonStyle())
                     .controlSize(.small)
                     .accessibilityLabel(Text("\(label) 제거"))
             }

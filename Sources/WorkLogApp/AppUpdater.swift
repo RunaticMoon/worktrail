@@ -59,7 +59,7 @@ struct CheckForUpdatesButton: View {
 struct UpdateSettingsSection: View {
     @ObservedObject private var updater = AppUpdater.shared
     var body: some View {
-        Section("앱 업데이트") {
+        VStack(alignment: .leading, spacing: 16) {
             LabeledContent("현재 버전", value: updater.version)
             Toggle("새 버전 자동 확인", isOn: Binding(
                 get: { updater.automaticallyChecksForUpdates }, set: { updater.setAutomaticChecks($0) }))
@@ -74,6 +74,8 @@ struct UpdateSettingsSection: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .multilineTextAlignment(.leading)
     }
 }
 #endif

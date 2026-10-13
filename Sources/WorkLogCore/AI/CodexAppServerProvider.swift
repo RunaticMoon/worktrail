@@ -26,16 +26,19 @@ public struct CodexProviderConfig: Sendable {
     }
 }
 
-public final class CodexAppServerProvider: AIProvider, @unchecked Sendable {
+public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @unchecked Sendable {
     private let config: CodexProviderConfig
     private let transportFactory: (@Sendable () throws -> LineTransport)?
+    private let profileResolver: (@Sendable (AIJobType) throws -> AITaskProfile)?
     private let state = CodexState()
 
     /// transportFactory: 테스트 주입용. 기본은 ProcessLineTransport(executable, ["app-server"]).
     public init(config: CodexProviderConfig,
+                profileResolver: (@Sendable (AIJobType) throws -> AITaskProfile)? = nil,
                 transportFactory: (@Sendable () throws -> LineTransport)? = nil) {
         self.config = config
         self.transportFactory = transportFactory
+        self.profileResolver = profileResolver
     }
 
     // MARK: - AIProvider
@@ -97,13 +100,58 @@ public final class CodexAppServerProvider: AIProvider, @unchecked Sendable {
         return skills
     }
 
+    /// Invoked by an explicit settings action; never reads authentication files.
+    public func listAvailableModels() async throws -> [DiscoveredAIModel] {
+        let connection = try await ensureConnection()
+        var models: [DiscoveredAIModel] = []
+        var cursor: String?
+        var visited: Set<String> = []
+        repeat {
+            var parameters: [String: JSONValue] = ["limit": .number(100)]
+            if let cursor { parameters["cursor"] = .string(cursor) }
+            let result = try await send(connection, "model/list", .object(parameters))
+            guard let entries = result["data"]?.arrayValue else {
+                throw AIProviderError(.protocolMismatch, "모델 목록 응답 형식이 올바르지 않습니다.")
+            }
+            for entry in entries {
+                guard let id = entry["model"]?.stringValue ?? entry["id"]?.stringValue,
+                      !id.isEmpty, !models.contains(where: { $0.id == id }) else { continue }
+                models.append(DiscoveredAIModel(id: id,
+                    title: entry["displayName"]?.stringValue ?? id,
+                    isDefault: entry["isDefault"]?.boolValue ?? false,
+                    supportedEfforts: entry["supportedReasoningEfforts"]?.arrayValue?.compactMap {
+                        $0["reasoningEffort"]?.stringValue
+                    } ?? [],
+                    defaultEffort: entry["defaultReasoningEffort"]?.stringValue))
+            }
+            cursor = result["nextCursor"]?.stringValue
+            if let cursor, !visited.insert(cursor).inserted {
+                throw AIProviderError(.protocolMismatch, "모델 목록 페이지를 완료할 수 없습니다.")
+            }
+        } while cursor != nil
+        locked { state.models = models }
+        return models
+    }
+
     public func run(_ input: AIJobInput) async throws -> AIJobOutput {
+        // Resolve at job start so newly saved preferences apply without restarting.
+        var profile = try profileResolver?(input.jobType) ?? AITaskProfile(model: config.model)
         let connection: JSONRPCConnection
         do {
             connection = try await ensureConnection()
         } catch {
             throw providerError(error)
         }
+        if profileResolver != nil, profile.model == nil {
+            // Discovery is part of an actual requested AI job, never settings initialization.
+            let cached = locked { state.models }
+            let models: [DiscoveredAIModel]
+            if let cached { models = cached }
+            else { models = (try? await listAvailableModels()) ?? [] }
+            let discovered = AITaskProfiles(profiles: [input.jobType.rawValue: profile], models: models)
+            profile = discovered.executionProfile(for: input.jobType)
+        }
+        let model = profile.model ?? config.model
 
         let jobDirectory = config.stagingRoot.appendingPathComponent(input.jobId, isDirectory: true)
         try? FileManager.default.createDirectory(at: jobDirectory, withIntermediateDirectories: true)
@@ -116,7 +164,7 @@ public final class CodexAppServerProvider: AIProvider, @unchecked Sendable {
             "ephemeral": .bool(true),
             "developerInstructions": .string(input.instructions),
         ]
-        if let model = config.model { threadParams["model"] = .string(model) }
+        if let model { threadParams["model"] = .string(model) }
 
         let threadResult: JSONValue
         do {
@@ -129,7 +177,7 @@ public final class CodexAppServerProvider: AIProvider, @unchecked Sendable {
         }
 
         let context = CodexRunContext(jobId: input.jobId, threadId: threadId,
-                                 model: threadResult["model"]?.stringValue ?? config.model)
+                                 model: threadResult["model"]?.stringValue ?? model)
         register(context)
         defer { unregister(context) }
 
@@ -138,15 +186,17 @@ public final class CodexAppServerProvider: AIProvider, @unchecked Sendable {
         if let skill = input.skill, !skill.name.isEmpty {
             text = "$\(skill.name)\n\(text)"
         }
-        let turnParams: JSONValue = .object([
+        var turnParams: [String: JSONValue] = [
             "threadId": .string(threadId),
             "input": .array([
                 .object(["type": .string("text"), "text": .string(text)]),
             ]),
-        ])
+        ]
+        if let model { turnParams["model"] = .string(model) }
+        if let effort = profile.effort { turnParams["effort"] = .string(effort) }
 
         do {
-            let turnResult = try await send(connection, "turn/start", turnParams)
+            let turnResult = try await send(connection, "turn/start", .object(turnParams))
             if let turnId = turnResult["turn"]?["id"]?.stringValue {
                 context.setTurnId(turnId)
             }
@@ -440,6 +490,7 @@ private final class CodexState: @unchecked Sendable {
     var runsByThread: [String: CodexRunContext] = [:]
     var runByJob: [String: CodexRunContext] = [:]
     var capabilities: AICapabilities?
+    var models: [DiscoveredAIModel]?
 
     var connection: JSONRPCConnection? { connectionInfo?.connection }
 }

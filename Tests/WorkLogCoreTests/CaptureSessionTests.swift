@@ -133,6 +133,31 @@ final class CaptureSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testReopenRefreshesCancelledTaskSuggestionsWithoutLosingDraft() async throws {
+        let env = try environment(defaultKind: .task)
+        let task = try env.tasks.createTask(title: "진행하던 업무")
+        let session = CaptureSessionModel(environment: env)
+        session.beginSession()
+        XCTAssertEqual(session.taskDraft.filteredTasks.map(\.id), [task.id])
+        session.taskDraft.taskSelection = .existing(task.id)
+        session.taskDraft.text = "보존할 진행 기록 초안"
+
+        try env.tasks.changeTaskStatus(taskId: task.id, kind: .cancelled)
+        session.beginSession()
+
+        XCTAssertTrue(session.taskDraft.filteredTasks.isEmpty)
+        XCTAssertEqual(session.taskDraft.taskSelection, .existing(task.id))
+        XCTAssertEqual(session.taskDraft.text, "보존할 진행 기록 초안")
+        XCTAssertEqual(session.taskDraft.tasks.first?.cachedStatus, .cancelled)
+        XCTAssertEqual(try env.repo.tasks().count, 1, "취소된 업무 기록은 삭제하지 않는다")
+
+        try env.tasks.changeTaskStatus(taskId: task.id, kind: .resumed)
+        session.beginSession()
+        XCTAssertEqual(session.taskDraft.filteredTasks.map(\.id), [task.id], "명시적으로 재개한 업무는 다시 제안한다")
+        XCTAssertEqual(session.taskDraft.text, "보존할 진행 기록 초안")
+    }
+
+    @MainActor
     func testSaveCompletionReturnsToDefaultSession() async throws {
         let env = try environment(defaultKind: .memo)
         let model = CaptureSessionModel(environment: env)

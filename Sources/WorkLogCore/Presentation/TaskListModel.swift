@@ -28,6 +28,7 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
 /// 업무 목록 화면 모델. 정렬·검색·요약 라벨을 결정적으로 계산한다.
 @Observable @MainActor public final class TaskListModel {
     public var query: String = ""
+    public var isClosedExpanded = false
     public private(set) var rows: [TaskListRow] = []
     public private(set) var errorMessage: String?
     @ObservationIgnored private let environment: AppEnvironment
@@ -89,6 +90,26 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmed.isEmpty else { return rows }
         return rows.filter { $0.title.lowercased().contains(trimmed) }
+    }
+
+    public var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public var openRows: [TaskListRow] {
+        filteredRows.filter { Self.isUnfinished($0.status) }
+    }
+
+    public var closedRows: [TaskListRow] {
+        filteredRows.filter { !Self.isUnfinished($0.status) }
+    }
+
+    /// 종료 업무는 기본으로 접되, 검색에서는 과거 기록도 바로 찾을 수 있다.
+    public var showsClosedRows: Bool { isSearching || isClosedExpanded }
+
+    /// 화면과 키보드 이동이 같은 행 순서를 사용한다.
+    public var visibleRows: [TaskListRow] {
+        openRows + (showsClosedRows ? closedRows : [])
     }
 
     /// 완료·취소가 아니면 미완료(상태 없음 포함).

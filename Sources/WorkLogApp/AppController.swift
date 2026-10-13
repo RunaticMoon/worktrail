@@ -98,8 +98,10 @@ import WorkLogCore
         let settings = try SettingsStore(fileURL: paths.settingsFile).load()
         var provider: AIProvider?
         if settings.aiEnabled {
+            let profileStore = AITaskProfileStore(dataRoot: paths.dataRoot)
             let candidate = CodexAppServerProvider(config: CodexProviderConfig(
-                executablePath: settings.codexExecutablePath, stagingRoot: paths.aiJobsDirectory))
+                executablePath: settings.codexExecutablePath, stagingRoot: paths.aiJobsDirectory),
+                profileResolver: { type in try profileStore.load().executionProfile(for: type) })
             let capabilities = await candidate.checkCapabilities()
             if capabilities.installed && capabilities.protocolCompatible { provider = candidate }
             else { notice = "AI 연결을 사용할 수 없습니다. 기록과 원문 검색은 정상 동작합니다." }

@@ -244,7 +244,7 @@ import WorkLogCore
             ShortcutLabel(title: "저장", keys: keyboardMode == .panel ? "⌘Return" : "⌘S")
         }
         .keyboardShortcut(keyboardMode == .panel ? .return : KeyEquivalent("s"), modifiers: .command)
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(WorkLogButtonStyle(prominent: true))
         .secretControlFocus(captureNavigation, "secretSave", order: actionControlsOrder, action: save)
         .worklogHelp("Secret 저장", keys: keyboardMode == .panel ? "⌘Return" : "⌘S / ⌘Return")
         if let onCancel {

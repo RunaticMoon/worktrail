@@ -107,6 +107,7 @@ struct AppRootView: View {
         }
         .background(WorkLogTheme.canvas)
         .tint(WorkLogTheme.accent)
+        .buttonStyle(WorkLogButtonStyle())
         .groupBoxStyle(WorkLogGroupBoxStyle())
         .scrollContentBackground(.hidden)
         .focusedSceneValue(\.worklogFocusSidebar, { sidebarFocus = selectedRoute })
@@ -157,7 +158,7 @@ struct AppRootView: View {
                 if controller.sidebarExpanded { ShortcutLabel(title: "빠른 입력", keys: "⌘N") }
                 else { Image(systemName: "plus").frame(maxWidth: .infinity) }
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(WorkLogButtonStyle(prominent: true))
             .controlSize(.regular)
             .accessibilityLabel("빠른 입력").worklogHelp("빠른 입력", keys: "⌘N")
             GeometryReader { geometry in

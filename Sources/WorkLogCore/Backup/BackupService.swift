@@ -221,6 +221,10 @@ public final class BackupService: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: paths.settingsFile.path) {
             sources.append(.file(paths.settingsFile, name: Self.settingsFileName))
         }
+        let profilesFile = paths.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)
+        if FileManager.default.fileExists(atPath: profilesFile.path) {
+            sources.append(.file(profilesFile, name: AITaskProfileStore.fileName))
+        }
         return sources
     }
 
@@ -487,6 +491,9 @@ public final class BackupService: @unchecked Sendable {
         if manifest.files.contains(where: { $0.name == settingsFileName }) {
             restoreNames.append(settingsFileName)
         }
+        if manifest.files.contains(where: { $0.name == AITaskProfileStore.fileName }) {
+            restoreNames.append(AITaskProfileStore.fileName)
+        }
 
         // 기존 데이터 보존(복원 지점).
         _ = try makePreRestoreBackup(target: target, clock: clock)
@@ -634,6 +641,7 @@ public final class BackupService: @unchecked Sendable {
             (workFileName, target.workDatabase),
             (vaultFileName, target.vaultDatabase),
             (settingsFileName, target.settingsFile),
+            (AITaskProfileStore.fileName, target.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)),
         ]
         for (name, url) in candidates {
             var isDir: ObjCBool = false

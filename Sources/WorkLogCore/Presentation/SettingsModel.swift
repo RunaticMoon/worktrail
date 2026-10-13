@@ -38,24 +38,55 @@ public enum AIConnectionSummary: Equatable, Sendable {
     public private(set) var message: String?
     public private(set) var accountMessage = "로그인 상태를 아직 확인하지 않았습니다."
     public private(set) var isCheckingAccount = false
+    public private(set) var isLoadingModels = false
+    public private(set) var modelCatalogMessage = "모델 목록을 불러오면 계정에서 사용할 수 있는 모델과 추론 강도를 선택할 수 있습니다."
+    public private(set) var aiTaskProfiles = AITaskProfiles()
+    @ObservationIgnored private let profileStore: AITaskProfileStore
+    @ObservationIgnored private var savedProfiles = AITaskProfiles()
+    @ObservationIgnored private var profileLoadFailed = false
+    @ObservationIgnored private var catalogGeneration = 0
     @ObservationIgnored private var environment: AppEnvironment?
     public static let transmissionNotice = "회사 AI에는 일반 메모·업무·활동·계획·리포트와 관련 근거·질문·스킬 지침을 작업에 필요한 범위로 전송합니다. Secret은 제목·그룹·key·값·이전 버전·초안까지 모두 제외합니다."
-    public init(environment: AppEnvironment) { self.environment = environment; draft = environment.settings }
-    public var hasChanges: Bool { environment.map { draft != $0.settings } ?? false }
+    public init(environment: AppEnvironment) {
+        self.environment = environment; draft = environment.settings
+        profileStore = AITaskProfileStore(dataRoot: environment.options.paths.dataRoot, ids: environment.options.ids)
+        loadProfiles()
+    }
+    public var hasChanges: Bool {
+        environment.map { draft != $0.settings || aiTaskProfiles != savedProfiles } ?? false
+    }
     public var defaultCaptureKind: CaptureKind {
         get { draft.defaultCaptureKind }
         set { draft.defaultCaptureKind = newValue }
     }
-    public func detach() { environment = nil }
+    public func detach() { catalogGeneration += 1; environment = nil }
     /// 설정 화면 상단의 AI 연결 상태. 런타임 AI 실행기가 없으면 미연결로 본다.
     public var aiConnectionSummary: AIConnectionSummary {
         guard let environment, environment.aiRunner != nil else { return .notConfigured }
         return .connected
     }
-    public func reset() { if let environment { draft = environment.settings }; errors = []; message = nil }
+    public func reset() {
+        if let environment { draft = environment.settings }
+        catalogGeneration += 1
+        errors = []; message = nil; loadProfiles()
+    }
     public func validate() -> Bool {
         // 단축키 검증·정규화 규칙은 HotkeyBinding 한 곳에서만 정의한다.
         errors = SettingsStore.validate(draft)
+        if profileLoadFailed { errors.append("AI 작업 설정을 읽을 수 없습니다. 기존 파일을 확인한 뒤 다시 불러오세요.") }
+        for type in AIJobType.allCases {
+            let profile = aiTaskProfiles[type]
+            if let model = profile.model, !aiTaskProfiles.models.isEmpty,
+               !aiTaskProfiles.models.contains(where: { $0.id == model }) {
+                errors.append("현재 목록에 없는 모델이 선택되어 있습니다. 작업별 AI 설정에서 모델을 다시 선택하세요.")
+                break
+            }
+            if let effort = profile.effort, let model = aiTaskProfiles.selectedModel(for: type),
+               !model.supportedEfforts.contains(effort) {
+                errors.append("선택한 모델에서 지원하지 않는 추론 강도가 있습니다. 작업별 AI 설정을 확인하세요.")
+                break
+            }
+        }
         if draft.codexExecutablePath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
             draft.codexExecutablePath = nil
         }
@@ -98,8 +129,14 @@ public enum AIConnectionSummary: Equatable, Sendable {
     @discardableResult public func save(apply: ((AppSettings) throws -> Void)? = nil) -> Bool {
         guard let environment, validate() else { message = "설정을 저장하지 못했습니다. 아래 항목을 확인하세요. 기존 설정은 유지됩니다."; return false }
         do {
-            if let apply { try apply(draft) } else { try environment.updateSettings(draft) }
-            message = "설정을 저장했습니다. AI 사용 여부·실행 경로 변경은 앱을 다시 열면 적용됩니다."
+            let applySettings = {
+                if let apply { try apply(self.draft) } else { try environment.updateSettings(self.draft) }
+            }
+            if aiTaskProfiles != savedProfiles {
+                try profileStore.save(aiTaskProfiles, applying: applySettings)
+                savedProfiles = aiTaskProfiles
+            } else { try applySettings() }
+            message = "설정을 저장했습니다. 모델·추론 강도는 다음 AI 작업부터 적용됩니다. AI 사용 여부·실행 경로 변경은 앱을 다시 열면 적용됩니다."
             errors = []; return true
         } catch {
             // Never echo executable paths, account responses or arbitrary persistence errors.
@@ -116,6 +153,95 @@ public enum AIConnectionSummary: Equatable, Sendable {
     }
     public func setSkill(_ value: String, for type: AIJobType) { draft.skillBindings[type.rawValue] = value }
     public func skillBinding(for type: AIJobType) -> String { draft.skillBindings[type.rawValue] ?? "" }
+
+    private func loadProfiles() {
+        do {
+            aiTaskProfiles = try profileStore.load(); savedProfiles = aiTaskProfiles
+            profileLoadFailed = false
+            if !aiTaskProfiles.models.isEmpty {
+                modelCatalogMessage = "저장된 모델 목록을 사용합니다. 계정이나 Codex가 바뀌었다면 새로 불러오세요."
+            }
+        } catch {
+            profileLoadFailed = true
+            errors = ["AI 작업 설정을 읽을 수 없습니다. 기존 파일을 확인한 뒤 다시 불러오세요."]
+        }
+    }
+
+    public func modelSelection(for type: AIJobType) -> String { aiTaskProfiles[type].model ?? "" }
+    public func effortSelection(for type: AIJobType) -> String { aiTaskProfiles[type].effort ?? "" }
+    public func setModel(_ value: String, for type: AIJobType) {
+        aiTaskProfiles[type].model = value.isEmpty ? nil : value
+        if let effort = aiTaskProfiles[type].effort,
+           let model = aiTaskProfiles.selectedModel(for: type), !model.supportedEfforts.contains(effort) {
+            aiTaskProfiles[type].effort = nil
+        }
+    }
+    public func setEffort(_ value: String, for type: AIJobType) {
+        aiTaskProfiles[type].effort = value.isEmpty ? nil : value
+    }
+    public func modelOptions(for type: AIJobType) -> [AIModelOption] {
+        var options = [AIModelOption(id: "", title: "자동 · 작업별 추천")]
+        options += aiTaskProfiles.models.map { AIModelOption(id: $0.id, title: $0.title) }
+        if let selected = aiTaskProfiles[type].model, !options.contains(where: { $0.id == selected }) {
+            options.append(AIModelOption(id: selected, title: "\(selected) · 목록 확인 필요"))
+        }
+        return options
+    }
+    public func effortOptions(for type: AIJobType) -> [AIEffortOption] {
+        let recommended = AITaskProfiles.effortTitle(AITaskProfiles.recommendedEffort(for: type))
+        var options = [AIEffortOption(id: "", title: "자동 · \(recommended) 권장")]
+        options += (aiTaskProfiles.selectedModel(for: type)?.supportedEfforts ?? []).map {
+            AIEffortOption(id: $0, title: "\(AITaskProfiles.effortTitle($0)) (\($0))")
+        }
+        if let effort = aiTaskProfiles[type].effort, !options.contains(where: { $0.id == effort }) {
+            options.append(AIEffortOption(id: effort, title: "\(effort) · 지원 확인 필요"))
+        }
+        return options
+    }
+    public func defaultProfileDescription(for type: AIJobType) -> String {
+        let purpose: String
+        switch type {
+        case .memoTaskSuggestions: purpose = "메모에서 업무 후보를 빠르게 추출합니다."
+        case .queryPlan: purpose = "질문을 검색 조건으로 빠르게 정리합니다."
+        case .evidenceQuiz: purpose = "근거를 보완할 질문을 만듭니다."
+        case .submissionWeekly: purpose = "주간 기록을 제출용 문장으로 정리합니다."
+        case .groundedAnswer: purpose = "검색된 근거를 비교해 답변을 작성합니다."
+        case .performanceReport: purpose = "기간 전체의 근거와 성과를 깊이 있게 종합합니다."
+        }
+        guard let model = aiTaskProfiles.selectedModel(for: type) else {
+            if let model = aiTaskProfiles[type].model {
+                let effort = aiTaskProfiles[type].effort.map(AITaskProfiles.effortTitle) ?? "모델 기본값"
+                return purpose + " 저장된 선택: \(model) · 추론 \(effort). 모델 목록을 확인하세요."
+            }
+            return purpose + " 처음 실행할 때 사용 가능한 모델을 확인해 추천을 적용합니다. 확인할 수 없으면 Codex 기본값을 사용합니다."
+        }
+        let effective = aiTaskProfiles.executionProfile(for: type)
+        let effort = effective.effort.map(AITaskProfiles.effortTitle) ?? "모델 기본값"
+        return purpose + " 적용: \(model.title) · 추론 \(effort)."
+    }
+    public func restoreDefaultAIProfiles() { aiTaskProfiles.profiles = [:] }
+
+    public func refreshModels(provider: AIModelCatalogProvider? = nil) async {
+        guard !isLoadingModels, let environment else { return }
+        isLoadingModels = true; defer { isLoadingModels = false }
+        let generation = catalogGeneration
+        let executablePath = draft.codexExecutablePath
+        let provider = provider ?? CodexAppServerProvider(config: CodexProviderConfig(
+            executablePath: draft.codexExecutablePath, stagingRoot: environment.options.paths.aiJobsDirectory))
+        do {
+            let models = try await provider.listAvailableModels()
+            guard self.environment != nil, generation == catalogGeneration,
+                  executablePath == draft.codexExecutablePath else { return }
+            aiTaskProfiles.models = models
+            modelCatalogMessage = aiTaskProfiles.models.isEmpty
+                ? "사용 가능한 모델이 없습니다. Codex 로그인 상태를 확인하세요."
+                : "모델 \(aiTaskProfiles.models.count)개를 불러왔습니다. 저장하면 다음 AI 작업부터 적용됩니다."
+        } catch {
+            guard self.environment != nil, generation == catalogGeneration,
+                  executablePath == draft.codexExecutablePath else { return }
+            modelCatalogMessage = "모델 목록을 불러오지 못했습니다. Codex 실행 경로와 로그인 상태를 확인하세요. 저장된 선택은 유지됩니다."
+        }
+    }
     public func checkAccount(provider: AIProvider? = nil) async {
         guard !isCheckingAccount, let environment else { return }
         isCheckingAccount = true; defer { isCheckingAccount = false }

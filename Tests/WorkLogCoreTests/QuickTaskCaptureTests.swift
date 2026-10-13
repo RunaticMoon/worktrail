@@ -44,7 +44,7 @@ final class QuickTaskCaptureTests: XCTestCase {
     // MARK: - 검색·정렬
 
     @MainActor
-    func testFilteredTasksSearchExcludesDeletedAndOrdersUnfinishedFirst() async throws {
+    func testFilteredTasksSearchExcludesDeletedAndCancelledAndOrdersUnfinishedFirst() async throws {
         let env = try environment()
         let base = Date(timeIntervalSince1970: 1_700_000_000)
         try env.repo.insertTask(WorkTask(id: "t-planned-old", title: "배포 계획",
@@ -65,15 +65,19 @@ final class QuickTaskCaptureTests: XCTestCase {
         model.reloadCandidates()
         model.taskQuery = "배포"
         XCTAssertEqual(model.filteredTasks.map(\.id),
-                       ["t-progress-new", "t-planned-old", "t-cancelled-new", "t-done-new"],
-                       "미완료 우선 → 최근 순, 삭제 제외")
+                       ["t-progress-new", "t-planned-old", "t-done-new"],
+                       "미완료 우선 → 최근 순, 삭제·취소 제외")
 
         model.taskQuery = "배포 완"
         XCTAssertEqual(model.filteredTasks.map(\.id), ["t-done-new"])
 
+        model.taskQuery = "배포 취소"
+        XCTAssertTrue(model.filteredTasks.isEmpty, "검색해도 취소 업무를 빠른 입력 후보로 제안하지 않는다")
+
         model.taskQuery = ""
-        XCTAssertEqual(model.filteredTasks.count, 5, "삭제된 업무는 제외")
+        XCTAssertEqual(model.filteredTasks.count, 4, "삭제·취소 업무는 제외")
         XCTAssertEqual(model.filteredTasks.first?.id, "t-other", "미완료 최근 순")
+        XCTAssertTrue(model.tasks.contains { $0.id == "t-cancelled-new" }, "기존 초안이 선택한 업무의 참조는 보존한다")
     }
 
     @MainActor

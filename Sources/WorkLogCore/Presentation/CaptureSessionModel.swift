@@ -73,6 +73,10 @@ import Observation
         if pendingNewSession && draftsEmpty {
             startNewSession()
         }
+        // 메인 화면에서 취소·재개한 업무도 다시 열자마자 후보에 반영한다.
+        // 초안 본문과 명시적으로 선택한 대상은 그대로 둔다.
+        memoDraft.reloadCandidates()
+        taskDraft.reloadCandidates()
         pendingNewSession = false
     }
 
@@ -125,8 +129,6 @@ import Observation
         memoDraft.resetDefaults()
         taskDraft.resetDefaults()
         forceFixedKinds()
-        memoDraft.reloadCandidates()
-        taskDraft.reloadCandidates()
     }
 
     private func forceFixedKinds() {

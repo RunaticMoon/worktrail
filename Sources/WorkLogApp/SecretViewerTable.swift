@@ -60,7 +60,7 @@ import WorkLogCore
                             }
                             .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat], action: move)
                             Button("복사") { copy(row) }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(WorkLogButtonStyle())
                                 .accessibilityLabel(Text("\(row.key) 값 복사"))
                                 .worklogHelp("값 복사", keys: "Return / ⌘C")
                                 .focused($focusedControl, equals: .copy(row.id))
@@ -149,7 +149,7 @@ import WorkLogCore
         Button(action: toggleVisibility) {
             Label(model.showsValues ? "값 가리기" : "값 보기", systemImage: model.showsValues ? "eye.slash" : "eye")
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(WorkLogButtonStyle())
         .worklogKeyboardActivation(toggleVisibility)
         .worklogHelp(model.showsValues ? "값 가리기" : "값 보기")
         .disabled(model.isLocked || !model.canEdit(from: host) || model.hasRecoverableDraft)

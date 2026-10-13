@@ -43,7 +43,7 @@ import WorkLogCore
         Button(action: open) {
             Text(kind == .project ? "@ 프로젝트" : "# 태그").font(.caption)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(WorkLogButtonStyle())
         .controlSize(.small)
         .captureFocus(kind == .project ? "project" : "tag", order: kind == .project ? 510 : 520, action: open)
         .worklogHelp("\(title) 검색 및 선택", keys: kind == .project ? "⌘⇧P" : "⌘⇧T")

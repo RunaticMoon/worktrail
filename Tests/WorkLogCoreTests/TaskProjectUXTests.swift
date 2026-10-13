@@ -178,6 +178,53 @@ final class TaskProjectUXTests: XCTestCase {
     // MARK: - 업무 목록
 
     @MainActor
+    func testTaskListCollapsesClosedTasksAndIncludesThemInSearch() async throws {
+        let env = try environment()
+        let planned = try env.tasks.createTask(title: "현재 예정 업무")
+        let held = try env.tasks.createTask(title: "보류 업무", initialStatus: .onHold)
+        let completed = try env.tasks.createTask(title: "완료 이력", initialStatus: .completed)
+        let cancelled = try env.tasks.createTask(title: "취소 이력", initialStatus: .cancelled)
+        let model = TaskListModel(environment: env)
+        model.load()
+
+        XCTAssertFalse(model.showsClosedRows)
+        XCTAssertEqual(Set(model.visibleRows.map(\.id)), Set([planned.id, held.id]))
+        XCTAssertEqual(Set(model.closedRows.map(\.id)), Set([completed.id, cancelled.id]))
+        XCTAssertEqual(model.filteredRows.count, 4, "접혀도 전체 개수와 원본 기록은 보존한다")
+
+        model.isClosedExpanded = true
+        XCTAssertEqual(model.visibleRows.map(\.id), model.openRows.map(\.id) + model.closedRows.map(\.id))
+        model.isClosedExpanded = false
+        model.query = "이력"
+        XCTAssertTrue(model.showsClosedRows, "검색에서는 접힌 이력도 표시한다")
+        XCTAssertEqual(Set(model.visibleRows.map(\.id)), Set([completed.id, cancelled.id]))
+        model.query = "취소"
+        XCTAssertEqual(model.visibleRows.map(\.id), [cancelled.id])
+        model.query = "   "
+        XCTAssertFalse(model.showsClosedRows, "검색을 지우면 원래 접힘 상태로 돌아온다")
+        XCTAssertEqual(Set(model.visibleRows.map(\.id)), Set([planned.id, held.id]))
+    }
+
+    @MainActor
+    func testTaskListMovesCancelledAndResumedTasksBetweenGroupsOnReload() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "상태가 바뀌는 업무")
+        let model = TaskListModel(environment: env)
+        model.load()
+        XCTAssertEqual(model.visibleRows.map(\.id), [task.id])
+
+        try env.tasks.changeTaskStatus(taskId: task.id, kind: .cancelled)
+        model.load()
+        XCTAssertTrue(model.visibleRows.isEmpty)
+        XCTAssertEqual(model.closedRows.map(\.id), [task.id])
+
+        try env.tasks.changeTaskStatus(taskId: task.id, kind: .resumed)
+        model.load()
+        XCTAssertEqual(model.visibleRows.map(\.id), [task.id])
+        XCTAssertTrue(model.closedRows.isEmpty)
+    }
+
+    @MainActor
     func testTaskListSortsAndLabelsDue() async throws {
         let env = try environment()
         let today = env.calendar.workDate(of: env.options.clock.now())
