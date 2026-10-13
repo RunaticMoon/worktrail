@@ -77,11 +77,11 @@ final class PresentationTests: XCTestCase {
         model.text = "메모 @공통 인프라 그리고 계속"
         XCTAssertEqual(model.candidates.map(\.id), [project.id])
         model.select(try XCTUnwrap(model.candidates.first))
-        XCTAssertEqual(model.text, "메모 공통 인프라 그리고 계속")
+        XCTAssertEqual(model.text, "메모 @공통 인프라 그리고 계속")
         XCTAssertEqual(model.selectedProjectIds, [project.id])
         model.text = "메모 #회귀 검증 그리고 계속"
         model.select(try XCTUnwrap(model.candidates.first))
-        XCTAssertEqual(model.text, "메모 회귀 검증 그리고 계속")
+        XCTAssertEqual(model.text, "메모 #회귀 검증 그리고 계속")
         XCTAssertEqual(model.selectedTagIds, [tag.id])
     }
 
@@ -94,8 +94,8 @@ final class PresentationTests: XCTestCase {
         model.selectionRange = NSRange(location: prefix.utf16.count, length: 0)
         XCTAssertEqual(model.candidates.map(\.id), [project.id])
         model.select(try XCTUnwrap(model.candidates.first))
-        XCTAssertEqual(model.text, "🙂 메모 공통 인프라 그리고 계속\n다음 줄 #다른 토큰")
-        XCTAssertEqual(model.selectionRange?.location, "🙂 메모 공통 인프라".utf16.count)
+        XCTAssertEqual(model.text, "🙂 메모 @공통 인프라 그리고 계속\n다음 줄 #다른 토큰")
+        XCTAssertEqual(model.selectionRange?.location, "🙂 메모 @공통 인프라".utf16.count)
     }
 
     @MainActor func testAutocompleteOnlyOffersCreationWithoutExistingNamePrefix() throws {
@@ -121,7 +121,7 @@ final class PresentationTests: XCTestCase {
         model.text = "메모 @새 프로젝트 그리고 계속"
         model.selectionRange = NSRange(location: "메모 @새 프로젝트".utf16.count, length: 0)
         model.select(try XCTUnwrap(model.candidates.first))
-        XCTAssertEqual(model.text, "메모 새 프로젝트 그리고 계속")
+        XCTAssertEqual(model.text, "메모 @새 프로젝트 그리고 계속")
         XCTAssertEqual(model.projects.map(\.name), ["새 프로젝트"])
     }
 

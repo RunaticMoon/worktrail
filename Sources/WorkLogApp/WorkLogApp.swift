@@ -16,6 +16,7 @@ enum WorkLogEntryPoint {
 
 @MainActor struct WorkLogApp: App {
     @State private var controller = AppController()
+    @FocusedValue(\.worklogCreateProject) private var createProject
     private let updater = AppUpdater.shared
     var body: some Scene {
         WindowGroup("WorkLog", id: "main") {
@@ -48,8 +49,11 @@ enum WorkLogEntryPoint {
                     .disabled(controller.isPanelKeyWindow)
             }
             CommandGroup(replacing: .newItem) {
-                Button("빠른 입력") { controller.showCapture() }.keyboardShortcut("n", modifiers: .command)
-                    .disabled(controller.isPanelKeyWindow)
+                Button(controller.newItemTitle) { controller.createNewItem(onCreateProject: createProject) }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(controller.isPanelKeyWindow || controller.environment == nil
+                              || controller.selectedTaskId != nil || controller.selectedMemoId != nil
+                              || (controller.route == .projects && createProject == nil))
                 Button("검색") { controller.showSearch() }.keyboardShortcut("f", modifiers: .command)
                     .disabled(controller.isPanelKeyWindow)
                 Divider()

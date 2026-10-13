@@ -63,6 +63,89 @@ final class AITaskProfileTests: XCTestCase {
         XCTAssertEqual(fallback.executionProfile(for: .queryPlan), AITaskProfile(model: "gpt-6-astra", effort: "medium"))
     }
 
+    @MainActor func testAutomaticOptionsShowResolvedModelAndEffortFromLocalCatalog() async throws {
+        let settings = SettingsModel(environment: try environment())
+        settings.draft.aiEnabled = true
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · Codex 기본값 (미확인)")
+        XCTAssertEqual(settings.effortOptions(for: .queryPlan).first?.title, "자동 · 모델 기본값")
+
+        await settings.loadModelsIfNeeded(provider: Catalog(models: models))
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · gpt-6-luna")
+        XCTAssertEqual(settings.modelOptions(for: .submissionWeekly).first?.title, "자동 · gpt-6.1-sol")
+        XCTAssertEqual(settings.effortOptions(for: .queryPlan).first?.title, "자동 · 낮음")
+        XCTAssertTrue(settings.defaultProfileDescription(for: .submissionWeekly).contains("gpt-6.1-sol"))
+
+        settings.setModel("gpt-6-astra", for: .queryPlan)
+        settings.setEffort("high", for: .queryPlan)
+        // The automatic menu item still describes what switching back to it would select.
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · gpt-6-luna")
+        XCTAssertEqual(settings.effortOptions(for: .queryPlan).first?.title, "자동 · 보통")
+    }
+
+    @MainActor func testAutomaticOptionsUseAdvertisedDefaultForUnrecognizedModels() async throws {
+        let settings = SettingsModel(environment: try environment())
+        settings.draft.aiEnabled = true
+        let localDefault = DiscoveredAIModel(id: "company-local-model", title: "Company model",
+            isDefault: true, supportedEfforts: ["high"], defaultEffort: "high")
+        await settings.loadModelsIfNeeded(provider: Catalog(models: [localDefault]))
+        XCTAssertEqual(settings.modelOptions(for: .submissionWeekly).first?.title, "자동 · company-local-model")
+        XCTAssertEqual(settings.effortOptions(for: .submissionWeekly).first?.title, "자동 · 높음")
+        XCTAssertEqual(settings.aiTaskProfiles.executionProfile(for: .submissionWeekly),
+                       AITaskProfile(model: "company-local-model", effort: "high"))
+    }
+
+    @MainActor func testOpeningAISettingsDiscoversOnceAndReloadsWhenExecutableChanges() async throws {
+        let settings = SettingsModel(environment: try environment())
+        settings.draft.aiEnabled = true
+        let catalog = RecordingCatalog(models: models)
+        await settings.loadModelsIfNeeded(provider: catalog)
+        await settings.loadModelsIfNeeded(provider: catalog)
+        let firstCount = await catalog.requests
+        XCTAssertEqual(firstCount, 1)
+
+        settings.draft.codexExecutablePath = "/fake/other-codex"
+        await settings.loadModelsIfNeeded(provider: catalog)
+        let changedPathCount = await catalog.requests
+        XCTAssertEqual(changedPathCount, 2)
+        await settings.refreshModels(provider: catalog)
+        let manualRefreshCount = await catalog.requests
+        XCTAssertEqual(manualRefreshCount, 3)
+    }
+
+    @MainActor func testDisabledAIUsesSavedCatalogWithoutAutomaticDiscoveryButAllowsManualRefresh() async throws {
+        let env = try environment()
+        try AITaskProfileStore(dataRoot: env.options.paths.dataRoot, ids: ids)
+            .save(AITaskProfiles(models: models))
+        let settings = SettingsModel(environment: env)
+        settings.draft.aiEnabled = false
+        let catalog = RecordingCatalog(models: [models[0]])
+
+        await settings.loadModelsIfNeeded(provider: catalog)
+        let automaticCount = await catalog.requests
+        XCTAssertEqual(automaticCount, 0)
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · gpt-6-luna")
+        XCTAssertEqual(settings.aiTaskProfiles.models, models)
+
+        await settings.refreshModels(provider: catalog)
+        let manualCount = await catalog.requests
+        XCTAssertEqual(manualCount, 1)
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · gpt-6-astra")
+    }
+
+    @MainActor func testEnablingAIAfterOpeningDisabledSettingsAllowsAutomaticDiscovery() async throws {
+        let settings = SettingsModel(environment: try environment())
+        settings.draft.aiEnabled = false
+        let catalog = RecordingCatalog(models: models)
+        await settings.loadModelsIfNeeded(provider: catalog)
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · Codex 기본값 (미확인)")
+
+        settings.draft.aiEnabled = true
+        await settings.loadModelsIfNeeded(provider: catalog)
+        let requests = await catalog.requests
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · gpt-6-luna")
+    }
+
     @MainActor func testSelectionsPersistReloadAndResetWithoutChangingOtherJobs() async throws {
         let env = try environment()
         let settings = SettingsModel(environment: env)
@@ -234,6 +317,16 @@ final class AITaskProfileTests: XCTestCase {
         var fails = false
         func listAvailableModels() async throws -> [DiscoveredAIModel] {
             if fails { throw AIProviderError(.unknown, "fake") }
+            return models
+        }
+    }
+
+    private actor RecordingCatalog: AIModelCatalogProvider {
+        let models: [DiscoveredAIModel]
+        private(set) var requests = 0
+        init(models: [DiscoveredAIModel]) { self.models = models }
+        func listAvailableModels() async throws -> [DiscoveredAIModel] {
+            requests += 1
             return models
         }
     }

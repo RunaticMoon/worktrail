@@ -192,6 +192,32 @@ import WorkLogCore
         }
         capturePanel?.show()
     }
+
+    var newItemTitle: String {
+        switch route ?? .day {
+        case .projects: return "프로젝트 추가"
+        case .tasks: return "새 업무"
+        default: return "빠른 입력"
+        }
+    }
+
+    func createNewItem(onCreateProject: (() -> Void)?) {
+        guard !isPanelKeyWindow, !worklogHasMarkedText,
+              NSApp.keyWindow?.attachedSheet == nil, NSApp.keyWindow?.sheetParent == nil,
+              selectedTaskId == nil, selectedMemoId == nil else { return }
+        switch route ?? .day {
+        case .projects: onCreateProject?()
+        case .tasks: showTaskCapture()
+        default: showCapture()
+        }
+    }
+
+    func showTaskCapture() {
+        captureSession?.taskDraft.cancelCompletion()
+        captureSession?.taskDraft.taskSelection = .newTask
+        showCapture()
+        captureSession?.select(.task)
+    }
     var hotkeyDiagnostics: [HotkeyAction: HotkeyDiagnostic] { hotkeys?.diagnostics ?? [:] }
 
     func hotkeyDisplay(_ action: HotkeyAction) -> String {

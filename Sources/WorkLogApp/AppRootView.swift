@@ -72,9 +72,10 @@ struct AppRootView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let environment = controller.environment {
                     HSplitView {
-                        sidebar.frame(minWidth: controller.sidebarExpanded ? 180 : 52,
-                                      idealWidth: controller.sidebarExpanded ? 200 : 52,
-                                      maxWidth: controller.sidebarExpanded ? 280 : 52)
+                        // Leave room for all three native window controls above the compact rail.
+                        sidebar.frame(minWidth: controller.sidebarExpanded ? 180 : 80,
+                                      idealWidth: controller.sidebarExpanded ? 200 : 80,
+                                      maxWidth: controller.sidebarExpanded ? 280 : 80)
                         workspace(environment)
                     }
                     .worklogAnimation(.easeInOut(duration: 0.18), value: controller.sidebarExpanded)
@@ -153,14 +154,19 @@ struct AppRootView: View {
             HStack(spacing: 8) {
                 WorkLogAppIcon().frame(width: 28, height: 28).accessibilityHidden(true)
                 if controller.sidebarExpanded { Text("WorkLog").font(.headline) }
-            }.padding(.vertical, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: controller.sidebarExpanded ? .leading : .center)
+            .frame(height: 44)
             Button { controller.showCapture() } label: {
-                if controller.sidebarExpanded { ShortcutLabel(title: "빠른 입력", keys: "⌘N") }
+                if controller.sidebarExpanded {
+                    ShortcutLabel(title: "빠른 입력", keys: (selectedRoute == .projects || selectedRoute == .tasks)
+                                  ? controller.hotkeyDisplay(.capture) : "⌘N")
+                }
                 else { Image(systemName: "plus").frame(maxWidth: .infinity) }
             }
             .buttonStyle(WorkLogButtonStyle(prominent: true))
             .controlSize(.regular)
-            .accessibilityLabel("빠른 입력").worklogHelp("빠른 입력", keys: "⌘N")
+            .accessibilityLabel("빠른 입력").worklogHelp("빠른 입력", keys: controller.hotkeyDisplay(.capture))
             GeometryReader { geometry in
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -190,7 +196,8 @@ struct AppRootView: View {
                 }
             }
         }
-        .padding(controller.sidebarExpanded ? 12 : 8)
+        .padding(.horizontal, controller.sidebarExpanded ? 12 : 8)
+        .padding(.bottom, controller.sidebarExpanded ? 12 : 8)
         .background(WorkLogTheme.surface)
         .buttonStyle(.plain)
         .accessibilityLabel("사이드바")
@@ -247,7 +254,7 @@ struct AppRootView: View {
             Button { KeyboardHelpFocusRestoration.shared.open(using: openWindow) } label: { Image(systemName: "keyboard") }
                 .worklogHelp("키보드 단축키", keys: "⌘⌥K").accessibilityLabel("키보드 단축키")
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .padding(.horizontal, 16).frame(height: 44)
     }
 
     @ViewBuilder private func destination(_ environment: AppEnvironment) -> some View {
@@ -263,13 +270,14 @@ struct AppRootView: View {
             }
         case .tasks:
             if let tasks = controller.taskList {
-                TaskListScreen(model: tasks, onOpen: { controller.openTask($0) }, onCapture: { controller.showCapture() },
+                TaskListScreen(model: tasks, onOpen: { controller.openTask($0) }, onCapture: { controller.showTaskCapture() },
                     detailDismissalRevision: detailDismissalRevision)
             }
         case .projects:
             if let projects = controller.projects {
                 ProjectsScreen(model: projects, calendar: environment.calendar,
-                    onOpen: { controller.openTask($0) }, onCapture: { controller.showCapture() },
+                    onOpen: { controller.openTask($0) }, onCapture: { controller.showTaskCapture() },
+                    onProjectCreated: { controller.refresh() },
                     detailDismissalRevision: detailDismissalRevision)
             }
         case .search:

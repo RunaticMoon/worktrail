@@ -8,9 +8,11 @@ import WorkLogCore
     let calendar: WorkCalendar
     let onOpen: (String) -> Void
     let onCapture: () -> Void
+    let onProjectCreated: () -> Void
     var detailDismissalRevision: Int = 0
     @State private var taskSelection: String?
     @State private var showsProjectTasks = false
+    @State private var showsProjectCreator = false
     @FocusState private var projectsFocused: Bool
     @FocusState private var tasksFocused: Bool
     @FocusState private var fallbackFocused: Bool
@@ -19,20 +21,24 @@ import WorkLogCore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScreenHeader(title: "프로젝트", purpose: "전체 업무 상태와 프로젝트별 적용 상태를 구분합니다")
+            ScreenHeader(title: "프로젝트", purpose: "프로젝트에 연결된 업무와 진행 상태를 확인합니다") {
+                Button(action: onCreateProject) { ShortcutLabel(title: "프로젝트 추가", keys: "⌘N") }
+                    .worklogKeyboardActivation(onCreateProject)
+                    .worklogHelp("새 프로젝트 만들기", keys: "⌘N")
+            }
             if let error = model.errorMessage {
                 RecoveryNotice(failed: error, preserved: "저장된 프로젝트와 업무는 그대로입니다.", retry: { model.load() })
                     .focusable().focused($fallbackFocused)
             } else if model.projects.isEmpty {
-                StateView(kind: .empty, title: "아직 프로젝트가 없습니다", detail: "빠른 입력에서 프로젝트를 만들고 업무에 연결하세요.",
-                    actionTitle: "기록 추가 ⌘N", action: onCapture)
+                StateView(kind: .empty, title: "아직 프로젝트가 없습니다", detail: "프로젝트를 먼저 만든 뒤 메모와 업무를 연결하세요.",
+                    actionTitle: "프로젝트 추가 ⌘N", action: onCreateProject)
                     .focusable().focused($fallbackFocused)
                     .onKeyPress(keys: [.return, .space], phases: .down) { press in
                         guard fallbackFocused, press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
-                        onCapture()
+                        onCreateProject()
                         return .handled
                     }
-                    .accessibilityHint("Return 또는 Space로 기록 추가")
+                    .accessibilityHint("Return 또는 Space로 프로젝트 추가")
             } else {
                 GeometryReader { geometry in
                     Group {
@@ -72,6 +78,13 @@ import WorkLogCore
             Spacer(minLength: 0)
         }
         .padding(WorkLogTheme.contentInset)
+        .focusedSceneValue(\.worklogCreateProject, onCreateProject)
+        .sheet(isPresented: $showsProjectCreator, onDismiss: { focusProjectList() }) {
+            ProjectCreationSheet(model: model) {
+                onProjectCreated()
+                showsProjectCreator = false
+            }
+        }
         .worklogFocusContent {
             if showsProjectTasks { focusProjectTasks() }
             else { focusProjectList() }
@@ -149,6 +162,11 @@ import WorkLogCore
         (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
     }
 
+    private func onCreateProject() {
+        guard !hasMarkedText else { return }
+        showsProjectCreator = true
+    }
+
     private func focusProjectList() {
         showsProjectTasks = false
         tasksFocused = false
@@ -190,7 +208,7 @@ import WorkLogCore
                 Text(project.name).font(.headline).accessibilityAddTraits(.isHeader)
                 if model.tasks.isEmpty {
                     StateView(kind: .empty, title: "연결된 업무가 없습니다", detail: "빠른 입력에서 이 프로젝트를 업무에 연결하세요.",
-                        actionTitle: "업무 기록 추가 ⌘N", action: onCapture)
+                        actionTitle: "업무 기록 추가", action: onCapture)
                         .focusable()
                         .focusEffectDisabled()
                         .focused($tasksFocused)

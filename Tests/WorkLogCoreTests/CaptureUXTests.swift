@@ -82,7 +82,93 @@ final class CaptureUXTests: XCTestCase {
         XCTAssertEqual(model.highlightedCandidate?.name, "Gamma")
         XCTAssertTrue(model.acceptHighlightedCandidate())
         XCTAssertEqual(model.selectedProjectIds, [gamma.id])
-        XCTAssertEqual(model.text, "Gamma ")
+        XCTAssertEqual(model.text, "@Gamma ")
+    }
+
+    @MainActor
+    func testLinkedMentionsKeepMarkersAndDoNotConsumeFollowingProse() async throws {
+        let env = try environment()
+        let project = try env.repo.createProject(name: "공통 인프라")
+        let tag = try env.repo.findOrCreateTag(name: "회귀 검증")
+        let model = CaptureModel(environment: env)
+        model.text = "🙂 @공통 인"
+        XCTAssertTrue(model.acceptHighlightedCandidate())
+        XCTAssertEqual(model.text, "🙂 @공통 인프라 ")
+        XCTAssertEqual(model.selectionRange?.location, model.text.utf16.count)
+
+        model.text += "작업을 마치고 "
+        model.selectionRange = NSRange(location: model.text.utf16.count, length: 0)
+        XCTAssertTrue(model.candidates.isEmpty, "연결한 프로젝트 뒤의 문장은 새 프로젝트 후보가 아니다")
+        model.text += "#회귀 검"
+        XCTAssertTrue(model.acceptHighlightedCandidate())
+        model.text += "확인"
+        XCTAssertTrue(model.candidates.isEmpty)
+        XCTAssertEqual(model.linkedTokenRanges.map { (model.text as NSString).substring(with: $0) },
+                       ["@공통 인프라", "#회귀 검증"])
+
+        let body = model.text
+        XCTAssertTrue(model.submit())
+        let memo = try XCTUnwrap(env.repo.memos(on: today(env)).first)
+        XCTAssertEqual(memo.body, body, "표시용 모양은 저장 원문에 들어가지 않는다")
+        XCTAssertEqual(memo.projectIds, [project.id])
+        XCTAssertEqual(memo.tagIds, [tag.id])
+    }
+
+    @MainActor
+    func testLinkedMentionRangesDistinguishNamesBoundariesAndRemoval() async throws {
+        let env = try environment()
+        let short = try env.repo.createProject(name: "공통")
+        let long = try env.repo.createProject(name: "공통 인프라")
+        let tag = try env.repo.findOrCreateTag(name: "공통")
+        let model = CaptureModel(environment: env)
+        model.addProject(id: short.id)
+        model.addProject(id: long.id)
+        model.addTag(id: tag.id)
+        model.text = "🙂 @공통 인프라, @공통 #공통\n@공통확장 user@공통 @미연결"
+        XCTAssertEqual(model.linkedTokenRanges.map { (model.text as NSString).substring(with: $0) },
+                       ["@공통 인프라", "@공통", "#공통"])
+        let body = model.text
+        model.removeProject(short.id)
+        model.removeTag(tag.id)
+        XCTAssertEqual(model.linkedTokenRanges.map { (model.text as NSString).substring(with: $0) },
+                       ["@공통 인프라"])
+        XCTAssertEqual(model.text, body, "연결 해제는 본문을 변경하지 않는다")
+    }
+
+    @MainActor
+    func testSelectedShortNameDoesNotBlockLongerProjectAutocomplete() async throws {
+        let env = try environment()
+        let short = try env.repo.createProject(name: "공통")
+        let long = try env.repo.createProject(name: "공통 인프라")
+        let model = CaptureModel(environment: env)
+        model.text = "@공통"
+        model.select(try XCTUnwrap(model.candidates.first { $0.id == short.id }))
+        XCTAssertTrue(model.candidates.isEmpty, "선택 직후에는 같은 접두사의 후보를 다시 열지 않는다")
+        model.text += "@공통 인"
+        XCTAssertEqual(model.candidates.map(\.id), [long.id])
+        XCTAssertTrue(model.acceptHighlightedCandidate())
+        XCTAssertEqual(model.selectedProjectIds, [short.id, long.id])
+        XCTAssertEqual(model.text, "@공통 @공통 인프라 ")
+    }
+
+    @MainActor
+    func testLinkedMentionsSurviveReopeningAndEditingTheDraft() async throws {
+        let env = try environment()
+        let project = try env.repo.createProject(name: "플랫폼")
+        let session = CaptureSessionModel(environment: env)
+        session.beginSession()
+        let model = session.memoDraft
+        model.text = "@플랫"
+        XCTAssertTrue(model.acceptHighlightedCandidate())
+        session.beginSession()
+        XCTAssertEqual(model.text, "@플랫폼 ")
+        XCTAssertEqual(model.selectedProjectIds, [project.id])
+        XCTAssertEqual(model.linkedTokenRanges, [NSRange(location: 0, length: "@플랫폼".utf16.count)])
+        model.text = "수정한 내용 @플랫폼"
+        XCTAssertEqual(model.linkedTokenRanges, [NSRange(location: "수정한 내용 ".utf16.count, length: "@플랫폼".utf16.count)])
+        model.text = "수정한 내용 @플랫"
+        XCTAssertTrue(model.linkedTokenRanges.isEmpty, "연결 이름을 편집하면 잘못된 토큰 모양을 남기지 않는다")
+        XCTAssertEqual(model.selectedProjectIds, [project.id], "본문 편집과 ID 연결은 서로 독립적이다")
     }
 
     // MARK: - (d) ↑↓로 새로 만들기 후보 선택

@@ -283,6 +283,38 @@ final class TaskProjectUXTests: XCTestCase {
     // MARK: - 프로젝트
 
     @MainActor
+    func testCreateStandaloneProjectSelectsItWithoutCreatingRecords() async throws {
+        let env = try environment()
+        let model = ProjectsModel(environment: env)
+        model.load()
+
+        let id = try model.createProject(name: "  서비스 개편  ")
+
+        XCTAssertEqual(try env.repo.project(id: id)?.name, "서비스 개편")
+        XCTAssertEqual(model.selectedProjectId, id)
+        XCTAssertEqual(model.projects, [ProjectSummary(id: id, name: "서비스 개편", openTaskCount: 0, totalTaskCount: 0)])
+        XCTAssertTrue(model.tasks.isEmpty)
+        XCTAssertTrue(try env.repo.tasks().isEmpty)
+        let today = env.calendar.workDate(of: env.options.clock.now())
+        XCTAssertTrue(try env.repo.memos(on: today).isEmpty)
+        model.load()
+        XCTAssertEqual(model.selectedProjectId, id)
+    }
+
+    @MainActor
+    func testCreateProjectRejectsBlankAndDuplicateNamesWithoutChangingSelection() async throws {
+        let env = try environment()
+        let model = ProjectsModel(environment: env)
+        let id = try model.createProject(name: "서비스 개편")
+
+        XCTAssertThrowsError(try model.createProject(name: " \n\t "))
+        XCTAssertThrowsError(try model.createProject(name: " 서비스 개편 "))
+        XCTAssertEqual(model.selectedProjectId, id)
+        XCTAssertEqual(try env.repo.projects().map(\.id), [id])
+        XCTAssertEqual(model.projects.map(\.id), [id])
+    }
+
+    @MainActor
     func testProjectsModelCountsStatusAndKeepsSelection() async throws {
         let env = try environment()
         let tracking = try env.tasks.createTask(title: "추적 업무", projectNames: ["Gamma"],

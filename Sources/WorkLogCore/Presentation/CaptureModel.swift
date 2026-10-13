@@ -148,16 +148,49 @@ public enum CaptureTaskAction: Equatable, Sendable {
         } catch { errorMessage = "입력 후보를 불러오지 못했습니다. 다시 열어 주세요." }
     }
 
+    /// UTF-16 ranges for linked mentions. Formatting never changes the plain-text draft.
+    /// Match whole names, longest first, so spaces and overlapping project names stay intact.
+    public var linkedTokenRanges: [NSRange] {
+        let projectNames = projects.filter { selectedProjectIds.contains($0.id) }.map { "@" + $0.name }
+        let tagNames = isActivityContext ? [] : tags.filter { selectedTagIds.contains($0.id) }.map { "#" + $0.name }
+        let names = (projectNames + tagNames).sorted { $0.count > $1.count }
+        var matches: [NSRange] = []
+        for name in names {
+            var searchStart = text.startIndex
+            while searchStart < text.endIndex,
+                  let range = text.range(of: name, options: [.caseInsensitive], range: searchStart..<text.endIndex) {
+                searchStart = range.upperBound
+                let hasLeadingBoundary = range.lowerBound == text.startIndex || text[text.index(before: range.lowerBound)].isWhitespace
+                let hasTrailingBoundary = range.upperBound == text.endIndex || text[range.upperBound].isWhitespace || text[range.upperBound].isPunctuation
+                let match = NSRange(range, in: text)
+                if hasLeadingBoundary, hasTrailingBoundary,
+                   !matches.contains(where: { NSIntersectionRange($0, match).length > 0 }) {
+                    matches.append(match)
+                }
+            }
+        }
+        return matches.sorted { $0.location < $1.location }
+    }
+
     private var token: (kind: CaptureCandidate.Kind, range: Range<String.Index>, query: String)? {
         let cursor = selectionRange.flatMap { Range($0, in: text)?.lowerBound }
         let end = cursor ?? text.endIndex
         guard let marker = text[..<end].lastIndex(where: { $0 == "@" || $0 == "#" }) else { return nil }
         if marker != text.startIndex && !text[text.index(before: marker)].isWhitespace { return nil }
+        let markerLocation = NSRange(marker..<text.index(after: marker), in: text).location
+        let caretLocation = NSRange(text.startIndex..<end, in: text).length
         let start = text.index(after: marker)
         let suffix = String(text[start..<end])
         guard !suffix.contains(where: \.isNewline) else { return nil }
         let tokenKind: CaptureCandidate.Kind = text[marker] == "@" ? .project : .tag
         let names = tokenKind == .project ? projects.map(\.name) : tags.map(\.name)
+        // A completed mention is a link, not the start of another query as prose follows it.
+        if let linkedRange = linkedTokenRanges.first(where: { $0.location == markerLocation && NSMaxRange($0) <= caretLocation }) {
+            // A separately typed longer name can share a linked name's prefix ("A" / "A project").
+            let extendsName = caretLocation > NSMaxRange(linkedRange) && suffix.last?.isWhitespace == false
+                && names.contains { $0.lowercased().hasPrefix(suffix.lowercased()) }
+            if !extendsName { return nil }
+        }
         var query = suffix
         if cursor == nil && !names.contains(where: { $0.lowercased().hasPrefix(suffix.lowercased()) }) {
             // Without a caret, stop at the longest prefix shared with an existing name.
@@ -258,7 +291,8 @@ public enum CaptureTaskAction: Equatable, Sendable {
         } catch {
             errorMessage = "프로젝트·태그를 선택하지 못했습니다. 다시 시도하세요."; return
         }
-        let replacement = candidate.name + (token.range.upperBound == text.endIndex ? " " : "")
+        let marker = candidate.kind == .project ? "@" : "#"
+        let replacement = marker + candidate.name + (token.range.upperBound == text.endIndex ? " " : "")
         let caret = NSRange(token.range, in: text).location + replacement.utf16.count
         text.replaceSubrange(token.range, with: replacement)
         selectionRange = NSRange(location: caret, length: 0)

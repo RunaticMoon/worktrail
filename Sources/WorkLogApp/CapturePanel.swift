@@ -807,7 +807,6 @@ extension View {
     let onConfirmCompletion: () -> Void
     @State private var highlighted = "new"
     @State private var choosingTask = true
-    @State private var trackingExpanded = false
     @Environment(CaptureKeyboardNavigation.self) private var navigation
 
     private var keys: [String] { ["new"] + model.filteredTasks.map { "task:\($0.id)" } }
@@ -870,17 +869,21 @@ extension View {
                         CaptureDraftEditor(model: model,
                             label: isNewTask ? "첫 줄은 업무명, 다음 줄은 진행 내용" : "진행 내용", showsTokens: true)
                         if isNewTask {
-                            CaptureDisclosure(title: "프로젝트별 상태 관리", id: "tracking", order: 700,
-                                summary: model.projectTrackingMode == .perProject ? "프로젝트별 추적" : "공통 상태",
-                                isExpanded: $trackingExpanded) {
-                                Toggle("프로젝트별로 추적", isOn: Binding(
+                            VStack(alignment: .leading, spacing: 6) {
+                                Toggle("프로젝트별로 진행·완료를 따로 관리", isOn: Binding(
                                     get: { model.projectTrackingMode == .perProject },
                                     set: { model.projectTrackingMode = $0 ? .perProject : .shared }))
-                                    .font(.callout).padding(.top, 8)
-                                    .captureFocus("trackingToggle", order: 710, action: {
+                                    .font(.callout.weight(.medium))
+                                    .captureFocus("trackingToggle", order: 700, action: {
                                         model.projectTrackingMode = model.projectTrackingMode == .perProject ? .shared : .perProject
                                     })
+                                Text(model.projectTrackingMode == .perProject
+                                     ? "예: A 프로젝트는 완료, B 프로젝트는 진행 중. 프로젝트를 완료해도 업무 전체 상태는 바뀌지 않습니다."
+                                     : "프로젝트는 연결만 하고, 진행·완료는 업무 전체 상태로 관리합니다.")
+                                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
+                            .padding(.top, 4)
                         }
                     }
                 }
@@ -897,6 +900,7 @@ extension View {
             navigation.onTaskSearch = changeTask
         }
         .onDisappear { navigation.onTaskSearch = nil }
+        .onChange(of: model.taskSelection) { _, _ in highlighted = selectedTaskKey }
         .onChange(of: model.pendingCompletion != nil) { _, pending in
             if pending { DispatchQueue.main.async { navigation.focus("cancelCompletion") } }
         }
@@ -1129,8 +1133,13 @@ extension View {
                 if !selectedTokenNames.isEmpty {
                     Button { tokensExpanded = true } label: {
                         HStack(spacing: 6) {
-                            Text(selectedTokenNames.joined(separator: " · ")).lineLimit(1)
-                            Text("\(selectedTokenNames.count)개 연결").fixedSize()
+                            ForEach(Array(selectedTokenNames.prefix(3).enumerated()), id: \.offset) { _, name in
+                                linkedTokenBadge(name)
+                            }
+                            if selectedTokenNames.count > 3 {
+                                Text("+\(selectedTokenNames.count - 3)").fixedSize()
+                            }
+                            Spacer(minLength: 0)
                             Image(systemName: "chevron.down").accessibilityHidden(true)
                         }.font(.caption).foregroundStyle(WorkLogTheme.muted)
                     }
@@ -1156,6 +1165,20 @@ extension View {
             + (isActivity ? [] : model.selectedTagIds.map { id in "#\(model.tags.first { $0.id == id }?.name ?? "태그")" })
     }
 
+    private func linkedTokenBadge(_ name: String) -> some View {
+        HStack(spacing: 4) {
+            Text(name).lineLimit(1)
+            Image(systemName: "link").font(.caption2).accessibilityHidden(true)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(WorkLogTheme.text)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(WorkLogTheme.accentSoft, in: Capsule())
+        .overlay(Capsule().strokeBorder(WorkLogTheme.outlineColor(for: contrast),
+                                       lineWidth: WorkLogTheme.outlineWidth(for: contrast)))
+        .help(name + " · 연결됨")
+    }
+
     private var selectedTokens: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -1167,16 +1190,16 @@ extension View {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(model.selectedProjectIds, id: \.self) { id in
                         HStack {
-                            Text("@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")")
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            linkedTokenBadge("@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")")
+                            Spacer(minLength: 4)
                             Button("연결 해제") { model.removeProject(id) }.controlSize(.small)
                         }
                     }
                     if !isActivity {
                         ForEach(model.selectedTagIds, id: \.self) { id in
                             HStack {
-                                Text("#\(model.tags.first { $0.id == id }?.name ?? "태그")")
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                linkedTokenBadge("#\(model.tags.first { $0.id == id }?.name ?? "태그")")
+                                Spacer(minLength: 4)
                                 Button("연결 해제") { model.removeTag(id) }.controlSize(.small)
                             }
                         }
@@ -1273,59 +1296,6 @@ extension View {
         }
     }
 
-}
-
-/// Local disclosure headers are real buttons with a visible keyboard focus ring.
-@MainActor private struct CaptureDisclosure<Content: View>: View {
-    let title: String
-    let id: String
-    let order: Int
-    let summary: String
-    @Binding var isExpanded: Bool
-    let content: () -> Content
-    @Environment(CaptureKeyboardNavigation.self) private var navigation
-
-    init(title: String, id: String, order: Int, summary: String,
-         isExpanded: Binding<Bool>, @ViewBuilder content: @escaping () -> Content) {
-        self.title = title; self.id = id; self.order = order; self.summary = summary
-        self._isExpanded = isExpanded; self.content = content
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button { isExpanded.toggle() } label: {
-                HStack(alignment: .top, spacing: 7) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.callout.weight(.medium))
-                        if !isExpanded {
-                            Text(summary).font(.caption).foregroundStyle(WorkLogTheme.muted)
-                        }
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                }
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .captureFocus(id, order: order, action: { isExpanded.toggle() })
-            .accessibilityLabel(title)
-            .accessibilityValue(isExpanded ? "펼침" : "접힘, \(summary)")
-            .worklogHelp("펼침/접힘", keys: "Space")
-            .onKeyPress(keys: [.downArrow, .upArrow], phases: .down) { press in
-                guard press.modifiers.isEmpty else { return .ignored }
-                if press.key == .downArrow && !isExpanded { isExpanded = true }
-                else { navigation.move(backwards: press.key == .upArrow) }
-                return .handled
-            }
-            if isExpanded { content().padding(.leading, 4) }
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .contain)
-    }
 }
 
 /// Inline recent/search rows avoid a second mouse-only control inside the disclosure.
@@ -1643,6 +1613,7 @@ extension View {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let editor = CaptureNSTextView()
+        editor.textContainer?.replaceLayoutManager(CaptureTokenLayoutManager())
         editor.isRichText = false
         editor.allowsUndo = true
         editor.focusRingType = .exterior
@@ -1693,6 +1664,13 @@ extension View {
                   editor.selectedRange() != selectionRange {
             editor.setSelectedRange(selectionRange)
         }
+        if !editor.hasMarkedText(), let layout = editor.layoutManager as? CaptureTokenLayoutManager {
+            let ranges = model.linkedTokenRanges
+            if layout.linkedRanges != ranges {
+                layout.linkedRanges = ranges
+                editor.needsDisplay = true
+            }
+        }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CaptureTextEditor
@@ -1707,6 +1685,33 @@ extension View {
             guard let editor, !editor.hasMarkedText() else { return }
             parent.selectionRange = editor.selectedRange()
         }
+    }
+}
+
+/// Decorative pills keep mentions as editable, copyable plain text, including their markers.
+/// Drawing in the layout manager keeps the background aligned with wrapped lines and scrolling.
+@MainActor private final class CaptureTokenLayoutManager: NSLayoutManager {
+    var linkedRanges: [NSRange] = []
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        if let container = textContainers.first, let storage = textStorage {
+            for range in linkedRanges where range.length > 0 && NSMaxRange(range) <= storage.length {
+                let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                guard NSIntersectionRange(glyphs, glyphsToShow).length > 0 else { continue }
+                enumerateEnclosingRects(forGlyphRange: glyphs,
+                                        withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                        in: container) { rect, _ in
+                    let pill = NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y)
+                        .insetBy(dx: -2, dy: 0), xRadius: 4, yRadius: 4)
+                    NSColor.controlAccentColor.withAlphaComponent(0.14).setFill()
+                    pill.fill()
+                    NSColor.controlAccentColor.withAlphaComponent(0.4).setStroke()
+                    pill.lineWidth = 0.75
+                    pill.stroke()
+                }
+            }
+        }
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
     }
 }
 

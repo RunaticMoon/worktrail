@@ -47,6 +47,16 @@ public struct ProjectTaskRow: Identifiable, Equatable, Sendable {
 
     public init(environment: AppEnvironment) { self.environment = environment }
 
+    /// 기록 없이도 프로젝트를 만들고 새 항목을 바로 선택한다.
+    @discardableResult public func createProject(name: String) throws -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw WorkLogError.validation("프로젝트 이름을 입력하세요.") }
+        let project = try environment.repo.createProject(name: name)
+        load()
+        select(project.id)
+        return project.id
+    }
+
     public func load() {
         do {
             var summaries: [ProjectSummary] = []

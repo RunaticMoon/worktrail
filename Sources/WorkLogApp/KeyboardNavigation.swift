@@ -10,7 +10,15 @@ private struct WorkLogSidebarFocusKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+private struct WorkLogProjectCreationKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
+    var worklogCreateProject: (() -> Void)? {
+        get { self[WorkLogProjectCreationKey.self] }
+        set { self[WorkLogProjectCreationKey.self] = newValue }
+    }
     var worklogFocusContent: (() -> Void)? {
         get { self[WorkLogContentFocusKey.self] }
         set { self[WorkLogContentFocusKey.self] = newValue }
@@ -214,7 +222,8 @@ struct KeyboardShortcutsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     shortcuts("앱 화면", rows: [
-                        ("⌘N / ⌘F", "빠른 입력 / 검색 패널 열기"),
+                        ("⌘N", "프로젝트: 새 프로젝트 · 업무: 새 업무 · 그 외: 빠른 입력"),
+                        ("⌘F", "검색 패널 열기"),
                         ("⌘1…6", "오늘 · 업무 · 프로젝트 · 주간보고 · 성과자료 · Secret"),
                         ("⌘7 / ⌘8 / ⌘9", "검색 화면 / 관계 그래프 / 휴지통"),
                         ("⌘,", "설정"),

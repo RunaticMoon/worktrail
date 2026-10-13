@@ -15,7 +15,7 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ScreenHeader(title: "업무", purpose: "") {
-                Button(action: onCapture) { ShortcutLabel(title: "업무 기록 추가", keys: "⌘N") }
+                Button(action: onCapture) { ShortcutLabel(title: "새 업무", keys: "⌘N") }
             }
             HStack(spacing: 12) {
                 TextField("업무 이름으로 찾기", text: $model.query)
@@ -29,7 +29,7 @@ import WorkLogCore
                 RecoveryNotice(failed: error, preserved: "저장된 업무와 검색어는 그대로입니다.", retry: { model.load() })
             } else if model.rows.isEmpty {
                 StateView(kind: .empty, title: "첫 업무를 기록하세요", detail: "빠른 입력의 Task 유형에서 업무를 등록할 수 있습니다.",
-                    actionTitle: "업무 기록 추가 ⌘N", action: onCapture)
+                    actionTitle: "새 업무 ⌘N", action: onCapture)
             } else if model.filteredRows.isEmpty {
                 StateView(kind: .noResults, title: "일치하는 업무가 없습니다", detail: "업무 이름을 확인하거나 검색어를 지우세요.",
                     actionTitle: "검색어 지우기", action: { model.query = "" })
