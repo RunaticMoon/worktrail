@@ -491,6 +491,9 @@ extension View {
     @State private var navigation = CaptureKeyboardNavigation()
     @State private var dateExpanded = false
     @State private var dateBeforeEditing: WorkDate?
+    @State private var confirmsNewDraft = false
+    @State private var draftToReplace: CaptureModel?
+    @State private var draftGeneration = 0
     @Environment(\.colorSchemeContrast) private var contrast
     let onSave: () -> Void
     let onConfirmCompletion: () -> Void
@@ -520,17 +523,31 @@ extension View {
             Rectangle().fill(WorkLogTheme.border).frame(height: 1)
             VStack(alignment: .leading, spacing: 10) {
                 if let draft = session.activeDraft {
-                    workDate(draft: draft)
+                    HStack(spacing: 12) {
+                        workDate(draft: draft)
+                        Spacer(minLength: 0)
+                        Button(action: requestNewDraft) {
+                            Label("새로 작성", systemImage: "square.and.pencil")
+                        }
+                        .font(.caption)
+                        .fixedSize()
+                        .captureFocus("newDraft", order: 110, action: requestNewDraft)
+                        .disabled(draft.isSubmitting || draft.pendingCompletion != nil)
+                        .worklogHelp("현재 초안을 비우고 오늘 날짜로 새로 작성")
+                    }
                 }
-                switch session.tab {
-                case .memo:
-                    CaptureDraftEditor(model: session.memoDraft, label: "메모 본문", showsTokens: true,
-                                       fillsAvailableSpace: true)
-                case .task:
-                    CaptureTaskContent(model: session.taskDraft, onConfirmCompletion: onConfirmCompletion)
-                case .secret:
-                    SecretCaptureView(model: secrets, onSaved: onSecretSaved, onCancel: onDismiss)
+                Group {
+                    switch session.tab {
+                    case .memo:
+                        CaptureDraftEditor(model: session.memoDraft, label: "메모 본문", showsTokens: true,
+                                           fillsAvailableSpace: true)
+                    case .task:
+                        CaptureTaskContent(model: session.taskDraft, onConfirmCompletion: onConfirmCompletion)
+                    case .secret:
+                        SecretCaptureView(model: secrets, onSaved: onSecretSaved, onCancel: onDismiss)
+                    }
                 }
+                .id(draftGeneration)
             }
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -555,6 +572,44 @@ extension View {
         .environment(navigation)
         .background(CaptureFocusAnchor(tab: session.tab, navigation: navigation,
             onDate: dateHandler, onStatus: statusHandler, onBackToActions: backHandler))
+        .alert("초안을 버리고 새로 작성할까요?", isPresented: $confirmsNewDraft) {
+            Button("계속 작성", role: .cancel) { draftToReplace = nil }
+            Button("버리고 새로 작성", role: .destructive) {
+                if let draft = draftToReplace { startNewDraft(replacing: draft) }
+                draftToReplace = nil
+            }
+        } message: {
+            Text("현재 \(draftToReplace?.kind.label ?? "") 초안의 입력 내용과 연결 정보를 버리고 오늘 날짜의 빈 초안으로 시작합니다. 버린 초안은 복구할 수 없습니다.")
+        }
+    }
+
+    private func requestNewDraft() {
+        guard let draft = session.activeDraft, !saveState.isSaving,
+              !draft.isSubmitting, draft.pendingCompletion == nil,
+              (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return }
+        if session.hasDraft(session.tab) {
+            draftToReplace = draft
+            confirmsNewDraft = true
+        } else {
+            startNewDraft(replacing: draft)
+        }
+    }
+
+    private func startNewDraft(replacing draft: CaptureModel) {
+        guard session.activeDraft === draft, !saveState.isSaving,
+              session.startNewOrdinaryDraft() else { return }
+        // Clear the date snapshot before closing its popover so it cannot restore the old date.
+        dateBeforeEditing = nil
+        dateExpanded = false
+        if saveState.failedDraft === draft { saveState.failedDraft = nil }
+        navigation.isPopoverPresented = false
+        navigation.keepTabFocus = false
+        // Recreate editor-local state, including the task picker and native text undo history.
+        draftGeneration += 1
+        let panel = (NSApp.keyWindow as? KeyboardPanel)
+            ?? (NSApp.keyWindow?.sheetParent as? KeyboardPanel)
+        panel?.undoManager?.removeAllActions()
+        panel?.requestDefaultFocus(for: session.tab)
     }
 
     private var dateHandler: (() -> Void)? {
@@ -1675,7 +1730,9 @@ extension View {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CaptureTextEditor
         weak var editor: CaptureNSTextView?
+        private let draftUndoManager = UndoManager()
         init(_ parent: CaptureTextEditor) { self.parent = parent }
+        func undoManager(for view: NSTextView) -> UndoManager? { draftUndoManager }
         func textDidChange(_ notification: Notification) {
             guard let editor else { return }
             parent.text = editor.string

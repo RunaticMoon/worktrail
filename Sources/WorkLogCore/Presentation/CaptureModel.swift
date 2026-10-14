@@ -131,6 +131,30 @@ public enum CaptureTaskAction: Equatable, Sendable {
         dismissedTokenKey = nil
     }
 
+    /// 현재 유형을 유지하고 사용자가 명시적으로 새 일반 초안을 시작한다.
+    /// 저장·완료 확인 중에는 진행 중인 작업을 버리지 않는다. 저장소에는 쓰지 않는다.
+    @discardableResult public func startNewDraft() -> Bool {
+        guard environment != nil, !isSubmitting, pendingCompletion == nil else { return false }
+        text = ""
+        selectedProjectIds = []
+        selectedTagIds = []
+        targetTaskId = nil
+        relatedRecords = []
+        taskQuery = ""
+        taskSelection = .newTask
+        taskAction = .addActivity
+        statusTarget = nil
+        pendingCompletion = nil
+        pendingCompletionTaskId = nil
+        initialStatus = .planned
+        projectTrackingMode = .shared
+        errorMessage = nil
+        lastSavedId = nil
+        resetWorkDateToToday()
+        reloadCandidates()
+        return true
+    }
+
     /// 저장소 참조를 놓는다. 백업 복원 등에서 DB를 붙잡지 않게 한다. 이후 호출은 무해하다.
     public func detach() {
         environment = nil
@@ -467,7 +491,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
             _ = try environment.tasks.completeTask(taskId: taskId, workDate: workDate, confirmRemaining: true)
             pendingCompletion = nil
             pendingCompletionTaskId = nil
+            taskQuery = ""
             taskSelection = .newTask
+            taskAction = .addActivity
             statusTarget = nil
             relatedRecords = []
             errorMessage = nil
@@ -607,7 +633,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
             }
             try environment.tasks.changeTaskStatus(taskId: taskId, kind: eventKind, workDate: workDate)
         }
+        taskQuery = ""
         taskSelection = .newTask
+        taskAction = .addActivity
         statusTarget = nil
         pendingCompletion = nil
         pendingCompletionTaskId = nil
@@ -666,7 +694,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
     private func finishOrdinarySubmit() {
         text = ""; selectedProjectIds = []; selectedTagIds = []; targetTaskId = nil
         relatedRecords = []
+        taskQuery = ""
         taskSelection = .newTask
+        taskAction = .addActivity
         statusTarget = nil
         pendingCompletion = nil
         pendingCompletionTaskId = nil
