@@ -82,8 +82,8 @@ import Observation
 
     /// 해당 유형 탭에 사용자가 이어 쓸 초안이 남아 있는지.
     ///
-    /// `memo`/`task`는 각 초안에 내용이 있으면(본문이 공백이 아니거나 관련 기록·대상 업무가
-    /// 선택되어 있으면) `true`이며 `draftsEmpty`와 같은 판정 기준을 쓴다.
+    /// `memo`/`task`는 본문·프로젝트·태그·관련 기록이나 업무 검색어·선택·설정이 남아 있으면
+    /// `true`이며 `draftsEmpty`와 같은 판정 기준을 쓴다.
     /// `secret`은 이 모델이 Secret 초안을 소유하지 않으므로 항상 `false`다(앱이 `SecretsModel`로 판단).
     public func hasDraft(_ kind: CaptureKind) -> Bool {
         switch kind {
@@ -91,6 +91,15 @@ import Observation
         case .task: return !isEmpty(taskDraft)
         case .secret: return false
         }
+    }
+
+    /// 활성 일반 탭만 새 초안으로 비운다. 다른 탭의 초안과 기본 입력 유형은 유지한다.
+    /// Secret 값은 소유하지 않으며 Secret 탭에서는 아무 작업도 하지 않는다.
+    @discardableResult public func startNewOrdinaryDraft() -> Bool {
+        guard let draft = activeDraft, draft.startNewDraft() else { return false }
+        forceFixedKinds()
+        pendingNewSession = false
+        return true
     }
 
     /// 일반 탭에서만 활성 초안을 저장한다.
@@ -136,14 +145,19 @@ import Observation
         taskDraft.kind = .task
     }
 
-    /// "빈 초안": 내용이 공백뿐·관련 기록 없음·업무 초안은 새 업무 선택.
+    /// 날짜만 바뀐 빈 초안은 제외한다. 날짜 경과를 사용자 편집으로 간주하지 않는다.
     private var draftsEmpty: Bool { isEmpty(memoDraft) && isEmpty(taskDraft) }
 
     private func isEmpty(_ draft: CaptureModel) -> Bool {
         let blankBody = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let noLinks = draft.relatedRecords.isEmpty
+        let noLinks = draft.relatedRecords.isEmpty && draft.selectedProjectIds.isEmpty
+            && draft.selectedTagIds.isEmpty && draft.targetTaskId == nil
         if draft === taskDraft {
-            return blankBody && noLinks && draft.taskSelection == .newTask
+            return blankBody && noLinks
+                && draft.taskQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && draft.taskSelection == .newTask && draft.taskAction == .addActivity
+                && draft.statusTarget == nil && draft.pendingCompletion == nil
+                && draft.initialStatus == .planned && draft.projectTrackingMode == .shared
         }
         return blankBody && noLinks
     }
