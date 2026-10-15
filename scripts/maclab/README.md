@@ -93,3 +93,7 @@ Task는 가짜 진행 기록 추가, 보고서는 편집·저장·계획 확인�
 ## 설정과 종료 업무 확인 (2026-10-13)
 
 현재 helper는 `settings-task-review.js --action settings|tasks|capture`로 실행한다. 세 action은 각각 실행하며, 마지막 capture는 패널을 열어 둔다. 가짜 `many` 실행 인자를 검사한 뒤 설정 검색·모델 선택기와 종료 업무 접힘·검색, 취소 업무의 입력 후보 제외를 확인한다. 설정 저장·계정 확인·AI 호출·Secret 열기는 하지 않는다. Maclab 대화형 exec의 작업 디렉터리는 prepare 단계와 다를 수 있으므로, 빌드 출력의 `BUILT_APP` 상위 디렉터리를 기준으로 helper 절대 경로를 전달한다. 원격 실제 실행 결과는 `docs/ui-refresh.md`에 기록한다.
+
+## macOS 26 표준 목록 (2026-10-15)
+
+`keyboard-flow.js`는 네이티브 `List`의 AXOutline/AXTable/AXList/AXScrollArea 역할과 입력 유형 segmented Picker의 명시적 AX 선택값을 허용한다. 역할 변경만으로 성공을 추정하지 않고 동일 레이블·창·실제 포커스 조상 관계를 검사한다. `--action main`은 사이드바에서 업무↔프로젝트 방향키 이동을 3회 반복하여 새 화면이 포커스를 빼앗지 않는지도 확인한다. 실제 실행·helper 해시·미검증 범위는 `docs/ui-refresh.md`에 기록한다.

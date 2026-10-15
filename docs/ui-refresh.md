@@ -13,9 +13,17 @@
 
 기준: [Apple Materials HIG](https://developer.apple.com/design/human-interface-guidelines/materials), [Liquid Glass 적용](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass), [Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars), [Buttons](https://developer.apple.com/design/human-interface-guidelines/buttons), [macOS 디자인](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos). 이후 작업에도 적용하도록 `AGENTS.md`에 UI/UX 규칙을 기록했다.
 
-검증 진행: Linux Swift 6.3.3 `swift build --build-tests`와 전체 테스트 807개(실패 0), 배포 도구 테스트 25개, macOS 26 타깃 Swift 구문 분석과 shell/JS 구문 검사 및 `git diff --check` 통과. macOS SDK 빌드·실제 화면 확인 결과는 검증 종료 후 이 항목에 갱신한다. 구문 분석이나 Linux 빌드를 SwiftUI 타입 검사·화면 검증으로 간주하지 않는다.
+검증: Linux Swift 6.3.3 `swift build --build-tests`와 전체 테스트 807개(실패 0), 배포 도구 테스트 25개, macOS 26 타깃 Swift 구문 분석과 shell/JS 구문 검사 및 `git diff --check` 통과.
 
-macOS 확인 항목: 라이트/다크·투명도 줄이기·대비 높이기·동작 줄이기, 작은 창/긴 한국어, 반복 사이드바 ↑↓와 ⌘0/⌘⇧0, 업무 선택·완료 목록 접기·상세 복귀, 날짜와 서울 시간대, 메모/업무/Secret 유형과 초안 복귀, 한글 IME, 설정 입력/저장 및 VoiceOver. 가짜 fixture만 사용한다.
+Maclab `fbb48f5e-2ff8-4435-83b3-46fabb106afd`에서 커밋 `8232854`의 앱을 macOS 26.6.2 / Xcode 27.0으로 빌드했다. 업로드 아카이브 SHA-256은 `80e1259872f9d7e21d06e6e2de7ffe9182aced39434dd1ee3bd6c23e3b2f9967`이다. `ui-flows`의 빌드, 앱 실행, 메모 저장·이전 앱 복귀, ⌘N 입력창, 창 유지 assertion은 모두 통과했다. 실제 회사 데이터·계정·Keychain을 사용하지 않는 DEBUG `many` fixture만 실행했다.
+
+대화형 추가 검증에서 빠른 입력의 전역 진입, ⌘1·2·3 유형 전환 3회 반복, ⌃Tab 순환, Tab/Shift+Tab 포커스와 Esc 닫기가 통과했다. 메인 화면은 ⌘숫자 이동, ⌘0/⌘⇧0, 사이드바 ↑↓ 반복 이동 시 포커스 유지, 업무 Return 상세 열기·Esc 후 목록 복귀, 오늘 영역 순환을 통과했다. 다크 모드 검색은 전역 진입→결과→가짜 메모 편집/⌘S 저장→검색어·선택·포커스 복귀→Esc 닫기까지 통과했다.
+
+첫 메인 키보드 helper는 목록을 `AXScrollArea`로 한정하여 실패했다. 실제 AX 조회에서 사이드바와 업무 목록이 `AXOutline`임을 확인하고, helper를 동일 레이블·역할·창과 실제 포커스 조상 관계로 판정하도록 수정했다. 수정 helper SHA-256 `15dc748b2e92d54ca630330458c4f2cbaf79f967a9f276b0d0795ad041c072e7`를 원격에 동기화하고 위 키보드 동선을 재실행해 통과했다. 앱 소스는 이 과정에서 변경하지 않았다.
+
+실제 화면은 오늘 1280×800 (`fcec9b7b-8bbe-4a2b-826e-b4248e51c9da`), 메모 패널 (`fee92487-ed51-4861-b062-a2cb0290d2fc`), 설정 960×640 (`cbd7d598-c0b3-4c39-af85-a51790ccf9fe`), 다크 업무 목록 960×640 (`aa0d4fd4-ec82-4911-9dca-c84d82416dec`)에서 확인했다. 설정의 입력·저장 버튼과 선택 행의 제목·상태가 보이는 것을 확인했다. Xcode 27 빌드에는 기존 AppKit actor 격리/Sendable 및 weak 변수 경고가 남아 있으며 Swift 5 언어 모드에서 빌드는 통과했다. 전체 VoiceOver·한글 IME·투명도/대비/모션 설정 조합 및 배포용 DMG 재생성·업데이트 설치는 이번 Maclab 실행 범위에 포함하지 않았다.
+
+추가 수동 확인 항목: 투명도 줄이기·대비 높이기·동작 줄이기, VoiceOver·한글 IME 전체 조합, 날짜 팝오버와 서울 시간대 경계, 미저장 초안/Undo/다중 창, 완료 목록 접기와 설정 저장의 전체 조합. 가짜 fixture만 사용한다.
 
 ## 빠른 입력에서 새로 작성 (2026-10-13)
 
