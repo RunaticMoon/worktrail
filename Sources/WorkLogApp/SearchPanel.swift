@@ -124,7 +124,7 @@ import WorkLogCore
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.callout).fontWeight(.semibold)
-                        .foregroundStyle(WorkLogTheme.accent)
+                        .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                     Text("검색").font(.callout.weight(.semibold))
                     Spacer()
@@ -137,24 +137,25 @@ import WorkLogCore
                         .frame(width: 26, height: 26)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(WorkLogButtonStyle())
+                .buttonStyle(.borderless)
                 .accessibilityLabel("검색 패널 닫기")
                 .worklogHelp("닫고 이전 앱으로 돌아가기", keys: "Esc")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(WorkLogTheme.surface)
-            Rectangle().fill(WorkLogTheme.border).frame(height: 1)
+            .glassEffect(.regular, in: .rect(cornerRadius: 16))
+            .padding(12)
             SearchScreen(model: model, environment: environment, secrets: secrets,
                 onOpenSecrets: onOpenSecrets, isPanel: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(WorkLogTheme.canvas)
         }
         .foregroundStyle(WorkLogTheme.text)
         .tint(WorkLogTheme.accent)
-        .background(WorkLogTheme.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius, style: .continuous))
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: WorkLogTheme.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(WorkLogTheme.border, lineWidth: 1)
                 .allowsHitTesting(false)
         }

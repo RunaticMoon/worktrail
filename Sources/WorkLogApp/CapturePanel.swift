@@ -433,7 +433,7 @@ extension View {
             guard let self, self.isVisible, request == self.focusRequest else { return }
             self.contentView?.layoutSubtreeIfNeeded()
             if self.navigation?.keepTabFocus == true {
-                if self.navigation?.focus("tab:\(tab.rawValue)") == true { return }
+                if self.navigation?.focus("tab:picker") == true { return }
             }
             switch tab {
             case .memo:
@@ -503,24 +503,23 @@ extension View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                HStack(spacing: 4) {
-                    tab(.memo, title: "메모", symbol: "square.and.pencil")
-                    tab(.task, title: "업무", symbol: "checkmark.circle")
-                    tab(.secret, title: "Secret", symbol: "lock")
-                }
+                captureKindPicker
                 Spacer(minLength: 4)
                     .frame(maxWidth: .infinity, minHeight: 28)
                     .overlay(CaptureWindowDragArea())
                 Button(action: onDismiss) { Image(systemName: "xmark").frame(width: 24, height: 24) }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
                     .captureFocus("close", order: Int.max - 100, action: onDismiss)
                     .accessibilityLabel("빠른 입력 닫기")
                     .worklogHelp("닫기 (초안 보존)", keys: "Esc")
                     .disabled(saveState.isSaving)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            // Only the floating navigation controls use Liquid Glass. Text entry
+            // stays on a standard content surface for a stable reading contrast.
+            .glassEffect(.regular, in: .rect(cornerRadius: 16))
+            .padding(12)
 
-            Rectangle().fill(WorkLogTheme.border).frame(height: 1)
             VStack(alignment: .leading, spacing: 10) {
                 if let draft = session.activeDraft {
                     HStack(spacing: 12) {
@@ -551,6 +550,7 @@ extension View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(WorkLogTheme.canvas)
             .disabled(saveState.isSaving)
 
             if let draft = session.activeDraft {
@@ -560,11 +560,11 @@ extension View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(WorkLogTheme.text)
         .tint(WorkLogTheme.accent)
-        .buttonStyle(WorkLogButtonStyle())
-        .background(WorkLogTheme.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .buttonStyle(.bordered)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
                               lineWidth: WorkLogTheme.outlineWidth(for: contrast))
                 .allowsHitTesting(false)
@@ -698,40 +698,20 @@ extension View {
             : draft.taskAction == .changeStatus ? "statusAction" : "action")
     }
 
-    private func tab(_ kind: CaptureKind, title: String, symbol: String) -> some View {
-        let selected = session.tab == kind
-        let hasDraft = kind == .secret ? secrets.hasUnsavedRows : session.hasDraft(kind)
-        let select = { navigation.keepTabFocus = false; session.select(kind) }
-        return Button(action: select) {
-            HStack(spacing: 6) {
-                Label(title, systemImage: symbol).fixedSize()
-                Keycap(kind == .memo ? "⌘1" : kind == .task ? "⌘2" : "⌘3")
-                    .accessibilityHidden(true)
-                if hasDraft {
-                    Circle().fill(WorkLogTheme.muted).frame(width: 4, height: 4)
-                        .accessibilityHidden(true)
-                }
-            }
-                .font(.callout.weight(selected ? .semibold : .medium))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .foregroundStyle(selected ? WorkLogTheme.text : WorkLogTheme.muted)
-                .background(selected ? WorkLogTheme.surface : .clear,
-                            in: RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(selected ? WorkLogTheme.border : .clear)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 6))
+    private var captureKindPicker: some View {
+        Picker("입력 유형", selection: Binding(
+            get: { session.tab },
+            set: { navigation.keepTabFocus = false; session.select($0) })) {
+            captureKindLabel(.memo, title: "메모").tag(CaptureKind.memo)
+            captureKindLabel(.task, title: "업무").tag(CaptureKind.task)
+            captureKindLabel(.secret, title: "Secret").tag(CaptureKind.secret)
         }
-        .buttonStyle(.plain)
-        .worklogHelp("\(title) 입력", keys: kind == .memo ? "⌘1" : kind == .task ? "⌘2" : "⌘3")
-        .captureFocus("tab:\(kind.rawValue)", order: Int.max - 10 + (kind == .memo ? 0 : kind == .task ? 1 : 2),
-                      action: select)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 360)
+        .captureFocus("tab:picker", order: Int.max - 10)
+        .worklogHelp("메모 · 업무 · Secret 입력", keys: "⌘1 / ⌘2 / ⌘3 · ⌃Tab")
         .disabled(saveState.isSaving || session.activeDraft?.pendingCompletion != nil)
-        .accessibilityLabel(hasDraft ? "\(title), 초안 있음" : title)
-        .accessibilityValue(selected ? "선택됨" : "")
-        .accessibilityAddTraits(selected ? [.isSelected] : [])
         .onKeyPress(keys: [.leftArrow, .rightArrow], phases: .down) { press in
             guard press.modifiers.isEmpty, !saveState.isSaving,
                   session.activeDraft?.pendingCompletion == nil,
@@ -740,6 +720,12 @@ extension View {
             session.cycleTab(backwards: press.key == .leftArrow)
             return .handled
         }
+    }
+
+    private func captureKindLabel(_ kind: CaptureKind, title: String) -> some View {
+        let hasDraft = kind == .secret ? secrets.hasUnsavedRows : session.hasDraft(kind)
+        return Text(hasDraft ? "\(title) •" : title)
+            .accessibilityLabel(hasDraft ? "\(title), 초안 있음" : title)
     }
 
     private func footer(draft: CaptureModel) -> some View {
@@ -774,10 +760,7 @@ extension View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(WorkLogTheme.surface)
-        .overlay(alignment: .top) {
-            Rectangle().fill(WorkLogTheme.border).frame(height: 1)
-        }
+        .background(.bar)
     }
 
     private var keyboardHints: some View {
@@ -801,7 +784,7 @@ extension View {
                 Keycap("⌘↩").accessibilityHidden(true)
             }
         }
-        .buttonStyle(WorkLogButtonStyle(prominent: true))
+        .buttonStyle(.borderedProminent)
         .captureFocus("save", order: 800, action: onSave)
         .disabled(saveState.isSaving || draft.isSubmitting || draft.pendingCompletion != nil)
         .accessibilityLabel("저장하고 이전 앱으로 돌아가기")
@@ -1054,7 +1037,7 @@ extension View {
                         .accessibilityLabel("완료 확인 취소")
                     Button("그래도 완료", action: onConfirmCompletion)
                         .captureFocus("confirmCompletion", order: 501, action: onConfirmCompletion)
-                        .buttonStyle(WorkLogButtonStyle(prominent: true)).disabled(model.isSubmitting)
+                        .buttonStyle(.borderedProminent).disabled(model.isSubmitting)
                 }
             }
         }
@@ -1102,9 +1085,11 @@ extension View {
     private func actionButton(_ title: String, changesStatus: Bool) -> some View {
         let selected = (model.taskAction == .changeStatus) == changesStatus
         let select = { model.taskAction = changesStatus ? .changeStatus : .addActivity }
-        return Button(action: select) { Text(title).font(.callout).padding(.horizontal, 10).padding(.vertical, 6) }
-            .buttonStyle(.plain)
-            .background(selected ? WorkLogTheme.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 5))
+        return Button(action: select) {
+            Label(title, systemImage: selected ? "checkmark.circle.fill" : "circle")
+        }
+            .buttonStyle(.bordered)
+            .tint(selected ? WorkLogTheme.accent : nil)
             .captureFocus(changesStatus ? "statusAction" : "action", order: changesStatus ? 401 : 400, action: select)
             .accessibilityValue(selected ? "선택됨" : "선택 안 됨")
             .disabled(isLocked)
@@ -1269,7 +1254,7 @@ extension View {
             Label(model.relatedRecords.isEmpty ? "관련 기록" : "관련 기록 \(model.relatedRecords.count)개",
                   systemImage: "link").font(.caption)
         }
-        .buttonStyle(.plain).foregroundStyle(WorkLogTheme.muted)
+        .buttonStyle(.bordered).controlSize(.small)
         .captureFocus("related", order: 600, action: { relatedExpanded = true })
         .popover(isPresented: $relatedExpanded) {
             VStack(alignment: .leading, spacing: 12) {

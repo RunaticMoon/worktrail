@@ -17,16 +17,18 @@
 | `Tests/WorkLogCoreTests` | XCTest | Linux |
 | `scripts/build-macos-app.sh`, `scripts/build-dmg.sh` | `.app` 번들(ad-hoc 서명)과 `WorkLog-<VERSION>-arm64.dmg` 생성 | macOS CI에서 실행 |
 | `distribution/` | 릴리즈 버전·해시 검사(`release.py`), DMG 검증, Release 업로드 | `release.py`는 Linux 단위 테스트 |
-| `.github/workflows/macos.yml` | macOS 15 러너에서 전체 빌드·테스트·DMG 생성 검증 | PR·push마다 실행 |
+| `.github/workflows/macos.yml` | macOS 26 러너에서 전체 빌드·테스트·DMG 생성 검증 | PR·push마다 실행 |
 | `.github/workflows/macos-release.yml` | 수동 실행: 태그·버전 검사 후 DMG를 artifact/draft/공개 Release로 | 실제 릴리즈 실행 **미검증** |
 
 데이터는 두 SQLite 파일로 분리한다: `work.sqlite`(일반 기록) / `vault.sqlite`(Secret 암호문만). 암호화 키는 macOS Keychain에만 있고 DB·백업에는 없다.
 
 ## 요구 환경
 
-- macOS 14 이상(제안값), Swift 6.x 툴체인(Xcode 16 이상 또는 swift.org 툴체인)
+- macOS 26.0 이상, Swift 6.3 툴체인과 macOS 26 이상 SDK(Xcode 필요)
 - Linux 개발: Swift 6.3, `libsqlite3-dev`(FTS5 포함)
 - AI 기능(선택): 회사 계정으로 로그인한 공식 `codex` CLI (`codex app-server` 사용)
+
+UI는 Apple Human Interface Guidelines에 따라 표준 탐색·입력 컴포넌트와 Liquid Glass를 사용한다. 적용 범위와 이번 변경의 검증 결과는 [`docs/ui-refresh.md`](docs/ui-refresh.md)의 macOS 26 항목을 참고한다.
 
 ## 빌드·테스트
 

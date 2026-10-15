@@ -324,7 +324,7 @@ private struct ReportWorkspace: View {
     @ViewBuilder private var reportActions: some View {
         Button("본문 복사") { copyReport() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
-            .buttonStyle(WorkLogButtonStyle(prominent: true)).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
+            .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
         Button("편집 ⌘E", action: focusContent)
             .focusable().worklogKeyboardActivation(focusContent).disabled(!model.canEdit)
         Button("저장") {

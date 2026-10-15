@@ -1,5 +1,22 @@
 # 플로팅 패널과 워크스페이스 UI
 
+
+## macOS 26 · Liquid Glass와 표준 컴포넌트 (2026-10-15)
+
+사용자 요청으로 최소 지원 버전을 macOS 26.0으로 올렸다. Package.swift, 앱과 UI 리뷰 번들의 `LSMinimumSystemVersion`, Sparkle 피드의 `minimumSystemVersion`을 함께 변경하고 CI·릴리즈 러너는 `macos-26`을 사용한다. macOS 앱 빌드에는 macOS 26 이상 SDK가 필요하다. Core의 Linux 지원, Swift 5 언어 모드와 저장·Secret·AI 계약은 유지한다.
+
+- 메인 창은 표준 제목 표시줄·`NavigationSplitView`·사이드바 `List`·`toolbar`를 사용한다. 시스템이 탐색 계층의 Liquid Glass를 관리하며 불투명 전체 배경과 자체 헤더는 제거했다. 사이드바 접기는 표준 열 숨기기로 동작한다. 빠른 입력·검색·새로고침·키보드 도움말은 메뉴에서도 접근한다.
+- 시스템 버튼 스타일과 기본 `GroupBox`를 사용하고 자체 `WorkLogButtonStyle`/`WorkLogGroupBoxStyle`을 제거했다. 펼침 섹션은 `DisclosureGroup`, 날짜 입력은 표준 compact `DatePicker`다. 날짜 바인딩은 `WorkCalendar`의 달력·시간대·`WorkDate` 변환을 명시한다.
+- 빠른 입력 유형은 표준 segmented `Picker`다. 빠른 입력·검색 패널의 조작 헤더에만 regular Liquid Glass를 적용하고 편집기·목록·보고서·Secret 표는 읽기 편한 콘텐츠 배경을 유지한다. 사용자 지정 모션은 동작 줄이기 설정을 따른다.
+- 설정은 표준 선택 목록·grouped `Form`·`LabeledContent`, 단축키 기록은 네이티브 `NSButton` 외관을 사용한다. 업무 목록은 표준 `List`와 접힌 완료/취소 `DisclosureGroup`을 사용한다. 목록 선택 텍스트는 시스템 계층 색을 사용한다.
+- 네이티브 사이드바 방향키 탐색 중 새 화면의 자동 포커스가 선택 목록을 방해하지 않도록 앱 내부 환경값으로 제어한다. 명시적인 본문 이동, 상세 닫기 후 복귀, 패널 입력 포커스는 유지한다. 업무 목록의 선택·Return·더블클릭과 날짜 선택은 시스템 표준 조작을 따른다.
+
+기준: [Apple Materials HIG](https://developer.apple.com/design/human-interface-guidelines/materials), [Liquid Glass 적용](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass), [Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars), [Buttons](https://developer.apple.com/design/human-interface-guidelines/buttons), [macOS 디자인](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos). 이후 작업에도 적용하도록 `AGENTS.md`에 UI/UX 규칙을 기록했다.
+
+검증 진행: Linux Swift 6.3.3 `swift build --build-tests`와 전체 테스트 807개(실패 0), 배포 도구 테스트 25개, macOS 26 타깃 Swift 구문 분석과 shell/JS 구문 검사 및 `git diff --check` 통과. macOS SDK 빌드·실제 화면 확인 결과는 검증 종료 후 이 항목에 갱신한다. 구문 분석이나 Linux 빌드를 SwiftUI 타입 검사·화면 검증으로 간주하지 않는다.
+
+macOS 확인 항목: 라이트/다크·투명도 줄이기·대비 높이기·동작 줄이기, 작은 창/긴 한국어, 반복 사이드바 ↑↓와 ⌘0/⌘⇧0, 업무 선택·완료 목록 접기·상세 복귀, 날짜와 서울 시간대, 메모/업무/Secret 유형과 초안 복귀, 한글 IME, 설정 입력/저장 및 VoiceOver. 가짜 fixture만 사용한다.
+
 ## 빠른 입력에서 새로 작성 (2026-10-13)
 
 - 메모·업무 입력의 날짜 행 오른쪽에 `새로 작성`을 표시한다. 남아 있는 초안은 `계속 작성` 또는 `버리고 새로 작성` 확인을 거치고, 빈 초안은 바로 오늘 날짜로 시작한다. Esc·닫기 후 재열기는 기존 초안을 유지한다.

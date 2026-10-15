@@ -88,7 +88,7 @@ struct PlanScreen: View {
     }
     private var confirmAction: some View {
         Button("선택한 \(model.checkedIds.count)개 계획 확정") { model.confirmChecked() }
-            .buttonStyle(WorkLogButtonStyle(prominent: true)).disabled(model.checkedIds.isEmpty || model.isLoading)
+            .buttonStyle(.borderedProminent).disabled(model.checkedIds.isEmpty || model.isLoading)
             .worklogHelp("선택한 후보만 이번 주 계획으로 확정 · 업무 상태는 유지")
     }
     private func planSection(_ title: String, items: [WeekPlanItem], showsHeading: Bool = true) -> some View {

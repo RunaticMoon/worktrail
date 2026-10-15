@@ -4,6 +4,7 @@ import SwiftUI
 import WorkLogCore
 
 @MainActor struct ProjectsScreen: View {
+    @Environment(\.worklogContentAutofocus) private var contentAutofocus
     @Bindable var model: ProjectsModel
     let calendar: WorkCalendar
     let onOpen: (String) -> Void
@@ -91,7 +92,9 @@ import WorkLogCore
         }
         .onAppear {
             model.load()
-            DispatchQueue.main.async { focusProjectList() }
+            DispatchQueue.main.async {
+                if contentAutofocus { focusProjectList() }
+            }
         }
         .onChange(of: detailDismissalRevision) { _, _ in focusProjectTasks() }
         .onChange(of: model.selectedProjectId) { _, _ in

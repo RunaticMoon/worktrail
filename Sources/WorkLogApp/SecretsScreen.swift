@@ -219,7 +219,7 @@ import WorkLogCore
                 StateView(kind: model.isUnlocking ? .loading : .empty,
                           title: model.isUnlocking ? "잠금 해제 중…" : "값은 잠겨 있습니다",
                           detail: "기기 인증 한 번으로 값 조회·복사·편집을 사용할 수 있습니다.")
-                Button("잠금 해제") { unlock() }.buttonStyle(WorkLogButtonStyle(prominent: true))
+                Button("잠금 해제") { unlock() }.buttonStyle(.borderedProminent)
                     .focusable().worklogKeyboardActivation { unlock() }
                     .disabled(model.isUnlocking).worklogHelp("기기 인증으로 Secret 잠금 해제")
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

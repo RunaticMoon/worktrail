@@ -195,8 +195,25 @@ function run(args) {
         waitFor(function () { return front() && windowNamed(title); }, 'PANEL_NOT_OPENED_IN_REVIEW_FOREGROUND');
     }
     function selectedCaptureTab(title) {
-        var node = labelled(windowNamed('빠른 입력'), title, 'AXButton');
-        return node && keyboardText(node, 'AXValue') === '선택됨';
+        var matches = 0, selected = false;
+        walk(windowNamed('빠른 입력'), function (node, role) {
+            // A native segmented Picker exports radio buttons. Older fixture
+            // builds used buttons with a localized selection value. Match only
+            // the exact tab label and explicit true/1 selection, never truthy
+            // strings, the group's selected index, or keyboard focus.
+            if (role !== 'AXRadioButton' && role !== 'AXButton') return false;
+            var label = keyboardLabel(node);
+            if (label !== title && label !== title + ', 초안 있음' && label !== title + ' •') return false;
+            matches += 1;
+            var rawValue = keyboardAXRead(node, 'AXValue');
+            var rawSelected = keyboardAXRead(node, 'AXSelected');
+            var value = rawValue === null ? null : ObjC.unwrap(rawValue);
+            var isSelected = rawSelected === null ? null : ObjC.unwrap(rawSelected);
+            selected = value === '선택됨' || value === true || value === 1 ||
+                isSelected === true || isSelected === 1;
+            return false;
+        });
+        return matches === 1 && selected;
     }
     function expectTab(title, code) {
         waitFor(function () { return selectedCaptureTab(title); }, code);

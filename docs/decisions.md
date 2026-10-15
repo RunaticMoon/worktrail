@@ -10,7 +10,7 @@
 | T06 | 날짜는 `WorkDate`(지역 달력 날짜) 타입, 기간은 `[start, endExclusive)` | 날짜만 아는 사건에 시각을 만들지 않기 위함(DAY-02) |
 | T07 | 상태 이력은 append-only `domain_event` + 재생, 정정은 `voided` 사건 | 늦은 입력·과거 상태 조회·확정본 재현(DAY-03) |
 | T08 | 확정 리포트 버전은 DB 트리거로 UPDATE/DELETE 차단 | 자동 작업이 확정본을 덮어쓰지 못하게 저장소 수준에서 보장(PERF-04) |
-| T09 | macOS 최소 버전 14 (제안값) | SwiftUI 최신 API 사용. macOS에서 실제 빌드 검증 전까지 미확정 |
+| T09 | macOS 최소 버전 26.0 (사용자 요청으로 확정, T35) | Liquid Glass와 최신 표준 컴포넌트를 사용. 앱 번들·업데이트 피드·CI도 같은 기준 |
 | T10 | AI는 공식 `codex app-server`(stdio JSON-RPC)만 사용, 설치된 codex-cli 0.159.2의 `generate-json-schema` 결과로 메서드·필드 확인 | 01 지시(토큰 추출·API 키 대체 금지). 실제 Enterprise 계정 연결은 미검증 |
 | T11 | AI 작업은 `ai_job` 영속 + idempotency key(작업·기간·입력 digest·템플릿 버전·스킬 해시·재생성 nonce), 동시성 1 FIFO | 자동 작업 중복 실행·중복 저장 방지(PERF-05), 회사 한도 보호 |
 | T12 | AI 입력 차단(`AIPayloadGuard`: vault·백업 경로)과 출력 검사(`AIOutputGuard`: 인증 정보 흔적·차단 경로) | read-only sandbox도 로컬 읽기는 허용하므로 프롬프트 인젝션으로 인증 정보가 work.sqlite·백업에 저장되는 경로를 차단. 정상 기록의 같은 단어는 오탐 가능 → 결정적 초안 대체 |
@@ -36,3 +36,4 @@
 | T32 | 자동 업데이트는 macOS 앱에만 Sparkle을 연결하고 Ed25519로 업데이트 DMG와 피드를 검증한다. 신규 전용 공개키만 저장소/앱에 포함하고 개인키는 GitHub Actions Secret으로 관리한다 | Apple Developer ID/공증이 없는 배포에서도 업데이트 출처를 검증하기 위함. 일반 기록·Secret·AI 입력과 분리하며 Linux Core에는 Sparkle 의존성을 추가하지 않음 |
 | T33 | 작업별 AI 모델·effort와 조회한 모델 목록은 별도 `ai-task-profiles.json`에 저장하고, AI 실행 직전에 다시 읽어 다음 작업부터 적용한다. 계정이 반환한 `model/list`와 지원 effort로 자동 추천을 제한하며, 첫 실제 AI 작업의 목록 조회 실패 시 Codex 기본값으로 진행한다. 파일 저장은 일반 설정/단축키 적용 실패 시 되돌리고 선택적 백업 파일에 포함한다 | 공용 AppSettings/AIJobInput·DB 스키마를 바꾸지 않고 기존 설치·가짜 제공자와 호환하며, Secret/자격증명을 설정·모델 조회 경로에 넣지 않음 |
 | T34 | 설정은 내부 검색 목차와 항목별 상세 화면으로 표시하며 펼침 영역 대신 헤더에만 포커스를 둔다. 일반 버튼은 평소 투명하게 표시한다. 업무 목록의 완료·취소 영역은 기본 접힘, 검색 시 표시하고 빠른 입력 업무 후보에서는 취소만 제외한다 | 과도한 박스·전체 영역 포커스와 한글 정렬 문제를 줄이면서 종료 기록 접근·키보드 탐색·작성 중 초안을 보존 |
+| T35 | 최소 macOS 26.0으로 올리고 Apple HIG에 따라 NavigationSplitView·List·toolbar·Picker·DatePicker·Form·DisclosureGroup과 시스템 버튼/GroupBox를 우선 사용한다. Liquid Glass는 탐색·조작 영역에만 적용하고 본문은 읽기 편한 시스템 의미 색을 유지한다. 배포 최소 버전과 Sparkle 피드도 26.0, CI는 macos-26으로 통일한다 | 최신 macOS 디자인으로 전반을 정리하라는 사용자 요청. T30의 수제 달력과 T34의 자체 버튼 표현은 표준 컴포넌트로 대체하며 업무일·키보드/IME·초안·Secret 격리 계약은 유지 |

@@ -5,7 +5,7 @@
 # 결과:   .build/app/WorkLog.app
 #
 # 버전: 저장소 루트 VERSION 파일(한 줄, 예: 0.1.0)이 표시 버전과 Sparkle 비교 버전.
-# GitHub Actions macos-15(arm64)에서 실행·검증했다. 개인 Mac에서의 실행은 미검증이다.
+# macOS 26(arm64), Xcode 26 이상 SDK로 빌드한다.
 # 로컬 실행용 ad-hoc 서명만 한다. 배포용 Developer ID 서명·공증은 하지 않는다.
 set -euo pipefail
 
@@ -17,7 +17,13 @@ fi
 CONFIG="${1:-release}"
 APP_NAME="WorkLog"
 BUNDLE_ID="dev.worklog.WorkLog"   # AppIdentity.default와 같아야 한다
-MIN_MACOS="14.0"                  # Package.swift platforms(.macOS(.v14))와 같아야 한다
+MIN_MACOS="26.0"                  # Package.swift platforms(.macOS("26.0"))와 같아야 한다
+
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+if (( ${SDK_VERSION%%.*} < 26 )); then
+    echo "Liquid Glass 빌드에는 macOS 26 이상 SDK가 필요합니다. Xcode 선택을 확인하세요." >&2
+    exit 1
+fi
 
 if [[ "$CONFIG" != "debug" && "$CONFIG" != "release" ]]; then
     echo "빌드 구성은 debug 또는 release만 가능합니다: $CONFIG" >&2

@@ -34,7 +34,7 @@ concurrency:
 jobs:
   build:
     if: github.repository == 'RunaticMoon/worktrail' && github.ref == 'refs/heads/main'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
     outputs:
       artifact-id: ${{ steps.artifact.outputs.artifact-id }}
@@ -66,7 +66,13 @@ jobs:
           test -s distribution/sparkle-public-key.txt
       - name: Build all targets (including WorkLogApp)
         timeout-minutes: 20
-        run: swift build --build-tests
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          test "${sdk_version%%.*}" -ge 26
+          swift build --build-tests
       - name: Test release tooling
         run: python3 -m unittest discover -s distribution/tests -v
       - name: Test WorkLogCore
@@ -99,7 +105,7 @@ jobs:
     if: inputs.publish != 'artifact-only' && github.repository == 'RunaticMoon/worktrail' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     env:
       RELEASE_TAG: ${{ inputs.tag }}

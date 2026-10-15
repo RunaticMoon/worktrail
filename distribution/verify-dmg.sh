@@ -56,9 +56,11 @@ SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST"
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
 EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")"
 UPDATE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
+MIN_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST")"
 
 [[ "$SHORT" == "$VERSION" ]] || { echo "CFBundleShortVersionString 불일치: $SHORT != $VERSION" >&2; exit 1; }
 [[ "$UPDATE_VERSION" == "$VERSION" ]] || { echo "Sparkle 비교 버전 불일치" >&2; exit 1; }
+[[ "$MIN_MACOS" == "26.0" ]] || { echo "macOS 최소 지원 버전 불일치: $MIN_MACOS" >&2; exit 1; }
 [[ "$BUNDLE_ID" == "dev.worklog.WorkLog" ]] || { echo "CFBundleIdentifier 불일치: $BUNDLE_ID" >&2; exit 1; }
 [[ "$EXECUTABLE" != */* && -n "$EXECUTABLE" ]] || { echo "CFBundleExecutable이 올바르지 않습니다: $EXECUTABLE" >&2; exit 1; }
 [[ "$(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE")" == "arm64" ]] || { echo "arm64 실행 파일이 아닙니다." >&2; exit 1; }

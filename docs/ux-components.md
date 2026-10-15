@@ -1,6 +1,8 @@
 # 의미 기반 테마·재사용 컴포넌트 (UXFL-E55A · G/U)
 
-`Sources/WorkLogApp/AppTheme.swift`와 `Components.swift`의 앱 모듈 내부 공통 API다. 모든 Swift 코드는 `#if os(macOS)` 안에 있고 지원 기준은 `Package.swift`의 macOS 14다. 화면 통합은 후속 H~K 작업에서 한다. 도메인·날짜 계산·저장·AI 실행은 컴포넌트가 담당하지 않는다.
+`Sources/WorkLogApp/AppTheme.swift`와 `Components.swift`의 앱 모듈 내부 공통 API다. 모든 Swift 코드는 `#if os(macOS)` 안에 있고 지원 기준은 `Package.swift`의 macOS 26.0이다. 도메인·날짜 계산·저장·AI 실행은 컴포넌트가 담당하지 않는다.
+
+이 문서의 과거 작업별 검증 기록은 당시 구현을 설명한다. 현재 UI 규칙은 아래 원칙과 `AGENTS.md`의 macOS UI/UX, `docs/ui-refresh.md`의 macOS 26 항목을 따른다.
 
 ## 시각·상호작용 원칙
 
@@ -8,8 +10,8 @@
 - `canvas`는 `windowBackgroundColor`, `surface`는 `controlBackgroundColor`, `elevated`는 `underPageBackgroundColor`, `border`는 `separatorColor`, `text`와 `muted`는 시스템 라벨 색이다. `accent`는 사용자 시스템 강조색, `accentSoft`는 그 색의 12% 채움이다. hex·장식 그라데이션을 쓰지 않는다.
 - 기본 간격 4/8/12/16pt, 화면 여백 16pt, 카드 여백 12pt, 카드 모서리 10pt를 유지한다. 모든 콘텐츠를 카드로 감쌀 필요는 없다.
 - 상태 라벨은 시스템 기본 텍스트 색으로 읽고, 아이콘과 낮은 농도의 배경에만 의미 색을 적용한다. 사용자 강조색의 밝기에 텍스트 가독성을 의존하지 않는다. 색만으로 의미를 전달하지 않는다.
-- `colorSchemeContrast == .increased`이면 사용자 지정 경계는 기본 라벨 색의 2pt 선으로 강화하고 상태 아이콘도 라벨 색을 쓴다. 카드·일반 버튼의 기본 경계는 시스템 구분선 1pt이고 소스 목록 행·배지·칩에는 기본 테두리가 없다. 실제 대비 수치는 Mac 렌더링 후 확인해야 한다.
-- 기존 `WorkLogButtonStyle`은 호출법·`ButtonStyle` 타입을 유지한다. 주요 버튼은 강조색의 옅은 채움과 기본 텍스트를 쓰고, 포커스 시 바깥 윤곽을 추가한다. 신규 컴포넌트의 버튼은 표준 `.bordered` / `.borderedProminent`를 사용한다. 필수 행동은 항상 보인다.
+- `colorSchemeContrast == .increased`이면 사용자 지정 경계는 기본 라벨 색의 2pt 선으로 강화하고 상태 아이콘도 라벨 색을 쓴다. 카드 기본 경계는 시스템 구분선 1pt이며 표준 버튼·선택 목록의 대비와 포커스는 시스템이 관리한다. 배지·칩에는 기본 테두리가 없다. 실제 대비 수치는 Mac 렌더링 후 확인해야 한다.
+- 버튼은 표준 `.bordered` / `.borderedProminent` / `.borderless` 또는 컨텍스트의 기본 스타일을 사용한다. `WorkLogButtonStyle`과 `WorkLogGroupBoxStyle`은 제거했다. 네이티브 툴바·사이드바·시트는 시스템이 Liquid Glass를 관리하며, floating 조작 영역에만 필요한 glass를 적용한다. 본문에는 glass를 적용하지 않는다. 필수 행동은 항상 보인다.
 - 화면 헤더·과거 날짜·복구 버튼 묶음은 `ViewThatFits`로 좁은 폭에서 세로 배치한다. 상태 안내는 작은 인라인 영역으로 표시해 다른 원문·로컬 기능의 사용을 막지 않는다.
 
 ## API와 사용 예
@@ -177,9 +179,7 @@ WorkLogTheme.border: Color
 WorkLogTheme.text: Color
 WorkLogTheme.muted: Color
 View.worklogCard(padding: CGFloat = WorkLogTheme.cardInset) -> some View
-WorkLogButtonStyle(prominent: Bool = false) // ButtonStyle
 Keycap(_ label: String)                     // View
-WorkLogGroupBoxStyle()                      // GroupBoxStyle
 WorkLogAppIcon()                            // View
 ```
 

@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
 RELEASES = 'https://github.com/RunaticMoon/worktrail/releases'
+MIN_MACOS = '26.0'
 ET.register_namespace('sparkle', SPARKLE)
 
 
@@ -71,7 +72,7 @@ def appcast(tag, directory, signature):
     ET.SubElement(item, 'title').text = 'WorkLog ' + version(tag)
     ET.SubElement(item, '{%s}version' % SPARKLE).text = version(tag)
     ET.SubElement(item, '{%s}shortVersionString' % SPARKLE).text = version(tag)
-    ET.SubElement(item, '{%s}minimumSystemVersion' % SPARKLE).text = '14.0'
+    ET.SubElement(item, '{%s}minimumSystemVersion' % SPARKLE).text = MIN_MACOS
     ET.SubElement(item, 'description').text = 'WorkLog 새 버전입니다. 설치 후 앱을 다시 시작합니다.'
     ET.SubElement(item, 'enclosure', {
         'url': RELEASES + '/download/' + tag + '/' + entry['name'],
@@ -91,7 +92,7 @@ def verify_appcast(tag, directory):
     item = items[0]
     for key in ('version', 'shortVersionString'):
         require(item.findtext('{%s}%s' % (SPARKLE, key)) == version(tag), 'Appcast version mismatch')
-    require(item.findtext('{%s}minimumSystemVersion' % SPARKLE) == '14.0', 'Unexpected minimum macOS version')
+    require(item.findtext('{%s}minimumSystemVersion' % SPARKLE) == MIN_MACOS, 'Unexpected minimum macOS version')
     enclosures = item.findall('enclosure')
     require(len(enclosures) == 1, 'Expected exactly one update archive')
     enclosure = enclosures[0]

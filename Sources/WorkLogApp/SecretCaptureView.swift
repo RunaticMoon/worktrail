@@ -43,6 +43,7 @@ import WorkLogCore
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Secret 입력은 기기 인증 후 사용할 수 있습니다.").foregroundStyle(.secondary)
                     Button("잠금 해제", action: unlock)
+                        .buttonStyle(.borderedProminent)
                         .captureFocus("secretUnlock", order: 100, action: unlock)
                         .disabled(model.isUnlocking).worklogHelp("기기 인증으로 Secret 잠금 해제")
                 }
@@ -60,6 +61,7 @@ import WorkLogCore
                     Text("이어서 편집하거나 초안을 버리고 새 항목을 입력하세요.").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 8) {
                         Button("이어서 편집", action: continueDraft)
+                            .buttonStyle(.borderedProminent)
                             .captureFocus("secretContinue", order: 100, action: continueDraft)
                         Button("초안 버리고 새 항목", role: .destructive) { confirmsDiscard = true }
                             .captureFocus("secretDiscard", order: 110, action: { confirmsDiscard = true })
@@ -84,6 +86,7 @@ import WorkLogCore
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .buttonStyle(.bordered)
         .onAppear {
             isActive = true
             model.tick()

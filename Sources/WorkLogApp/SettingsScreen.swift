@@ -14,7 +14,6 @@ struct SettingsScreen: View {
     @Environment(\.hotkeyDiagnostics) private var hotkeyDiagnostics
     @FocusState private var errorFocused: Bool
     @FocusState private var headingFocused: Bool
-    @FocusState private var navigationFocus: SettingsDestination?
     @State private var query = ""
     @State private var destination: SettingsDestination = .general
     @State private var promptEditor: PromptEditorSelection?
@@ -51,7 +50,7 @@ struct SettingsScreen: View {
             Divider()
             footer
         }
-        .buttonStyle(WorkLogButtonStyle())
+        .buttonStyle(.bordered)
         .multilineTextAlignment(.leading)
         .navigationTitle("설정")
         .worklogFocusContent { errorFocused = false; headingFocused = true }
@@ -67,94 +66,71 @@ struct SettingsScreen: View {
     }
 
     private var navigation: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(WorkLogTheme.muted)
-                TextField("설정 검색", text: $query)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("설정 항목 검색")
-                if !query.isEmpty {
-                    Button { query = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(WorkLogTheme.muted)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("설정 검색 지우기")
-                }
-            }
-            .padding(8)
-            .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(matchingDestinations) { item in
-                        Button { destination = item } label: {
-                            HStack(spacing: 9) {
-                                Image(systemName: item.symbol)
-                                    .frame(width: 18)
-                                    .foregroundStyle(destination == item ? WorkLogTheme.accent : WorkLogTheme.muted)
-                                Text(item.title)
-                                    .font(.callout.weight(destination == item ? .semibold : .regular))
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 9)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(WorkLogSourceRowStyle(isSelected: destination == item,
-                                                         isFocused: navigationFocus == item))
-                        .focusable().focusEffectDisabled()
-                        .focused($navigationFocus, equals: item)
-                        .worklogKeyboardActivation { destination = item }
-                        .accessibilityAddTraits(destination == item ? [.isSelected] : [])
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("설정 검색", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("설정 항목 검색")
+                .padding(12)
+            List(selection: Binding<SettingsDestination?>(
+                get: { destination },
+                set: { if let item = $0 { destination = item } }
+            )) {
+                ForEach(matchingDestinations) { item in
+                    Label(item.title, systemImage: item.symbol)
+                        .tag(item)
                         .accessibilityHint(item.subtitle)
-                    }
-                    if matchingDestinations.isEmpty {
-                        Text("일치하는 설정이 없습니다")
-                            .font(.caption).foregroundStyle(WorkLogTheme.muted)
-                            .padding(.horizontal, 8)
-                    }
                 }
             }
-            .scrollIndicators(.hidden)
+            .listStyle(.sidebar)
+            .overlay {
+                if matchingDestinations.isEmpty {
+                    Text("일치하는 설정이 없습니다")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
         }
-        .padding(12)
-        .frame(width: 188)
+        .frame(minWidth: 188, idealWidth: 208, maxWidth: 240)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(WorkLogTheme.rowHover)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("설정 목차")
     }
 
     private var detail: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    feedback
-                    if matchingDestinations.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("검색 결과가 없습니다").font(.title2.weight(.semibold))
-                            hint("단축키, 모델, 백업처럼 바꾸려는 설정을 검색해 보세요.")
-                            Button("모든 설정 보기") { query = "" }
-                                .worklogKeyboardActivation { query = "" }.focusable()
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(destination.title)
-                                .font(.title2.weight(.semibold))
-                                .focusable().focusEffectDisabled().focused($headingFocused)
-                                .accessibilityAddTraits(.isHeader)
-                            hint(destination.subtitle)
-                        }
-                        selectedContent
+            Form {
+                if !model.errors.isEmpty || model.message != nil {
+                    Section {
+                        feedback
                     }
+                    .id("settings-feedback")
                 }
-                .frame(maxWidth: 760, alignment: .leading)
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .id("settings-top")
+                if matchingDestinations.isEmpty {
+                    ContentUnavailableView {
+                        Label("검색 결과가 없습니다", systemImage: "magnifyingglass")
+                    } description: {
+                        Text("단축키, 모델, 백업처럼 바꾸려는 설정을 검색해 보세요.")
+                    } actions: {
+                        Button("모든 설정 보기") { query = "" }
+                            .worklogKeyboardActivation { query = "" }
+                    }
+                } else {
+                    Section {
+                        selectedContent
+                    } header: {
+                        Text(destination.title)
+                            .font(.title2.weight(.semibold))
+                            .focusable().focused($headingFocused)
+                            .accessibilityAddTraits(.isHeader)
+                    } footer: {
+                        Text(destination.subtitle)
+                    }
+                    .id("settings-top")
+                }
             }
+            .formStyle(.grouped)
             .onChange(of: destination) { _, _ in proxy.scrollTo("settings-top", anchor: .top) }
             .onChange(of: model.errors) { _, errors in
-                if !errors.isEmpty { proxy.scrollTo("settings-top", anchor: .top) }
+                if !errors.isEmpty { proxy.scrollTo("settings-feedback", anchor: .top) }
             }
         }
     }
@@ -188,7 +164,7 @@ struct SettingsScreen: View {
                     .font(.caption).foregroundStyle(WorkLogTheme.muted)
             }
             Button(action: save) { ShortcutLabel(title: "설정 저장", keys: "⌘S") }
-                .buttonStyle(WorkLogButtonStyle(prominent: true))
+                .buttonStyle(.borderedProminent)
                 .worklogKeyboardActivation(save)
                 .keyboardShortcut("s", modifiers: .command).disabled(!model.hasChanges)
                 .focusable().worklogHelp("설정 검증 후 저장 · 단축키 적용", keys: "⌘S")
@@ -364,31 +340,28 @@ struct SettingsScreen: View {
     }
 
     private func aiTaskCard(_ type: AIJobType) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(jobTitle(type)).font(.headline).accessibilityAddTraits(.isHeader)
+        GroupBox {
+            VStack(alignment: .leading, spacing: 16) {
                 hint(model.defaultProfileDescription(for: type))
+                modelPicker(type)
+                effortPicker(type)
+                field("추가 스킬") {
+                    TextField("스킬 이름 또는 SKILL.md 경로", text: Binding(
+                        get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
+                        .textFieldStyle(.roundedBorder).accessibilityLabel("\(jobTitle(type)) 스킬")
+                }
+                Button { promptEditor = PromptEditorSelection(job: type) } label: {
+                    Label("프롬프트 편집", systemImage: "square.and.pencil")
+                }
+                .worklogKeyboardActivation { promptEditor = PromptEditorSelection(job: type) }
+                .focusable().accessibilityLabel("\(jobTitle(type)) 프롬프트 편집")
+                .worklogHelp("\(jobTitle(type)) 지침과 출력 예시 편집")
+                if let note = PromptCatalog.usageNote(for: type) { hint(note) }
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 16) { modelPicker(type); effortPicker(type) }
-                VStack(alignment: .leading, spacing: 12) { modelPicker(type); effortPicker(type) }
-            }
-            field("추가 스킬") {
-                TextField("스킬 이름 또는 SKILL.md 경로", text: Binding(
-                    get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
-                    .textFieldStyle(.roundedBorder).accessibilityLabel("\(jobTitle(type)) 스킬")
-            }
-            Button { promptEditor = PromptEditorSelection(job: type) } label: {
-                Label("프롬프트 편집", systemImage: "square.and.pencil")
-            }
-            .worklogKeyboardActivation { promptEditor = PromptEditorSelection(job: type) }
-            .focusable().accessibilityLabel("\(jobTitle(type)) 프롬프트 편집")
-            .worklogHelp("\(jobTitle(type)) 지침과 출력 예시 편집")
-            if let note = PromptCatalog.usageNote(for: type) { hint(note) }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Text(jobTitle(type)).accessibilityAddTraits(.isHeader)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func modelPicker(_ type: AIJobType) -> some View {
@@ -502,11 +475,9 @@ struct SettingsScreen: View {
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.callout.weight(.medium))
+        LabeledContent(title) {
             content()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func hint(_ text: String) -> some View {

@@ -34,14 +34,14 @@ import WorkLogCore
                 Spacer()
                 Button("취소") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("추가", action: create)
-                    .buttonStyle(WorkLogButtonStyle(prominent: true))
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(trimmedName.isEmpty || isCreating)
             }
         }
         .padding(24)
         .frame(width: 380)
-        .buttonStyle(WorkLogButtonStyle())
+        .buttonStyle(.bordered)
         .onAppear { nameFocused = true }
     }
 

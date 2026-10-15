@@ -41,9 +41,9 @@ import WorkLogCore
 
     var body: some View {
         Button(action: open) {
-            Text(kind == .project ? "@ 프로젝트" : "# 태그").font(.caption)
+            Label(title, systemImage: symbol)
         }
-        .buttonStyle(WorkLogButtonStyle())
+        .buttonStyle(.bordered)
         .controlSize(.small)
         .captureFocus(kind == .project ? "project" : "tag", order: kind == .project ? 510 : 520, action: open)
         .worklogHelp("\(title) 검색 및 선택", keys: kind == .project ? "⌘⇧P" : "⌘⇧T")
@@ -117,6 +117,7 @@ import WorkLogCore
         .frame(width: 340)
         .foregroundStyle(WorkLogTheme.text)
         .tint(WorkLogTheme.accent)
+        .buttonStyle(.bordered)
         .onExitCommand { if !hasMarkedText { isPresented = false } }
         .onChange(of: rowFocus) { _, id in
             if let id { highlighted = id }

@@ -105,6 +105,7 @@ struct PromptEditorView: View {
                 Button("닫기") { requestClose() }.keyboardShortcut(.cancelAction)
                     .worklogHelp("양식·프롬프트 편집 닫기", keys: "Esc")
                 Button { retryAction = .save; prompts.save() } label: { ShortcutLabel(title: "저장", keys: "⌘S") }
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut("s", modifiers: .command)
                     .worklogHelp("프롬프트를 새 버전으로 저장 · 바로 적용", keys: "⌘S")
                     .disabled(prompts.activeVersionNumber == nil || !prompts.hasChanges)
