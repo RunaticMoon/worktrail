@@ -21,7 +21,8 @@ import WorkLogCore
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
             VStack(alignment: .leading, spacing: 6) {
                 Text("프로젝트 이름").font(.headline)
-                TextField("예: 서비스 개편", text: $name)
+                TextField("프로젝트 이름", text: $name, prompt: Text("예: 서비스 개편"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("프로젝트 이름")
                     .focused($nameFocused)

@@ -347,9 +347,11 @@ struct SettingsScreen: View {
             Toggle("일반 기록에 AI 사용", isOn: $model.draft.aiEnabled).toggleStyle(.switch)
             hint(SettingsModel.transmissionNotice)
             field("Codex 실행 경로") {
-                TextField("비우면 자동으로 찾습니다", text: Binding(
+                TextField("Codex 실행 경로", text: Binding(
                     get: { model.draft.codexExecutablePath ?? "" },
-                    set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }))
+                    set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }),
+                    prompt: Text("비우면 자동으로 찾습니다"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).accessibilityLabel("Codex 실행 경로")
             }
             HStack(spacing: 12) {
@@ -403,8 +405,10 @@ struct SettingsScreen: View {
                 modelPicker(type)
                 effortPicker(type)
                 field("추가 스킬") {
-                    TextField("스킬 이름 또는 SKILL.md 경로", text: Binding(
-                        get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
+                    TextField("추가 스킬", text: Binding(
+                        get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }),
+                        prompt: Text("스킬 이름 또는 SKILL.md 경로"))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder).accessibilityLabel("\(jobTitle(type)) 스킬")
                 }
                 Button { promptEditor = PromptEditorSelection(job: type) } label: {
@@ -525,6 +529,7 @@ struct SettingsScreen: View {
         field(title) {
             HStack(spacing: 8) {
                 TextField(title, value: value, format: .number)
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(width: 100)
                     .accessibilityLabel("\(title), \(range)")
                 Text(unit).font(.callout)

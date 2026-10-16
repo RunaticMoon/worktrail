@@ -137,14 +137,14 @@ Questions skipped: 우선 화면에 관한 비동기 질문은 실제 전송했�
 
 인계받은 Maclab 실기 결과는 `5a64fa4` 기준이다. 이 작업은 `cd6f2b3`에서 시작해 main `6ea225b..cd6f2b3`의 코드·스크립트·문서를 대조했다. 아래 실기 결과는 사용자 인계 내용이며 이번 Linux 세션에서 Maclab을 재실행한 결과가 아니다.
 
-| 실기 항목 | 결과 | 범위·판정 |
-|---|---|---|
-| 설정 → 검토 알림의 `HH:mm` 표시 | **실패** | 넓은 창·840pt 모두 `HH:m` / `m`으로 분리. 아래 코드 수정 후 Mac 재확인은 미실행. |
-| 빈 프로젝트 사이드바 → 콘텐츠 포커스 | **통과** | `keyboard-empty.js:247-256`의 빈 상태·포커스 확인까지 통과. Return 결과의 통과를 뜻하지 않는다. |
-| 빈 프로젝트 Return → 빠른 입력 | **실패** | `PROJECT_RETURN_DID_NOT_OPEN_CAPTURE`. 기존 앱 동작과 스크립트 기대 불일치이며 이번 브랜치 회귀가 아니다. |
-| `keyboard-safety.js --fixture many` | **실패** | `checklist_open`의 `TASK_LIST_MISSING`; 직후 업무 목록은 화면에 보였다는 인계. AX 역할/대기 조건 문제 가능성이 높고 후속 동선은 미실행. |
-| `capture-search-flow.js --action capture` | **실패** | `TextEdit becomes the previous app` timeout. 전역 핫키 전의 준비 단계 실패로 입력·저장·이전 앱 복귀는 미실행. |
-| 수정본의 macOS SDK 빌드·화면·키보드·VoiceOver | **미실행** | Linux 빌드·테스트·구문 파싱과 구별한다. `cd6f2b3`의 3pt 포커스 후속 변경도 이 `5a64fa4` 실기로 검증됐다고 간주하지 않는다. |
+| 실기 항목 | 결과 | 범위·판정 | Maclab run (기준 `5a64fa4`) |
+|---|---|---|---|
+| 설정 → 검토 알림의 `HH:mm` 표시 | **실패** | 넓은 창·840pt 모두 `HH:m` / `m`으로 분리. 아래 코드 수정 후 Mac 재확인은 미실행. | 인계 화면 확인 (개별 run 귀속 미확인) |
+| 빈 프로젝트 사이드바 → 콘텐츠 포커스 | **통과** | `keyboard-empty.js:247-256`의 빈 상태·포커스 확인까지 통과. Return 결과의 통과를 뜻하지 않는다. | keyboard-ux R2 `3d64d38f-7af9-4bf6-be22-d3e0e96dd8ec` |
+| 빈 프로젝트 Return → 빠른 입력 | **실패** | `PROJECT_RETURN_DID_NOT_OPEN_CAPTURE`. 기존 앱 동작과 스크립트 기대 불일치이며 이번 브랜치 회귀가 아니다. | keyboard-ux R2 `3d64d38f-7af9-4bf6-be22-d3e0e96dd8ec` |
+| `keyboard-safety.js --fixture many` | **실패** | `checklist_open`의 `TASK_LIST_MISSING`; 직후 업무 목록은 화면에 보였다는 인계. AX 역할/대기 조건 문제 가능성이 높고 후속 동선은 미실행. | keyboard-ux R2 `3d64d38f-7af9-4bf6-be22-d3e0e96dd8ec` |
+| `capture-search-flow.js --action capture` | **실패** | `TextEdit becomes the previous app` timeout. 전역 핫키 전의 준비 단계 실패로 입력·저장·이전 앱 복귀는 미실행. | ui-flows R1 `4d979eb4-5d7b-422d-b728-0c1381250535` |
+| 수정본의 macOS SDK 빌드·화면·키보드·VoiceOver | **미실행** | Linux 빌드·테스트·구문 파싱과 구별한다. `cd6f2b3`의 3pt 포커스 후속 변경도 이 `5a64fa4` 실기로 검증됐다고 간주하지 않는다. | — |
 
 **L1 — 시간 형식 줄바꿈 수정.** `SettingsScreen.swift:536`의 `field()`는 `LabeledContent`로 제목을 제공하지만, 기존 `reminderSection`은 다시 `TextField("HH:mm")`를 넣었다. macOS `Form`은 이 문자열을 입력칸 앞의 레이블로 표시한다([Apple TextField](https://developer.apple.com/documentation/swiftui/textfield)). 따라서 고정 100pt가 편집기와 중복 레이블에 함께 배분되어 형식 문구를 압박한다. main에도 같은 헬퍼·중첩 레이블·100pt가 있으므로 기존 레이아웃 결함이다. 이번 diff는 바깥 탐색을 콘텐츠 680pt 기준 `AnyLayout`으로 바꿨으며 이 중첩 구조를 도입하지 않았다. 그 폭 전환이 실기에서 미친 영향은 별도 비교하지 않았다. `SettingsScreen.swift:513-520`에서 입력칸의 레이블만 `.labelsHidden()`으로 숨기고 `HH:mm`을 실제 prompt로 옮겼다. 입력값이 있어도 아래 설명에서 24시간제 시:분과 예시를 읽을 수 있다. 기존 접근성 라벨·바인딩·100pt 편집기와 전역 `field()`는 유지한다.
 
@@ -152,13 +152,15 @@ Questions skipped: 우선 화면에 관한 비동기 질문은 실제 전송했�
 
 과거 ‘키보드 탐색 개선’ 절에는 **2026-10-12 / `b5794a8` / run `27bbf0d4-bd8e-4ff7-8046-c304f9aee4bc`**의 `many`/`empty` 100개 assertion 및 ‘빈 프로젝트 Return 입력 열기’ 통과 기록이 있다. 이는 `9b12e14` 이전 동작의 기록으로 보존한다. `docs/ui-refresh.md`, `docs/ux-components.md`, `docs/ux-verification.md`, `docs/RELEASE.md`를 확인했지만 **0.9.0 / main `6ea225b`에서 keyboard-empty가 통과했다는 별도 기록은 찾지 못했다**. 저장소에 CHANGELOG 파일은 없다.
 
-**L3 — 테스트 조건 문제로 판정, 변경 없음.** `keyboard-safety.js:61-69`는 8초간 0.12초 간격으로 재시도하지만 `:187`에서 ‘업무 목록’의 역할을 `AXScrollArea`로만 제한한다. 앱은 main과 동일한 `TaskListScreen.swift:40-66`의 표준 `List`다. 같은 저장소의 `keyboard-flow.js:120-126`은 `AXOutline`·`AXTable`·`AXList`·`AXScrollArea`를 허용하며, 아래 2026-10-13 Maclab 기록에도 목록이 `AXOutline`으로 노출된 선례가 있다. 이번 diff는 업무 목록·레이블·화면 이동·스크립트를 바꾸지 않았으므로 앱 회귀보다 **AX 역할 필터 또는 노출 타이밍** 가능성이 높다. 당시 AX 트리가 없어 정확한 역할/지연은 미확정이다. `capture-search-flow.js:242-244`는 TextEdit 활성화 후 전면 bundle ID 일치를 기다리고 나서야 핫키를 보낸다. `:49-57`의 기본 8초·0.15초 polling에서 실패했으므로 **테스트 환경의 앱 활성화/타이밍 문제**로 분류한다. 이번 diff에는 이 준비 단계나 앱 활성화 경로 변경이 없으며, 실제 입력·저장 회귀 여부는 이 실패로 판정할 수 없다. 두 스크립트와 앱 경로는 수정하지 않았다.
+**L3 — 테스트 조건 문제로 판정, 변경 없음.** `keyboard-safety.js:61-69`는 8초간 0.12초 간격으로 재시도하지만 `:187`에서 ‘업무 목록’의 역할을 `AXScrollArea`로만 제한한다. 앱은 main과 동일한 `TaskListScreen.swift:40-66`의 표준 `List`다. 같은 저장소의 `keyboard-flow.js:120-126`은 `AXOutline`·`AXTable`·`AXList`·`AXScrollArea`를 허용하며, 아래 「macOS 26 · Liquid Glass와 표준 컴포넌트」(2026-10-15) 절의 Maclab 기록에도 목록이 `AXOutline`으로 노출된 선례가 있다. 이번 diff는 업무 목록·레이블·화면 이동·스크립트를 바꾸지 않았으므로 앱 회귀보다 **AX 역할 필터 또는 노출 타이밍** 가능성이 높다. 당시 AX 트리가 없어 정확한 역할/지연은 미확정이다. `capture-search-flow.js:242-244`는 TextEdit 활성화 후 전면 bundle ID 일치를 기다리고 나서야 핫키를 보낸다. `:49-57`의 기본 8초·0.15초 polling에서 실패했으므로 **테스트 환경의 앱 활성화/타이밍 문제**로 분류한다. 이번 diff에는 이 준비 단계나 앱 활성화 경로 변경이 없으며, 실제 입력·저장 회귀 여부는 이 실패로 판정할 수 없다. 두 스크립트와 앱 경로는 수정하지 않았다.
 
 **L4 — 문서 P3 정정.** F1/F2 조치를 `cd6f2b3`의 대비 무관 시스템 `keyboardFocusIndicatorColor`, 대비 높이기 포커스 3pt·비포커스 outline 2pt와 일치시켰다. F4 단축키 실패 앵커는 실제 `SettingsScreen.swift:318`로 정정했다(L1 수정 후에도 동일).
 
 L 검증: Linux aarch64 / Swift 6.3.3에서 `swift build --build-tests` exit **0**(4.11초), `swift test` exit **0**(**807개 XCTest / 실패 0**, 47.253초). `swiftc -frontend -parse -target arm64-apple-macos26 Sources/WorkLogApp/SettingsScreen.swift`와 `git diff --check`도 통과했다. 구문 파싱은 macOS SDK 타입 검사가 아니다. 로그는 `/tmp/lgux-90df-l-build.log`, `/tmp/lgux-90df-l-test.log`에 남겼다. 수정 파일은 `SettingsScreen.swift`와 이 문서뿐이다.
 
 Mac 재현: 가짜 fixture에서 검토 알림을 넓은 창·840pt 및 설정 콘텐츠 680pt 경계 양쪽으로 전환하고, 값 있음/비어 있음·Tab 편집·저장·VoiceOver 라벨을 확인한다. 새 `empty` fixture의 프로젝트에서 ⌘0 → ⌘⇧0 → Return으로 ‘프로젝트 추가’ 시트가 열리고 Esc 후 포커스가 복귀하는지 확인한다. safety 실패는 당시 목록 AX 역할·부모 관계와 대기 시간을, capture 실패는 TextEdit 전면 활성화 성공 여부를 먼저 확인한다. 이 작업은 스크립트 수정·push·배포를 포함하지 않는다.
+
+N 조치 (LGUX-90DF · N, 2026-10-17 KST): 설정 숫자 입력의 중복 레이블을 숨기고 제목과 단위가 포함된 범위를 읽는 기존 접근성 라벨을 유지했으며, Codex 경로·추가 스킬·프로젝트 이름은 의미 있는 제목과 별도 prompt로 정리했다. 포커스 색의 대비 무관·선 두께 대응 의도를 주석으로 명시하고 Maclab run ID와 2026-10-15 선례 참조를 보완했다. Linux Swift 6.3.3 빌드·전체 XCTest 807개(실패 0)·변경 Swift 3개 파일의 macOS 26 타깃 구문 파싱·`git diff --check`가 통과했다. macOS SDK 빌드·실제 화면·키보드·VoiceOver 재확인은 미실행이다.
 
 ### 실제 Mac 후속 확인 (이번 작업에서는 미실행)
 
