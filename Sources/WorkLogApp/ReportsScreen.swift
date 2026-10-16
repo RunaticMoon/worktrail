@@ -323,7 +323,7 @@ private struct ReportWorkspace: View {
 
     private var reportActions: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { copyAndEditActions; saveActions }
+            HStack(spacing: 12) { copyAndEditActions; saveActions }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) { copyAndEditActions }
                 HStack(spacing: 8) { saveActions }

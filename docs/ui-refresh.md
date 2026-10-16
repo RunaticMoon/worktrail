@@ -49,6 +49,29 @@ for f in Sources/WorkLogApp/*.swift; do swiftc -frontend -parse -target arm64-ap
 
 Questions skipped: 사용자 요청에서 감사 후 안전한 수정·검증·커밋 범위가 이미 확정되어 추가 디자인 질문은 생략했다. critique 저장소·브라우저 overlay·임시 서버는 생성하지 않았다.
 
+### 독립 검토 후속 수정 (LGUX-90DF · A-1, 2026-10-16 KST)
+
+기준 커밋 `cbbad91`에 대한 검토 지적 3건만 수정했다. 새 감사나 추가 개선은 수행하지 않았다. 변경 범위는 `Sources/WorkLogApp/SettingsScreen.swift`, `Sources/WorkLogApp/ReportsScreen.swift`와 이 절이다.
+
+1. `SettingsScreen.swift:45`: `GeometryReader`와 콘텐츠 폭 680pt 기준을 유지하고, `AnyLayout`으로 `VStackLayout`/`HStackLayout`만 전환한다. `navigationColumn(isCompact:)` 안에서만 목차 내용을 분기하여 `ScrollViewReader` + `Form`인 `detail`은 항상 같은 자식 위치에 둔다. 폭 전환으로 인한 상세 편집 상태 재생성 위험을 제거하는 구조다. footer는 기존 바깥 `VStack`의 `Divider` 바로 아래에 유지하며 footer 내부 배치·padding과 높이 관련 코드는 변경하지 않았다.
+2. `SettingsScreen.swift:127`: compact menu `Picker`에 `.accessibilityLabel("설정 목차")`와 `.accessibilityHint(destination.subtitle)`를 추가해 목차의 의미와 현재 항목 설명을 제공한다.
+3. `ReportsScreen.swift:326`: 넓은 동작 행의 `HStack` 간격을 기존 **12pt**로 복원했다. 좁은 두 줄 배치는 유지한다.
+
+기존 앱의 `AnyLayout` 사용례는 검색 결과 없었다. Context7에서 `/websites/developer_apple_swiftui`를 확인한 뒤 Apple의 `AnyLayout`·`VStackLayout`·`HStackLayout` 문서를 실제 조회했다. 자식 상태를 유지하는 축 전환 예제와 macOS 13+ API를 사용하므로 프로젝트 최소 버전 macOS 26 범위에 해당한다. 설치 도구체인은 Swift 6.3.3 / Linux이며 이 조회가 macOS SDK 타입 검사를 대신하지는 않는다. Impeccable context는 engine 0.1.15 미설치와 캐시 디렉터리 쓰기 제한으로 exit 127이었고, 기존 프로젝트 문서를 직접 확인해 진행했다.
+
+Mac 실기 재현 필요: macOS 26 이상 SDK 빌드 후 가짜 fixture로 설정의 텍스트 입력 중 창 크기 조절 및 사이드바 접기(⌃⌘S)로 콘텐츠 폭 680pt 경계를 왕복한다. TextField 포커스·커서·한글 IME 조합·미저장 값·Form 스크롤 위치, footer의 하단 위치·높이·잘림을 확인한다. VoiceOver로 좁은 Picker의 이름·선택값·현재 항목 설명을 확인하고, 보고서의 넓은 12pt 행과 좁은 두 줄 배치를 확인한다. 이번 Linux 실행에서는 이러한 화면·키보드·VoiceOver 동작을 검증하지 않았다.
+
+후속 수정의 직접 실행 검증:
+
+| 실행 명령 | 실제 결과 |
+|---|---|
+| `swift build --build-tests` | exit **0**, Build complete (4.72초). Linux 빌드이며 SwiftUI 타입 검사는 아니다. |
+| `swift test` | exit **0**, **807개 XCTest·실패 0**, 55.742초. 별도 Swift Testing 러너의 0개와 구분한다. |
+| 위 macOS 26 대상 구문 파싱 루프 | exit **0**, 앱 Swift 파일 **36개**, FAIL 출력 없음. SDK 타입 검사·링크·실행은 미검증이다. |
+| `git diff --check` | exit **0**, 공백 오류 없음. |
+
+빌드/테스트 로그: `/tmp/lgux-90df-a1-build.log`, `/tmp/lgux-90df-a1-test.log`.
+
 ### 실제 Mac 후속 확인 (이번 작업에서는 미실행)
 
 macOS 26 이상 SDK로 앱을 빌드한 뒤 `--ui-test-fixture empty|few|many`를 각각 사용한다. 실제 회사 계정·Secret·Keychain·AI 토큰은 사용하지 않는다.

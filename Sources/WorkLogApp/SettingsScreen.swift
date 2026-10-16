@@ -43,18 +43,15 @@ struct SettingsScreen: View {
                 .padding(WorkLogTheme.contentInset)
             Divider()
             GeometryReader { geometry in
-                if geometry.size.width < 680 {
-                    VStack(alignment: .leading, spacing: 0) {
-                        compactNavigation
-                        Divider()
-                        detail
-                    }
-                } else {
-                    HStack(alignment: .top, spacing: 0) {
-                        navigation
-                        Divider()
-                        detail
-                    }
+                let isCompact = geometry.size.width < 680
+                let layout = isCompact
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
+                // Keep the form's identity while changing the navigation placement.
+                layout {
+                    navigationColumn(isCompact: isCompact)
+                    Divider()
+                    detail
                 }
             }
             Divider()
@@ -72,6 +69,14 @@ struct SettingsScreen: View {
         }
         .sheet(item: $promptEditor) { selection in
             PromptEditorView(prompts: prompts, job: selection.job)
+        }
+    }
+
+    @ViewBuilder private func navigationColumn(isCompact: Bool) -> some View {
+        if isCompact {
+            compactNavigation
+        } else {
+            navigation
         }
     }
 
@@ -119,6 +124,8 @@ struct SettingsScreen: View {
                     }
                 }
                 .pickerStyle(.menu)
+                .accessibilityLabel("설정 목차")
+                .accessibilityHint(destination.subtitle)
             }
         }
         .padding(12)
