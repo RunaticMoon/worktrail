@@ -103,10 +103,10 @@ Context7에서 `/websites/developer_apple_swiftui` ID를 확인한 뒤 `colorSch
 
 | 항목 | 파일:줄 | 심각도 | 근거·사용자 영향 | 조치 |
 |---|---|---|---|---|
-| F1. 빠른 입력의 사용자 지정 컨트롤 포커스가 시스템 효과를 끈 뒤 강조색 1.5pt에 고정되고, 본문 포커스도 대비 증가 시 label 색으로 전환되지 않는다. | `CapturePanel.swift:72`, `CapturePanel.swift:1155`, `AppTheme.swift:32` | P2 | native Accessibility/Theming, HIG Focus; 사용자 강조색에 따라 포커스 구별이 약해질 위험 | **수정.** 공통 `focusColor(for:)`로 기본은 시스템 keyboardFocusIndicatorColor, 대비 증가에서는 label 색을 사용한다. 컨트롤 링은 대비 증가에서 2pt. 본문 장식 경계는 hit testing에서 제외했다. 포커스 상태·등록·키 처리·순서는 그대로다. |
-| F2. 검색어 필드가 패널 외곽선과 달리 대비 증가를 읽지 않고 포커스 강조색도 60%·1pt에 고정된다. | `SearchScreen.swift:576` | P2 | native Accessibility/Theming; 입력 위치 식별 규칙이 공통 테마와 다름 | **수정.** 공통 outline/focus 색을 적용하고 포커스 또는 대비 증가에서 2pt. 장식 경계를 hit testing에서 제외했다. 메인 검색과 패널이 함께 적용된다. |
+| F1. 빠른 입력의 사용자 지정 컨트롤 포커스가 시스템 효과를 끈 뒤 강조색 1.5pt에 고정되고, 본문 포커스도 대비 증가 시 label 색으로 전환되지 않는다. | `CapturePanel.swift:72`, `CapturePanel.swift:1155`, `AppTheme.swift:32` | P2 | native Accessibility/Theming, HIG Focus; 사용자 강조색에 따라 포커스 구별이 약해질 위험 | **수정.** 공통 `focusColor(for:)`는 대비 설정과 무관하게 시스템 `keyboardFocusIndicatorColor`를 사용한다. 컨트롤·본문 포커스 링은 대비 높이기에서 3pt, 비포커스 outline은 2pt다. 본문 장식 경계는 hit testing에서 제외했다. 포커스 상태·등록·키 처리·순서는 그대로다. |
+| F2. 검색어 필드가 패널 외곽선과 달리 대비 증가를 읽지 않고 포커스 강조색도 60%·1pt에 고정된다. | `SearchScreen.swift:576` | P2 | native Accessibility/Theming; 입력 위치 식별 규칙이 공통 테마와 다름 | **수정.** 공통 outline/focus 색을 적용한다. 포커스는 대비 설정과 무관하게 시스템 `keyboardFocusIndicatorColor`이며, 대비 높이기에서는 포커스 3pt·비포커스 outline 2pt로 구별한다. 장식 경계를 hit testing에서 제외했다. 메인 검색과 패널이 함께 적용된다. |
 | F3. 보고서 본문 편집 경계가 separator 색 1pt로 고정된다. | `ReportsScreen.swift:284` | P2 | native Theming, polish/system drift; 다른 편집 영역과 달리 대비 증가 미반영 | **수정.** 기존 outlineColor/outlineWidth를 재사용했다. 주간보고·성과자료 각 모델·편집·확정 로직과 시스템 포커스 효과는 그대로다. |
-| F4. 설정 검증·단축키 등록 실패, 프로젝트 생성 오류, 평가 기간 오류 문구 전체가 주황/빨강이다. | `SettingsScreen.swift:186`, `SettingsScreen.swift:312`, `ProjectCreationSheet.swift:30`, `ReportsScreen.swift:527` | P2 | native Theming; `ux-components.md`의 상태 문구는 시스템 label 색으로 읽는 원칙 이탈 | **수정.** 오류/복구 문구와 경고 기호·설정의 옅은 경고 배경은 유지하고 본문 전경을 label 색으로 통일했다. 새 레이블이나 컨트롤은 만들지 않았다. |
+| F4. 설정 검증·단축키 등록 실패, 프로젝트 생성 오류, 평가 기간 오류 문구 전체가 주황/빨강이다. | `SettingsScreen.swift:186`, `SettingsScreen.swift:318`, `ProjectCreationSheet.swift:30`, `ReportsScreen.swift:527` | P2 | native Theming; `ux-components.md`의 상태 문구는 시스템 label 색으로 읽는 원칙 이탈 | **수정.** 오류/복구 문구와 경고 기호·설정의 옅은 경고 배경은 유지하고 본문 전경을 label 색으로 통일했다. 새 레이블이나 컨트롤은 만들지 않았다. |
 | F5. Secret 상세 편집이 콘텐츠 폭 700pt에서 VStack/HSplitView 분기로 재생성될 수 있다. | `SecretsScreen.swift:55`, `SecretsScreen.swift:65`, `SecretEditorView.swift:21/22` | P2 | native Adaptivity; 편집기의 로컬 FocusState·붙여넣기 펼침 상태가 폭 전환에서 유지되는지 불명확. 모델 초안 손실이 확인된 것은 아니다. | **제안.** Mac에서 한글 조합·셀 편집·붙여넣기 미리보기 중 경계를 왕복해 먼저 확인한다. 필요 시 편집 뷰 정체성을 유지하는 구조로 별도 수정한다. Secret 편집·목록 전환 구조 변경은 이번 범위의 안전한 polish에서 제외했다. |
 | F6. 그래프 Canvas의 연결선은 대비 증가와 무관하게 비강조 membership 25%·선택 이외 35% 농도를 사용한다. | `GraphScreen.swift:661` | P2 | native Accessibility/Theming; 옅은 선을 따라가기 어려울 위험. 연결 목록·선 종류/화살표 대안은 있음 | **제안.** 라이트/다크 × 대비 증가에서 실측 후 Canvas 농도/선 굵기를 함께 보정한다. 실제 렌더링 근거 없이 그래프의 시각적 중요도를 바꾸지 않았다. |
 | F7. Secret 검색 key 행 경계가 선택 강조색/비선택 separator로 고정되어 대비 증가 규칙을 사용하지 않는다. | `SearchSecretScope.swift:61` | P3 | native Theming; 선택/비선택 경계의 읽기 차이를 Mac에서 확인할 필요 | **제안.** 가짜 Secret으로 시스템 포커스·선택 채움·경계의 구별을 먼저 확인한 뒤 별도 보정한다. 값·복사·인증·AX 계약은 수정하지 않았다. |
@@ -132,6 +132,33 @@ F-1 후속: 프로젝트 생성·평가 기간 오류에 경고 아이콘을 추
 Maclab 인계: 최종 커밋으로 macOS 26 이상 SDK 빌드 후 기존 `.maclab/tests/ui-flows.json`, `keyboard-ux.json`, `ui-edge-cases.json`, `ui-review.json`을 가짜 fixture로 실행한다. 추가 수동 확인은 (1) 메인 840×560·980pt·1280pt, 두 패널 최소 크기에서 기존 배치/스크롤·한글 IME·초안·단축키, (2) 밝은/어두운 강조색과 라이트/다크 × 대비 증가에서 빠른 입력 Tab 포커스·본문 캐럿·검색어 클릭/드래그·2pt 경계·보고서 편집, (3) 설정 오류/등록 실패·중복 프로젝트·잘못된 평가 기간 오류의 읽기와 VoiceOver, (4) 투명도 줄이기/동작 줄이기와 기존 glass 조작 영역, (5) F5–F7의 Secret 폭 경계·그래프 연결선·가짜 key 행 선택이다. 실계정·실제 Keychain·토큰을 사용하지 않는다.
 
 Questions skipped: 우선 화면에 관한 비동기 질문은 실제 전송했으며, 추가 인터뷰·스킬 마무리 질문은 전체 감사·안전한 수정·검증·커밋 범위가 이미 확정된 사용자 브리프로 대체했다.
+
+### Maclab 결함 분석·문서 정정 (LGUX-90DF · L, 2026-10-17 KST)
+
+인계받은 Maclab 실기 결과는 `5a64fa4` 기준이다. 이 작업은 `cd6f2b3`에서 시작해 main `6ea225b..cd6f2b3`의 코드·스크립트·문서를 대조했다. 아래 실기 결과는 사용자 인계 내용이며 이번 Linux 세션에서 Maclab을 재실행한 결과가 아니다.
+
+| 실기 항목 | 결과 | 범위·판정 |
+|---|---|---|
+| 설정 → 검토 알림의 `HH:mm` 표시 | **실패** | 넓은 창·840pt 모두 `HH:m` / `m`으로 분리. 아래 코드 수정 후 Mac 재확인은 미실행. |
+| 빈 프로젝트 사이드바 → 콘텐츠 포커스 | **통과** | `keyboard-empty.js:247-256`의 빈 상태·포커스 확인까지 통과. Return 결과의 통과를 뜻하지 않는다. |
+| 빈 프로젝트 Return → 빠른 입력 | **실패** | `PROJECT_RETURN_DID_NOT_OPEN_CAPTURE`. 기존 앱 동작과 스크립트 기대 불일치이며 이번 브랜치 회귀가 아니다. |
+| `keyboard-safety.js --fixture many` | **실패** | `checklist_open`의 `TASK_LIST_MISSING`; 직후 업무 목록은 화면에 보였다는 인계. AX 역할/대기 조건 문제 가능성이 높고 후속 동선은 미실행. |
+| `capture-search-flow.js --action capture` | **실패** | `TextEdit becomes the previous app` timeout. 전역 핫키 전의 준비 단계 실패로 입력·저장·이전 앱 복귀는 미실행. |
+| 수정본의 macOS SDK 빌드·화면·키보드·VoiceOver | **미실행** | Linux 빌드·테스트·구문 파싱과 구별한다. `cd6f2b3`의 3pt 포커스 후속 변경도 이 `5a64fa4` 실기로 검증됐다고 간주하지 않는다. |
+
+**L1 — 시간 형식 줄바꿈 수정.** `SettingsScreen.swift:536`의 `field()`는 `LabeledContent`로 제목을 제공하지만, 기존 `reminderSection`은 다시 `TextField("HH:mm")`를 넣었다. macOS `Form`은 이 문자열을 입력칸 앞의 레이블로 표시한다([Apple TextField](https://developer.apple.com/documentation/swiftui/textfield)). 따라서 고정 100pt가 편집기와 중복 레이블에 함께 배분되어 형식 문구를 압박한다. main에도 같은 헬퍼·중첩 레이블·100pt가 있으므로 기존 레이아웃 결함이다. 이번 diff는 바깥 탐색을 콘텐츠 680pt 기준 `AnyLayout`으로 바꿨으며 이 중첩 구조를 도입하지 않았다. 그 폭 전환이 실기에서 미친 영향은 별도 비교하지 않았다. `SettingsScreen.swift:513-520`에서 입력칸의 레이블만 `.labelsHidden()`으로 숨기고 `HH:mm`을 실제 prompt로 옮겼다. 입력값이 있어도 아래 설명에서 24시간제 시:분과 예시를 읽을 수 있다. 기존 접근성 라벨·바인딩·100pt 편집기와 전역 `field()`는 유지한다.
+
+**L2 — 빈 프로젝트 Return은 기존 이슈.** `keyboard-empty.js:253`의 key 29는 ←가 아니라 물리 **0** 키다. ⌘⇧0은 `KeyboardNavigation.swift:89-94`의 콘텐츠 이동이며, key 36은 Return이다. 앱의 빈 상태는 `ProjectsScreen.swift:33-42`에서 `onCreateProject()`를 호출하고 `:168-170`에서 `showsProjectCreator = true`, `:83-88`에서 프로젝트 추가 시트를 연다. `keyboard-empty.js:259`는 별도 창 ‘빠른 입력’을 기다리므로 이 구현의 성공을 판정할 수 없다. 동작 변경은 main에 포함된 **`9b12e14`**에서 `onCapture()`를 프로젝트 추가로 대체한 것이며, 이번 브랜치의 ProjectsScreen diff는 데이터가 있는 업무 행의 named accessibility action 4줄(`:238-241`)뿐이다. 앱·스크립트는 수정하지 않았다. 프로젝트 시트가 실제로 열렸는지는 인계 결과만으로 확인할 수 없어 Mac에서 별도 확인한다.
+
+과거 ‘키보드 탐색 개선’ 절에는 **2026-10-12 / `b5794a8` / run `27bbf0d4-bd8e-4ff7-8046-c304f9aee4bc`**의 `many`/`empty` 100개 assertion 및 ‘빈 프로젝트 Return 입력 열기’ 통과 기록이 있다. 이는 `9b12e14` 이전 동작의 기록으로 보존한다. `docs/ui-refresh.md`, `docs/ux-components.md`, `docs/ux-verification.md`, `docs/RELEASE.md`를 확인했지만 **0.9.0 / main `6ea225b`에서 keyboard-empty가 통과했다는 별도 기록은 찾지 못했다**. 저장소에 CHANGELOG 파일은 없다.
+
+**L3 — 테스트 조건 문제로 판정, 변경 없음.** `keyboard-safety.js:61-69`는 8초간 0.12초 간격으로 재시도하지만 `:187`에서 ‘업무 목록’의 역할을 `AXScrollArea`로만 제한한다. 앱은 main과 동일한 `TaskListScreen.swift:40-66`의 표준 `List`다. 같은 저장소의 `keyboard-flow.js:120-126`은 `AXOutline`·`AXTable`·`AXList`·`AXScrollArea`를 허용하며, 아래 2026-10-13 Maclab 기록에도 목록이 `AXOutline`으로 노출된 선례가 있다. 이번 diff는 업무 목록·레이블·화면 이동·스크립트를 바꾸지 않았으므로 앱 회귀보다 **AX 역할 필터 또는 노출 타이밍** 가능성이 높다. 당시 AX 트리가 없어 정확한 역할/지연은 미확정이다. `capture-search-flow.js:242-244`는 TextEdit 활성화 후 전면 bundle ID 일치를 기다리고 나서야 핫키를 보낸다. `:49-57`의 기본 8초·0.15초 polling에서 실패했으므로 **테스트 환경의 앱 활성화/타이밍 문제**로 분류한다. 이번 diff에는 이 준비 단계나 앱 활성화 경로 변경이 없으며, 실제 입력·저장 회귀 여부는 이 실패로 판정할 수 없다. 두 스크립트와 앱 경로는 수정하지 않았다.
+
+**L4 — 문서 P3 정정.** F1/F2 조치를 `cd6f2b3`의 대비 무관 시스템 `keyboardFocusIndicatorColor`, 대비 높이기 포커스 3pt·비포커스 outline 2pt와 일치시켰다. F4 단축키 실패 앵커는 실제 `SettingsScreen.swift:318`로 정정했다(L1 수정 후에도 동일).
+
+L 검증: Linux aarch64 / Swift 6.3.3에서 `swift build --build-tests` exit **0**(4.11초), `swift test` exit **0**(**807개 XCTest / 실패 0**, 47.253초). `swiftc -frontend -parse -target arm64-apple-macos26 Sources/WorkLogApp/SettingsScreen.swift`와 `git diff --check`도 통과했다. 구문 파싱은 macOS SDK 타입 검사가 아니다. 로그는 `/tmp/lgux-90df-l-build.log`, `/tmp/lgux-90df-l-test.log`에 남겼다. 수정 파일은 `SettingsScreen.swift`와 이 문서뿐이다.
+
+Mac 재현: 가짜 fixture에서 검토 알림을 넓은 창·840pt 및 설정 콘텐츠 680pt 경계 양쪽으로 전환하고, 값 있음/비어 있음·Tab 편집·저장·VoiceOver 라벨을 확인한다. 새 `empty` fixture의 프로젝트에서 ⌘0 → ⌘⇧0 → Return으로 ‘프로젝트 추가’ 시트가 열리고 Esc 후 포커스가 복귀하는지 확인한다. safety 실패는 당시 목록 AX 역할·부모 관계와 대기 시간을, capture 실패는 TextEdit 전면 활성화 성공 여부를 먼저 확인한다. 이 작업은 스크립트 수정·push·배포를 포함하지 않는다.
 
 ### 실제 Mac 후속 확인 (이번 작업에서는 미실행)
 

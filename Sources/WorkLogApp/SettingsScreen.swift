@@ -511,11 +511,13 @@ struct SettingsScreen: View {
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             field("월요일 검토 알림") {
-                TextField("HH:mm", text: $model.draft.mondayReminderTime)
+                // The outer field supplies the visible label; keep the format inside the editor.
+                TextField("월요일 검토 알림", text: $model.draft.mondayReminderTime, prompt: Text("HH:mm"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(width: 100)
                     .accessibilityLabel("월요일 검토 알림 시각, HH:mm")
             }
-            hint("업무 시간대(\(model.draft.timeZoneIdentifier)) 기준입니다. 예: 09:00")
+            hint("24시간제 시:분 형식입니다. 업무 시간대(\(model.draft.timeZoneIdentifier)) 기준입니다. 예: 09:00")
         }
     }
 
