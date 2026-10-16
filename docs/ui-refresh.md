@@ -1,5 +1,64 @@
 # 플로팅 패널과 워크스페이스 UI
 
+## Liquid Glass UI/UX 감사·개선 (LGUX-90DF · A, 2026-10-16 KST)
+
+Method: design review only (detector not applicable, native platform). 기준 커밋 `6ea225b`, 브랜치 `feat/lgux-90df-liquid-glass-polish`. Linux에서 SwiftUI/AppKit 소스를 감사하고 안전한 범위의 polish를 적용했다. 현재 화면을 실행하거나 캡처하지 못했으며, 과거 Maclab 화면 링크의 이미지도 이 worktree에는 없다. 아래 배치·대비 위험은 코드 근거이며 실제 잘림이나 대비 비율을 측정한 결과가 아니다. 렌더링·성능·VoiceOver를 포함한 종합 점수는 산정하지 않았다.
+
+### 감사 결과와 조치
+
+높음 수준의 기능 차단 결함은 이번 정적 감사에서 확인하지 못했다. 중간 6건, 낮음 2건 중 7건을 수정하고 1건은 제안으로 남겼다. 파일과 줄은 이번 수정 후 기준이며 `Sources/WorkLogApp/` 아래다.
+
+| 항목 | 화면 / 파일:줄 | 심각도 | 근거 | 조치 |
+|---|---|---|---|---|
+| 앱 사이드바와 설정 내부 목차가 동시에 폭을 차지한다. 내부 목차는 최소 188pt여서 좁은 본문의 양식·한국어 설명을 압박한다. | 설정 · `SettingsScreen.swift:45` | 중간 | Impeccable native audit/Adaptivity, polish/Layout; HIG macOS 창 적응 | **수정함.** 실제 설정 콘텐츠 폭 680pt 미만에서는 검색 + 표준 menu `Picker`를 위에 두고 `Form`에 전체 폭을 배분한다. 넓은 폭의 목차 목록, 선택·검색·저장 바인딩은 유지한다. |
+| 버전/동작의 세로 대체 배치에서도 동작 5개가 한 `HStack`에 남아 있다. | 주간보고·성과자료 · `ReportsScreen.swift:324` | 중간 | Impeccable polish/flow·layout; HIG Liquid Glass/컨트롤 밀집 방지 | **수정함.** 복사·편집과 저장·되돌리기·확정을 두 그룹으로 구성하고 `ViewThatFits`의 두 줄 대안을 제공한다. 기존 실행·단축키·비활성 조건은 유지한다. |
+| 업무 행의 기본 버튼 동작은 선택인데 안내는 상세 열기를 말한다. 일반 Return/더블클릭·하단 열기 버튼은 있지만 행 자체의 VoiceOver 상세 액션이 없다. | 프로젝트 업무 · `ProjectsScreen.swift:238` | 중간 | Impeccable native audit/Accessibility; HIG 접근성의 대체 조작 | **수정함.** 기존 업무 목록의 패턴을 재사용해 이름 있는 ‘업무 상세 열기’ 접근성 액션을 추가했다. 해당 행을 선택한 뒤 상세를 열어 복귀 대상도 맞춘다. |
+| 검색 패널의 사용자 지정 외곽선은 대비 증가에서도 separator 1pt로 고정돼 빠른 입력 패널과 다르다. | 검색 패널 · `SearchPanel.swift:160` | 중간 | Impeccable polish/system drift; HIG Accessibility·Materials | **수정함.** `WorkLogTheme.outlineColor/outlineWidth`를 재사용해 대비 증가에서 label 색 2pt를 적용한다. glass 헤더와 표준 본문 소재는 유지한다. |
+| 시각적으로는 ‘저장 중…’인데 명시적 접근성 이름은 계속 ‘저장하고 이전 앱으로 돌아가기’다. | 빠른 입력 · `CapturePanel.swift:790` | 중간 | Impeccable native audit/상태 의미; HIG Accessibility | **수정함.** 두 기존 저장 중 상태를 같은 조건으로 읽어 버튼 이름도 ‘저장 중’으로 맞춘다. 자동 음성 알림을 추가한 것은 아니며 실제 발화는 미검증이다. |
+| 업무 상태 문구 전체가 녹색·주황색 등 상태 색을 사용해 공통 배지의 읽기 규칙과 다르다. | 오늘 → 업무 상태 · `DayScreen.swift:219` | 중간 | Impeccable native audit/Theming; HIG Accessibility·Color; `ux-components.md` 의미 색 원칙 | **수정함.** 문구는 시스템 label 색, 기호만 상태 색을 사용한다. 대비 증가에서는 기호도 label 색이며 문구와 기호의 형태로 상태를 구분한다. 새 배지 배경은 추가하지 않았다. |
+| 장식용 Esc 키캡이 접근성 트리에 별도 텍스트로 남는다. | 검색 패널 헤더 · `SearchPanel.swift:132` | 낮음 | Impeccable polish/중복 정보; Taste의 장식 배제 원칙 | **수정함.** 키캡은 접근성에서 숨기고 닫기 버튼의 이름과 Esc 도움말은 유지한다. |
+| 결과 수·필터·초기화·미리보기·AI 질문이 한 행에 모이고 별도 좁은 폭 대안이 없다. | 메인 검색·검색 패널 · `SearchScreen.swift:579` | 낮음 | Impeccable polish/Layout; Taste의 의도적인 정보 위계 | **제안만.** 필터·미리보기·AI가 함께 보이는 경우를 실제 Mac에서 먼저 재현하고 필요 시 결과/필터와 보조 동작을 두 줄로 나눈다. 가짜 fixture는 AI를 비활성화하므로 이 조합의 표시 검증은 별도 대역이 필요하다. |
+
+유지한 장점: `AppRootView`는 표준 `NavigationSplitView`·사이드바 `List`·`toolbar`를 사용한다. `Components.swift`의 `StateView`·`RecoveryNotice`는 복구 동작과 보존 설명을 제공하며, `AppTheme.swift`는 의미 색·대비 경계를 이미 정의한다. 오늘·업무·프로젝트는 제목 우선의 행과 명시적 빈 상태를 사용하고, 보고서 두 목적은 별도 진입점·모델을 유지한다. Secret/휴지통은 잠금·편집 소유권·가림 상태와 파괴 동작 확인을 코드에서 확인했다. 이 경로들과 공용 컴포넌트의 API는 수정하지 않았다.
+
+glass 사용처는 두 floating 패널의 조작 헤더뿐이다. 시스템 사이드바·툴바·시트의 배경을 덮거나 본문에 glass를 추가한 코드는 발견하지 못했다. 본문의 표준 소재, 시스템 버튼, 시스템 글꼴과 4/8/12/16pt 간격을 유지한다. 이 판단은 [Apple Materials HIG](https://developer.apple.com/design/human-interface-guidelines/materials), [Liquid Glass 적용](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass), [Accessibility HIG](https://developer.apple.com/design/human-interface-guidelines/accessibility), [macOS 디자인](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos/)을 기준으로 한다.
+
+### 스킬·문서 적용 범위와 제약
+
+- **Impeccable:** `SKILL.md`를 먼저 읽고 worktree에서 `sh /home/ubuntu/paseo/personas/uiux/skills/impeccable/scripts/impeccable context --target Sources/WorkLogApp/AppRootView.swift`를 1회 실행했다. exit 127: engine 0.1.15 미설치이고 `/home/ubuntu/.impeccable/bin/0.1.15` 캐시 생성 권한이 없어 context는 로드되지 않았다. 안내된 수동 대안으로 기존 `AGENTS.md`, UI 문서와 실제 구현을 읽었다. 이 저장소에는 `PRODUCT.md`/`DESIGN.md`가 없다. `audit.native.md`, `critique.md`, `polish.md`, `operate.md` 및 UI 편집 직전 `craft-floor.md`를 읽고 Operate 모드의 일관성·상태·위계·절제 지침을 적용했다. 설치본에는 macOS 전용 native-platform 문서가 없고 `ios.md`만 있어, 공통 의미 색·시스템 컨트롤·접근성 원칙만 참고하고 macOS 규칙은 프로젝트와 Apple HIG를 우선했다. iOS 탭바·44pt 터치 크기·시뮬레이터 절차는 적용하지 않았다. native 대상에 웹 detector·overlay·브라우저 평점은 적용하지 않았고 하위 에이전트도 생성하지 않았다.
+- **Taste:** `SKILL.md`를 읽고 결정 없는 기본값 제거, 장식 배제, 위계·여백·타이포의 의도적인 선택만 감사에 적용했다. 이 앱은 마케팅 웹페이지가 아니므로 방향 추첨, `draw.mjs`, `assets.mjs`, `lint.mjs`, `inspect.mjs`, 이미지/모션 할당량, 웹 글꼴·색상 팔레트·‘No glass’ 규칙은 적용하지 않았다. 네이티브 시스템 글꼴·구분선·키캡·Liquid Glass 사용 규칙을 우선한다.
+- **보조:** frontend-design의 기존 시각 언어 보존, ui-ux-pro-max의 SwiftUI 레이블·의미·동작 줄이기 검색 결과, web-accessibility/web-design-guidelines의 이름·포커스·상태·긴 콘텐츠 원칙을 참고했다. HTML/ARIA·DOM·CSS·axe/Playwright 검사를 SwiftUI 검증으로 대체하지 않았다.
+- **Context7:** `/websites/developer_apple_swiftui` ID를 확인한 뒤 `ViewThatFits`, 접근성 요소/이름, `colorSchemeContrast` 문서를 실제 조회했다. 설치 기준은 Swift 6.3.3 / macOS 26.0이며 SwiftUI는 SDK 프레임워크다. 조회는 최신 비고정 문서이므로 macOS 27 전용 항목은 제외하고 기존 앱에서 쓰는 macOS 26 이하 API만 재사용했다. Apple 웹 문서는 Markdown 본문 열기가 도구의 content-type 제한으로 실패해 공식 검색 결과와 Context7 조회를 보완 근거로 사용했다.
+
+### 변경 범위와 검증
+
+앱 변경은 `SettingsScreen.swift`(좁은 목차), `ReportsScreen.swift`(동작 그룹), `ProjectsScreen.swift`(접근성 액션), `SearchPanel.swift`(대비/키캡), `CapturePanel.swift`(저장 상태 이름), `DayScreen.swift`(상태 문구 색) 6개 파일이다. 이 절을 `docs/ui-refresh.md`에 추가했다. Core·스키마·Package.swift·배포·버전 파일은 변경하지 않았다. IME 처리·일반 단축키·저장/초안·Secret 경로·날짜 변환·보고서 목적 구분의 로직도 변경하지 않았다.
+
+| 실행 명령 | 실제 결과 | 범위 |
+|---|---|---|
+| `swift build --build-tests` | exit **0**, Build complete (223.84초) | Linux aarch64 / Swift 6.3.3, Core·CLI와 테스트 빌드. SwiftUI 타입 검사를 뜻하지 않는다. |
+| `swift test` | exit **0**, **807개 XCTest·실패 0**, 50.387초 | 전체 기존 회귀 테스트. 별도 Swift Testing 러너의 0개는 XCTest 807개와 구분한다. |
+| 아래 macOS 26 대상 구문 파싱 루프 | exit **0**, 앱 Swift 파일 **36개**, FAIL 출력 없음 | 최종 UI 소스의 구문만 검사. macOS SDK 타입 검사·링크·실행은 미검증이다. |
+| `git diff --check` | exit **0** | 공백 오류 없음. |
+
+```bash
+for f in Sources/WorkLogApp/*.swift; do swiftc -frontend -parse -target arm64-apple-macos26 "$f" || echo FAIL "$f"; done
+```
+
+첫 `swift build --build-tests`는 `github.com` DNS 오류로 의존성을 받지 못해 exit 1이었다. 기존 로컬 캐시의 깨끗한 체크아웃이 `Package.resolved`의 swift-crypto 4.5.2 / swift-asn1 1.7.3 리비전과 일치함을 확인하고, 이 worktree의 무시되는 `.build`에만 복사한 뒤 같은 빌드가 통과했다. 원본 캐시와 의존성 선언·잠금 파일은 수정하지 않았다. 최종 빌드/테스트 로그는 `/tmp/lgux-90df-build.log`, `/tmp/lgux-90df-test.log`다.
+
+Questions skipped: 사용자 요청에서 감사 후 안전한 수정·검증·커밋 범위가 이미 확정되어 추가 디자인 질문은 생략했다. critique 저장소·브라우저 overlay·임시 서버는 생성하지 않았다.
+
+### 실제 Mac 후속 확인 (이번 작업에서는 미실행)
+
+macOS 26 이상 SDK로 앱을 빌드한 뒤 `--ui-test-fixture empty|few|many`를 각각 사용한다. 실제 회사 계정·Secret·Keychain·AI 토큰은 사용하지 않는다.
+
+1. 메인 창 840×560·980pt·1280pt에서 사이드바를 펼치고 접는다. 설정의 목차/Picker 전환은 **창 폭이 아닌 콘텐츠 폭 680pt** 기준이다. 경계 양쪽에서 검색어·선택·미저장 양식 값이 유지되는지, 양식과 저장/되돌리기가 잘리지 않는지 확인한다. 설정 검색 0건·복구, 긴 한국어·단축키·숫자 양식과 스크롤도 확인한다.
+2. 주간보고·성과자료 각각 저장된/빈/생성 중/오류/수정/확정 버전에서 버튼 배치·읽기 순서·본문 높이를 확인한다. 좁은 배치에서도 복사·편집·저장·되돌리기·확정이 보이고, ⌘E/⌘S/⇧⌘C가 한 번씩 실행돼야 한다. 복사는 확정을 바꾸지 않고 서로 다른 목적의 본문을 섞지 않아야 한다.
+3. 키보드만으로 사이드바 → 설정 목차·검색·양식·저장, 프로젝트 → 업무 → 상세 → 복귀를 수행한다. VoiceOver 동작 메뉴에서 ‘업무 상세 열기’를 실행해 올바른 행과 선택으로 복귀하는지 확인한다. 빠른 입력의 저장 중 이름과 검색 헤더의 중복 Esc 발화 제거도 확인한다.
+4. 라이트/다크 × 대비 증가·투명도 줄이기·동작 줄이기를 확인한다. 검색 패널 외곽선, 오늘의 보류/완료 상태 문구·기호, 상태 배지·포커스가 읽혀야 한다. 4.5:1 등 실제 대비 수치는 Accessibility Inspector와 렌더링으로 별도 측정한다. 검색 패널 580×480, 메모 패널 520×440, 업무 패널 800×440에서 glass 헤더·닫기·본문·저장 상태를 확인한다.
+5. 메모·업무의 한글 조합 중 Return/Esc/⌘Return, 초안 탭 왕복·닫기/재열기·Undo, 설정 폭 전환 중 편집 상태를 확인한다. 가짜 Secret은 잠금·가림 값의 VoiceOver 비노출·방향키 비복사·명시적 복사·부분 수정·휴지통 복원을 회귀 확인한다. Linux 테스트와 파싱은 이 실제 동작의 통과 근거가 아니다.
+
 
 ## macOS 26 · Liquid Glass와 표준 컴포넌트 (2026-10-15)
 

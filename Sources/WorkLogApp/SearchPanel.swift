@@ -112,6 +112,7 @@ import WorkLogCore
 }
 
 @MainActor private struct SearchPanelContent: View {
+    @Environment(\.colorSchemeContrast) private var contrast
     let model: SearchModel
     let environment: AppEnvironment
     let secrets: SecretsModel?
@@ -128,7 +129,7 @@ import WorkLogCore
                         .accessibilityHidden(true)
                     Text("검색").font(.callout.weight(.semibold))
                     Spacer()
-                    Keycap("esc")
+                    Keycap("esc").accessibilityHidden(true)
                 }
                 .overlay(SearchWindowDragArea())
                 Button(action: onClose) {
@@ -156,7 +157,8 @@ import WorkLogCore
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(WorkLogTheme.border, lineWidth: 1)
+                .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
+                              lineWidth: WorkLogTheme.outlineWidth(for: contrast))
                 .allowsHitTesting(false)
         }
     }

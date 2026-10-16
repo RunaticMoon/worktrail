@@ -321,12 +321,25 @@ private struct ReportWorkspace: View {
         }.frame(width: 150).disabled(selectionLocked)
     }
 
-    @ViewBuilder private var reportActions: some View {
+    private var reportActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { copyAndEditActions; saveActions }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) { copyAndEditActions }
+                HStack(spacing: 8) { saveActions }
+            }
+        }
+    }
+
+    @ViewBuilder private var copyAndEditActions: some View {
         Button("본문 복사") { copyReport() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
         Button("편집 ⌘E", action: focusContent)
             .focusable().worklogKeyboardActivation(focusContent).disabled(!model.canEdit)
+    }
+
+    @ViewBuilder private var saveActions: some View {
         Button("저장") {
             guard !worklogHasMarkedText else { return }
             retryAction = .save; model.saveEdits()

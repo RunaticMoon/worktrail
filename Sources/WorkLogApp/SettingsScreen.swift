@@ -42,10 +42,20 @@ struct SettingsScreen: View {
             ScreenHeader(title: "설정", purpose: "입력부터 AI까지, 내 작업 방식에 맞게")
                 .padding(WorkLogTheme.contentInset)
             Divider()
-            HStack(alignment: .top, spacing: 0) {
-                navigation
-                Divider()
-                detail
+            GeometryReader { geometry in
+                if geometry.size.width < 680 {
+                    VStack(alignment: .leading, spacing: 0) {
+                        compactNavigation
+                        Divider()
+                        detail
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 0) {
+                        navigation
+                        Divider()
+                        detail
+                    }
+                }
             }
             Divider()
             footer
@@ -67,9 +77,7 @@ struct SettingsScreen: View {
 
     private var navigation: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TextField("설정 검색", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("설정 항목 검색")
+            navigationSearch
                 .padding(12)
             List(selection: Binding<SettingsDestination?>(
                 get: { destination },
@@ -93,6 +101,27 @@ struct SettingsScreen: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("설정 목차")
+    }
+
+    private var navigationSearch: some View {
+        TextField("설정 검색", text: $query)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel("설정 항목 검색")
+    }
+
+    private var compactNavigation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            navigationSearch
+            if !matchingDestinations.isEmpty {
+                Picker("설정 항목", selection: $destination) {
+                    ForEach(matchingDestinations) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+        }
+        .padding(12)
     }
 
     private var detail: some View {

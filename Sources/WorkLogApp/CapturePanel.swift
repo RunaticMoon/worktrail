@@ -787,7 +787,7 @@ extension View {
         .buttonStyle(.borderedProminent)
         .captureFocus("save", order: 800, action: onSave)
         .disabled(saveState.isSaving || draft.isSubmitting || draft.pendingCompletion != nil)
-        .accessibilityLabel("저장하고 이전 앱으로 돌아가기")
+        .accessibilityLabel(saveState.isSaving || draft.isSubmitting ? "저장 중" : "저장하고 이전 앱으로 돌아가기")
         .worklogHelp("저장하고 이전 앱으로 돌아가기", keys: "⌘Return")
     }
 
