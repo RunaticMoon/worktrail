@@ -216,8 +216,14 @@ import WorkLogCore
                                             if let due = row.dueOn { Text("마감 \(KoreanDateLabel.monthDayWeekday(due, calendar: calendar))") }
                                         }.font(.callout).foregroundStyle(WorkLogTheme.muted)
                                     }.frame(maxWidth: .infinity, alignment: .leading)
-                                    Label(row.status.koreanLabel, systemImage: row.status.badgeSymbol)
-                                        .font(.callout).foregroundStyle(row.status.badgeTone.color).fixedSize()
+                                    Label {
+                                        Text(row.status.koreanLabel).foregroundStyle(WorkLogTheme.text)
+                                    } icon: {
+                                        Image(systemName: row.status.badgeSymbol)
+                                            .foregroundStyle(contrast == .increased ? WorkLogTheme.text : row.status.badgeTone.color)
+                                            .accessibilityHidden(true)
+                                    }
+                                    .font(.callout).fixedSize()
                                 }
                                 .multilineTextAlignment(.leading).padding(.vertical, 12).padding(.horizontal, 8)
                                 .contentShape(Rectangle())

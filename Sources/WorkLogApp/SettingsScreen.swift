@@ -12,6 +12,7 @@ struct SettingsScreen: View {
     let backups: BackupModel?
     let onOpenBackups: (() -> Void)?
     @Environment(\.hotkeyDiagnostics) private var hotkeyDiagnostics
+    @Environment(\.colorSchemeContrast) private var contrast
     @FocusState private var errorFocused: Bool
     @FocusState private var headingFocused: Bool
     @State private var query = ""
@@ -42,10 +43,17 @@ struct SettingsScreen: View {
             ScreenHeader(title: "설정", purpose: "입력부터 AI까지, 내 작업 방식에 맞게")
                 .padding(WorkLogTheme.contentInset)
             Divider()
-            HStack(alignment: .top, spacing: 0) {
-                navigation
-                Divider()
-                detail
+            GeometryReader { geometry in
+                let isCompact = geometry.size.width < 680
+                let layout = isCompact
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
+                // Keep the form's identity while changing the navigation placement.
+                layout {
+                    navigationColumn(isCompact: isCompact)
+                    navigationDivider(isCompact: isCompact)
+                    detail
+                }
             }
             Divider()
             footer
@@ -65,11 +73,25 @@ struct SettingsScreen: View {
         }
     }
 
+    @ViewBuilder private func navigationDivider(isCompact: Bool) -> some View {
+        if isCompact {
+            VStack(spacing: 0) { Divider() }
+        } else {
+            HStack(spacing: 0) { Divider() }
+        }
+    }
+
+    @ViewBuilder private func navigationColumn(isCompact: Bool) -> some View {
+        if isCompact {
+            compactNavigation
+        } else {
+            navigation
+        }
+    }
+
     private var navigation: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TextField("설정 검색", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("설정 항목 검색")
+            navigationSearch
                 .padding(12)
             List(selection: Binding<SettingsDestination?>(
                 get: { destination },
@@ -93,6 +115,29 @@ struct SettingsScreen: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("설정 목차")
+    }
+
+    private var navigationSearch: some View {
+        TextField("설정 검색", text: $query)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel("설정 항목 검색")
+    }
+
+    private var compactNavigation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            navigationSearch
+            if !matchingDestinations.isEmpty {
+                Picker("설정 항목", selection: $destination) {
+                    ForEach(matchingDestinations) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityLabel("설정 목차")
+                .accessibilityHint(destination.subtitle)
+            }
+        }
+        .padding(12)
     }
 
     private var detail: some View {
@@ -138,8 +183,14 @@ struct SettingsScreen: View {
     @ViewBuilder private var feedback: some View {
         if !model.errors.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Label("설정을 확인하세요", systemImage: "exclamationmark.triangle")
-                    .font(.headline).foregroundStyle(StatusTone.warning.color)
+                Label {
+                    Text("설정을 확인하세요").foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.headline)
                     .focusable().focused($errorFocused)
                 ForEach(model.errors, id: \.self) { error in
                     Text(error).fixedSize(horizontal: false, vertical: true)
@@ -264,8 +315,14 @@ struct SettingsScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let failure = diagnostic.lastFailure, failure != diagnostic.registrationText {
-                Label("최근 등록 시도 · \(failure)", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(StatusTone.warning.color)
+                Label {
+                    Text("최근 등록 시도 · \(failure)").foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -290,9 +347,11 @@ struct SettingsScreen: View {
             Toggle("일반 기록에 AI 사용", isOn: $model.draft.aiEnabled).toggleStyle(.switch)
             hint(SettingsModel.transmissionNotice)
             field("Codex 실행 경로") {
-                TextField("비우면 자동으로 찾습니다", text: Binding(
+                TextField("Codex 실행 경로", text: Binding(
                     get: { model.draft.codexExecutablePath ?? "" },
-                    set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }))
+                    set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }),
+                    prompt: Text("비우면 자동으로 찾습니다"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).accessibilityLabel("Codex 실행 경로")
             }
             HStack(spacing: 12) {
@@ -346,8 +405,10 @@ struct SettingsScreen: View {
                 modelPicker(type)
                 effortPicker(type)
                 field("추가 스킬") {
-                    TextField("스킬 이름 또는 SKILL.md 경로", text: Binding(
-                        get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }))
+                    TextField("추가 스킬", text: Binding(
+                        get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }),
+                        prompt: Text("스킬 이름 또는 SKILL.md 경로"))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder).accessibilityLabel("\(jobTitle(type)) 스킬")
                 }
                 Button { promptEditor = PromptEditorSelection(job: type) } label: {
@@ -454,11 +515,13 @@ struct SettingsScreen: View {
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             field("월요일 검토 알림") {
-                TextField("HH:mm", text: $model.draft.mondayReminderTime)
+                // The outer field supplies the visible label; keep the format inside the editor.
+                TextField("월요일 검토 알림", text: $model.draft.mondayReminderTime, prompt: Text("HH:mm"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(width: 100)
                     .accessibilityLabel("월요일 검토 알림 시각, HH:mm")
             }
-            hint("업무 시간대(\(model.draft.timeZoneIdentifier)) 기준입니다. 예: 09:00")
+            hint("24시간제 시:분 형식입니다. 업무 시간대(\(model.draft.timeZoneIdentifier)) 기준입니다. 예: 09:00")
         }
     }
 
@@ -466,6 +529,7 @@ struct SettingsScreen: View {
         field(title) {
             HStack(spacing: 8) {
                 TextField(title, value: value, format: .number)
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).frame(width: 100)
                     .accessibilityLabel("\(title), \(range)")
                 Text(unit).font(.callout)

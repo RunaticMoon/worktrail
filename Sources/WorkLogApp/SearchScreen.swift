@@ -5,6 +5,7 @@ import WorkLogCore
 
 @MainActor struct SearchScreen: View {
     @Environment(\.worklogContentAutofocus) private var contentAutofocus
+    @Environment(\.colorSchemeContrast) private var contrast
     @Bindable var model: SearchModel
     let environment: AppEnvironment
     var secrets: SecretsModel? = nil
@@ -572,7 +573,9 @@ import WorkLogCore
         .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(focused ? WorkLogTheme.accent.opacity(0.6) : WorkLogTheme.border, lineWidth: 1)
+                .strokeBorder(focused ? WorkLogTheme.focusColor(for: contrast) : WorkLogTheme.outlineColor(for: contrast),
+                              lineWidth: focused ? (contrast == .increased ? 3 : 2) : WorkLogTheme.outlineWidth(for: contrast))
+                .allowsHitTesting(false)
         }
     }
 

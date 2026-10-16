@@ -6,6 +6,7 @@ import WorkLogCore
     let model: ProjectsModel
     let onCreated: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var name = ""
     @State private var errorMessage: String?
     @State private var isCreating = false
@@ -20,14 +21,22 @@ import WorkLogCore
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
             VStack(alignment: .leading, spacing: 6) {
                 Text("프로젝트 이름").font(.headline)
-                TextField("예: 서비스 개편", text: $name)
+                TextField("프로젝트 이름", text: $name, prompt: Text("예: 서비스 개편"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("프로젝트 이름")
                     .focused($nameFocused)
                     .onSubmit(create)
             }
             if let errorMessage {
-                Text(errorMessage).font(.callout).foregroundStyle(StatusTone.warning.color)
+                Label {
+                    Text(errorMessage).foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {

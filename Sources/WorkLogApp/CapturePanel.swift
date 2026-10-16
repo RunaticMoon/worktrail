@@ -59,6 +59,7 @@ import Observation
     let action: (() -> Void)?
     @Environment(CaptureKeyboardNavigation.self) private var navigation
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorSchemeContrast) private var contrast
     @FocusState private var focused: Bool
 
     func body(content: Content) -> some View {
@@ -68,7 +69,8 @@ import Observation
             .focused($focused)
             .overlay {
                 RoundedRectangle(cornerRadius: 5)
-                    .strokeBorder(focused ? WorkLogTheme.accent : .clear, lineWidth: 1.5)
+                    .strokeBorder(focused ? WorkLogTheme.focusColor(for: contrast) : .clear,
+                                  lineWidth: contrast == .increased ? 3 : 1.5)
                     .allowsHitTesting(false)
             }
             .id(id)
@@ -787,7 +789,7 @@ extension View {
         .buttonStyle(.borderedProminent)
         .captureFocus("save", order: 800, action: onSave)
         .disabled(saveState.isSaving || draft.isSubmitting || draft.pendingCompletion != nil)
-        .accessibilityLabel("저장하고 이전 앱으로 돌아가기")
+        .accessibilityLabel(saveState.isSaving || draft.isSubmitting ? "저장 중" : "저장하고 이전 앱으로 돌아가기")
         .worklogHelp("저장하고 이전 앱으로 돌아가기", keys: "⌘Return")
     }
 
@@ -1150,8 +1152,9 @@ extension View {
             .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 7))
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(navigation.current == "body" ? Color(nsColor: .keyboardFocusIndicatorColor) : WorkLogTheme.outlineColor(for: contrast),
-                              lineWidth: navigation.current == "body" ? 2 : WorkLogTheme.outlineWidth(for: contrast)))
+                .strokeBorder(navigation.current == "body" ? WorkLogTheme.focusColor(for: contrast) : WorkLogTheme.outlineColor(for: contrast),
+                              lineWidth: navigation.current == "body" ? (contrast == .increased ? 3 : 2) : WorkLogTheme.outlineWidth(for: contrast))
+                .allowsHitTesting(false))
             if !captureEditorCandidates(model).isEmpty {
                 candidateList
             }

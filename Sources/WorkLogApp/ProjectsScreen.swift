@@ -235,6 +235,10 @@ import WorkLogCore
                                         .accessibilityAddTraits(taskSelection == row.id ? .isSelected : [])
                                         .accessibilityLabel(Text(taskRowLabel(row)))
                                         .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
+                                        .accessibilityAction(named: Text("업무 상세 열기")) {
+                                            taskSelection = row.id
+                                            onOpen(row.id)
+                                        }
                                 }
                             }
                             .padding(2)

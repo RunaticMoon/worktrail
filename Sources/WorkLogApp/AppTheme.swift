@@ -27,6 +27,11 @@ enum WorkLogTheme {
     static func outlineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
         contrast == .increased ? 2 : 1
     }
+
+    /// Focus color stays system-defined regardless of contrast; line width handles contrast adaptation.
+    static func focusColor(for contrast: ColorSchemeContrast) -> Color {
+        Color(nsColor: .keyboardFocusIndicatorColor)
+    }
 }
 
 /// Source-list and task rows share a quiet selection, independent of button chrome.

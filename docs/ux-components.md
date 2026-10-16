@@ -188,9 +188,12 @@ WorkLogAppIcon()                            // View
 ```swift
 WorkLogTheme.outlineColor(for contrast: ColorSchemeContrast) -> Color
 WorkLogTheme.outlineWidth(for contrast: ColorSchemeContrast) -> CGFloat
+WorkLogTheme.focusColor(for contrast: ColorSchemeContrast) -> Color
 ```
 
 ## 사이드바·업무 목록 행 (UXFL-E55A · U)
+
+입력 링은 대비 설정과 관계없이 `focusColor(for:)`의 시스템 `keyboardFocusIndicatorColor`를 쓴다. 검색어·빠른 입력 본문 링은 기본 2pt(빠른 입력 컨트롤은 1.5pt), 대비 높이기에서는 모두 3pt로 표시해 비포커스 outline의 2pt와 구별한다. 아래 목록 행의 강조색 포커스 규칙과는 별개다.
 
 ```swift
 WorkLogTheme.rowCornerRadius: CGFloat // 6
