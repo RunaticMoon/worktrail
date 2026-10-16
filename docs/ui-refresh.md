@@ -74,6 +74,62 @@ Mac 실기 재현 필요: macOS 26 이상 SDK 빌드 후 가짜 fixture로 설�
 
 - A-2 (2026-10-16 KST): 설정 목차와 Form 사이 구분선을 compact에서는 `VStack(spacing: 0)`(가로선), regular에서는 `HStack(spacing: 0)`(세로선)으로 감싸 `AnyLayout`의 축 위임 여부와 무관하게 방향을 확정하며, 목차와 `detail`의 자식 위치·구조는 유지한다.
 
+### Impeccable 엔진 재감사 (LGUX-90DF · F, 2026-10-16 감사 후속)
+
+실행일 **2026-10-17 KST**. 기준 `bff0965`, 브랜치 `feat/lgux-90df-liquid-glass-polish`. 기존 A·A-1·A-2 감사 표와 대조한 **신규 항목만** 아래에 기록한다. 이번에도 Linux 소스 감사이며 macOS 화면·VoiceOver·실측 대비·렌더링 성능을 확인한 것은 아니다. native 방식의 Assessment A를 이 세션에서 수행했으며 웹 Assessment B/overlay와 하위 에이전트는 사용하지 않았다. 화면 증거가 없어 휴리스틱/건강 종합 점수는 산정하지 않았다.
+
+#### 엔진 실행과 지침 적용
+
+모든 명령은 이 worktree를 cwd로 실행했다. 설치 파일·스킬 폴더는 수정하지 않았다.
+
+| 실제 명령 | exit / 실제 핵심 출력 | 해석·적용 |
+|---|---|---|
+| `/home/ubuntu/paseo/personas/uiux/skills/impeccable/scripts/impeccable context --target Sources/WorkLogApp/ContentView.swift` | **126**, `Permission denied` | 최초 직접 호출은 런처 실행 비트 때문에 실행되지 않았다. context 로드 실패를 알리고 `sh` 호출로 전환했다. 이 최초 대상명은 존재하지 않는 파일이므로 실제 문맥 로드에는 아래의 실존 대상을 사용했다. |
+| `sh /home/ubuntu/paseo/personas/uiux/skills/impeccable/scripts/impeccable context --target Sources/WorkLogApp/AppRootView.swift` | **0**. `NO_PRODUCT_MD`, `PRODUCT_INIT_REQUIRED`, `MANUAL_DETECTOR_REQUIRED`, `AUTONOMY_DIRECTIVE_CHECK`, `SUBAGENT_AUTHORIZATION`. `targetExists: true`, `hasVisualImplementation: false`, `platform: null` | 엔진은 실제 실행됐지만 SwiftUI/macOS를 자동 인식하거나 native-platform 지침을 로드하지 않았다. scoped fix는 기존 코드 문맥으로 진행하라는 지시를 적용했다. |
+| `sh /home/ubuntu/paseo/personas/uiux/skills/impeccable/scripts/impeccable engine-probe` | **0**, `impeccable-engine 0.1.15` | 등록 확인과 달리 실제 엔진 실행 성공이다. |
+| `sh /home/ubuntu/paseo/personas/uiux/skills/impeccable/scripts/impeccable detect --json Sources/WorkLogApp/AppTheme.swift Sources/WorkLogApp/CapturePanel.swift Sources/WorkLogApp/SearchScreen.swift Sources/WorkLogApp/SettingsScreen.swift Sources/WorkLogApp/ProjectCreationSheet.swift Sources/WorkLogApp/ReportsScreen.swift` | **0**, 출력 전체 `[]` | 변경된 Swift 파일에 실제 시도했다. 미지원 경고·스캔 파일 수는 출력되지 않았다. `audit.native.md`·`critique.md`는 detector가 웹 마크업 전용이며 native에는 적용되지 않는다고 명시하므로, 빈 배열은 SwiftUI 검증 통과 근거가 아니다. 추가 스캔은 하지 않았다. |
+
+`PRODUCT.md`·`DESIGN.md`는 사용자 범위 지시에 따라 생성하지 않았다. `AGENTS.md`, 기존 `docs/ui-refresh.md`·`ux-components.md`·`ux-flows.md` 및 실제 구현을 제품 맥락과 시각 규칙으로 대체했다. `AUTONOMY_DIRECTIVE_CHECK`에는 이 세션의 비동기 구조화 질문 도구로 우선 화면을 한 번 물었다(도구 accepted). 응답에 의존하지 않는 전체 감사는 이미 명시된 브리프대로 진행했다. 질문 도구가 없었다고 보고하지 않는다.
+
+읽고 적용한 지침은 `audit.native.md`(접근성·테마·플랫폼·적응성), `critique.md`의 native Assessment A(흐름·일관성·인지 부하), `polish.md`(기존 동작 보존과 가장 좁은 수정), `operate.md`이며, 편집 직전에 `reference/craft-floor.md`를 읽었다. 설치본에는 macOS 전용 문서가 없고 `ios.md`만 있어 공통 시스템 의미 색·컨트롤·접근성 원칙만 참고했다. macOS 구조·버튼·소재는 프로젝트 지침과 [Apple 접근성 HIG](https://developer.apple.com/design/human-interface-guidelines/accessibility), [Focus and selection](https://developer.apple.com/design/human-interface-guidelines/focus-and-selection/), [Liquid Glass 적용](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)을 우선했다. iOS 터치 크기·탭바·시뮬레이터 규칙은 적용하지 않았다.
+
+frontend-design은 기존 시각 언어 보존, ui-ux-pro-max는 `focus visible contrast --domain ux`의 모든 플랫폼 포커스 가시성 지침을 적용했다. 웹 전용 WCAG AAA 면적/비율은 네이티브 AA 요구로 간주하지 않았다. `contrast focus indicator --stack swiftui`의 @FocusState·로딩 검색 결과도 확인했고 기존 AppKit 키 루프는 변경하지 않았다. web-accessibility/web-design-guidelines는 읽었으나 웹 전용 검사 절차는 실행하지 않았다. Taste는 1차와 동일하게 장식 배제·일관된 위계·의도적인 타이포/여백 원칙만 사용했다. 웹 draw/assets/lint/inspect·팔레트·No glass·이미지/모션 할당량은 적용하지 않았다.
+
+Context7에서 `/websites/developer_apple_swiftui` ID를 확인한 뒤 `colorSchemeContrast`와 사용자 지정 경계 관련 문서를 실제 조회했다. SDK 의존 SwiftUI이며 저장소 최소 macOS 26.0 / 설치 Swift 6.3.3과 대조했다. 최신 문서에 섞인 macOS 27 `accessibilityShowBorders`는 사용하지 않고, 기존 `colorSchemeContrast` 및 AppKit `keyboardFocusIndicatorColor`만 재사용했다.
+
+#### 신규 감사 표
+
+위치는 수정 후 기준이며 파일은 `Sources/WorkLogApp/` 아래다. P2는 native playbook의 Minor(우회 가능), P3는 Polish다. 대비 문제는 실측 실패 판정이 아니라 구현의 설정 미반영·공통 규칙 이탈이다.
+
+| 항목 | 파일:줄 | 심각도 | 근거·사용자 영향 | 조치 |
+|---|---|---|---|---|
+| F1. 빠른 입력의 사용자 지정 컨트롤 포커스가 시스템 효과를 끈 뒤 강조색 1.5pt에 고정되고, 본문 포커스도 대비 증가 시 label 색으로 전환되지 않는다. | `CapturePanel.swift:63`, `CapturePanel.swift:1155`, `AppTheme.swift:32` | P2 | native Accessibility/Theming, HIG Focus; 사용자 강조색에 따라 포커스 구별이 약해질 위험 | **수정.** 공통 `focusColor(for:)`로 기본은 시스템 keyboardFocusIndicatorColor, 대비 증가에서는 label 색을 사용한다. 컨트롤 링은 대비 증가에서 2pt. 본문 장식 경계는 hit testing에서 제외했다. 포커스 상태·등록·키 처리·순서는 그대로다. |
+| F2. 검색어 필드가 패널 외곽선과 달리 대비 증가를 읽지 않고 포커스 강조색도 60%·1pt에 고정된다. | `SearchScreen.swift:576` | P2 | native Accessibility/Theming; 입력 위치 식별 규칙이 공통 테마와 다름 | **수정.** 공통 outline/focus 색을 적용하고 포커스 또는 대비 증가에서 2pt. 장식 경계를 hit testing에서 제외했다. 메인 검색과 패널이 함께 적용된다. |
+| F3. 보고서 본문 편집 경계가 separator 색 1pt로 고정된다. | `ReportsScreen.swift:284` | P2 | native Theming, polish/system drift; 다른 편집 영역과 달리 대비 증가 미반영 | **수정.** 기존 outlineColor/outlineWidth를 재사용했다. 주간보고·성과자료 각 모델·편집·확정 로직과 시스템 포커스 효과는 그대로다. |
+| F4. 설정 검증·단축키 등록 실패, 프로젝트 생성 오류, 평가 기간 오류 문구 전체가 주황/빨강이다. | `SettingsScreen.swift:186`, `SettingsScreen.swift:312`, `ProjectCreationSheet.swift:30`, `ReportsScreen.swift:527` | P2 | native Theming; `ux-components.md`의 상태 문구는 시스템 label 색으로 읽는 원칙 이탈 | **수정.** 오류/복구 문구와 경고 기호·설정의 옅은 경고 배경은 유지하고 본문 전경을 label 색으로 통일했다. 새 레이블이나 컨트롤은 만들지 않았다. |
+| F5. Secret 상세 편집이 콘텐츠 폭 700pt에서 VStack/HSplitView 분기로 재생성될 수 있다. | `SecretsScreen.swift:55`, `SecretsScreen.swift:65`, `SecretEditorView.swift:24` | P2 | native Adaptivity; 편집기의 로컬 FocusState·붙여넣기 펼침 상태가 폭 전환에서 유지되는지 불명확. 모델 초안 손실이 확인된 것은 아니다. | **제안.** Mac에서 한글 조합·셀 편집·붙여넣기 미리보기 중 경계를 왕복해 먼저 확인한다. 필요 시 편집 뷰 정체성을 유지하는 구조로 별도 수정한다. Secret 편집·목록 전환 구조 변경은 이번 범위의 안전한 polish에서 제외했다. |
+| F6. 그래프 Canvas의 연결선은 대비 증가와 무관하게 비강조 membership 25%·선택 이외 35% 농도를 사용한다. | `GraphScreen.swift:661` | P2 | native Accessibility/Theming; 옅은 선을 따라가기 어려울 위험. 연결 목록·선 종류/화살표 대안은 있음 | **제안.** 라이트/다크 × 대비 증가에서 실측 후 Canvas 농도/선 굵기를 함께 보정한다. 실제 렌더링 근거 없이 그래프의 시각적 중요도를 바꾸지 않았다. |
+| F7. Secret 검색 key 행 경계가 선택 강조색/비선택 separator로 고정되어 대비 증가 규칙을 사용하지 않는다. | `SearchSecretScope.swift:61` | P3 | native Theming; 선택/비선택 경계의 읽기 차이를 Mac에서 확인할 필요 | **제안.** 가짜 Secret으로 시스템 포커스·선택 채움·경계의 구별을 먼저 확인한 뒤 별도 보정한다. 값·복사·인증·AX 계약은 수정하지 않았다. |
+
+검토 범위는 메인 창의 오늘·업무·프로젝트·주간보고·성과자료·Secret·검색·그래프·휴지통·백업·설정과 연결된 메모/업무 상세·계획, CapturePanel·SearchPanel, Components/AppTheme다. 기존 검색 도구 행의 폭 문제(A 제안)는 중복이라 신규 표에서 제외했다. 시스템 NavigationSplitView/List/toolbar·Form/DisclosureGroup·시스템 버튼, 공통 상태/복구 컴포넌트, 의미 색·Reduce Motion 처리는 유지할 장점이다. Source의 glass는 두 floating 조작 헤더에만 있으며 본문 glass 추가·시스템 사이드바/시트 배경 중첩은 하지 않았다. 이번에는 폭 분기·AnyLayout·Divider·입력 뷰 구조를 바꾸지 않았다.
+
+#### 변경·검증·Mac 인계
+
+앱 변경 6개: `AppTheme.swift`, `CapturePanel.swift`, `SearchScreen.swift`, `SettingsScreen.swift`, `ProjectCreationSheet.swift`, `ReportsScreen.swift`. 공통 테마의 내부 색 helper 1개와 색/경계 표현만 변경했다. Core·Package·CI·.maclab·scripts·스킬 폴더는 수정하지 않았다. 접근성 레이블/식별자/힌트, keyboardShortcut/captureFocus 선언과 macOS guard는 HEAD 대비 소스 비교로 동일함을 확인했다. 이는 실제 AX 트리·한글 IME·키 조작 검증을 대신하지 않는다.
+
+| 직접 실행 | 실제 결과 |
+|---|---|
+| `swift build --build-tests` | exit **0**, Build complete **4.98초**. SwiftPM manifest 캐시 열기/저장 경고는 있었지만 빌드는 완료됐다. Linux 빌드로 SwiftUI 타입 검사를 뜻하지 않는다. |
+| `swift test` | exit **0**, **807개 XCTest / 실패 0**, **50.806초**. 별도 Swift Testing 러너의 0개와 구분한다. |
+| `for f in Sources/WorkLogApp/*.swift; do swiftc -frontend -parse -target arm64-apple-macos26 "$f" || echo FAIL "$f"; done` | exit **0**, **36개** 파일, 출력 없음(FAIL 없음). macOS SDK 타입 검사·링크·실행은 미검증. |
+| `git diff --check` | 문서를 포함한 최종 변경에서 exit **0**, 공백 오류 없음. |
+
+로그: `/tmp/lgux-90df-f-build.log`, `/tmp/lgux-90df-f-test.log`. 엔진의 실제 출력은 위 표에 기록했다. 웹 자동화·가짜 스크린샷으로 네이티브 화면 확인을 대신하지 않았다.
+
+Maclab 인계: 최종 커밋으로 macOS 26 이상 SDK 빌드 후 기존 `.maclab/tests/ui-flows.json`, `keyboard-ux.json`, `ui-edge-cases.json`, `ui-review.json`을 가짜 fixture로 실행한다. 추가 수동 확인은 (1) 메인 840×560·980pt·1280pt, 두 패널 최소 크기에서 기존 배치/스크롤·한글 IME·초안·단축키, (2) 밝은/어두운 강조색과 라이트/다크 × 대비 증가에서 빠른 입력 Tab 포커스·본문 캐럿·검색어 클릭/드래그·2pt 경계·보고서 편집, (3) 설정 오류/등록 실패·중복 프로젝트·잘못된 평가 기간 오류의 읽기와 VoiceOver, (4) 투명도 줄이기/동작 줄이기와 기존 glass 조작 영역, (5) F5–F7의 Secret 폭 경계·그래프 연결선·가짜 key 행 선택이다. 실계정·실제 Keychain·토큰을 사용하지 않는다.
+
+Questions skipped: 우선 화면에 관한 비동기 질문은 실제 전송했으며, 추가 인터뷰·스킬 마무리 질문은 전체 감사·안전한 수정·검증·커밋 범위가 이미 확정된 사용자 브리프로 대체했다.
+
 ### 실제 Mac 후속 확인 (이번 작업에서는 미실행)
 
 macOS 26 이상 SDK로 앱을 빌드한 뒤 `--ui-test-fixture empty|few|many`를 각각 사용한다. 실제 회사 계정·Secret·Keychain·AI 토큰은 사용하지 않는다.

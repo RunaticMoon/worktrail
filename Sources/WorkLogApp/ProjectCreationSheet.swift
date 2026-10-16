@@ -27,7 +27,7 @@ import WorkLogCore
                     .onSubmit(create)
             }
             if let errorMessage {
-                Text(errorMessage).font(.callout).foregroundStyle(StatusTone.warning.color)
+                Text(errorMessage).font(.callout).foregroundStyle(WorkLogTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {

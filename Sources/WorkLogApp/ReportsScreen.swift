@@ -72,6 +72,7 @@ private struct ReportWorkspace: View {
     @State private var writingOptionsExpanded = false
     @FocusState private var editorFocused: Bool
     @FocusState private var generateFocused: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
 
     private enum RetryAction { case load, generate, save, confirm, apply, propose, createEvaluation }
     private var isWeekly: Bool { family == .submission }
@@ -280,7 +281,10 @@ private struct ReportWorkspace: View {
                         .padding(8)
                         .frame(height: editorHeight)
                         .background(Color(nsColor: .textBackgroundColor))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(WorkLogTheme.border).allowsHitTesting(false))
+                        .overlay(RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(WorkLogTheme.outlineColor(for: contrast),
+                                          lineWidth: WorkLogTheme.outlineWidth(for: contrast))
+                            .allowsHitTesting(false))
                         .accessibilityLabel("\(title) 본문 편집")
                         .accessibilityHint("문장을 수정한 뒤 Command S로 저장하세요.")
                 } else {
@@ -520,7 +524,7 @@ private struct ReportWorkspace: View {
                 }
             }
             if let error = model.errorMessage {
-                Text(error).font(.callout).foregroundStyle(.red)
+                Text(error).font(.callout).foregroundStyle(WorkLogTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }.disabled(selectionLocked)

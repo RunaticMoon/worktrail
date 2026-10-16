@@ -183,7 +183,7 @@ struct SettingsScreen: View {
         if !model.errors.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Label("설정을 확인하세요", systemImage: "exclamationmark.triangle")
-                    .font(.headline).foregroundStyle(StatusTone.warning.color)
+                    .font(.headline).foregroundStyle(WorkLogTheme.text)
                     .focusable().focused($errorFocused)
                 ForEach(model.errors, id: \.self) { error in
                     Text(error).fixedSize(horizontal: false, vertical: true)
@@ -309,7 +309,7 @@ struct SettingsScreen: View {
             }
             if let failure = diagnostic.lastFailure, failure != diagnostic.registrationText {
                 Label("최근 등록 시도 · \(failure)", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(StatusTone.warning.color)
+                    .font(.caption).foregroundStyle(WorkLogTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

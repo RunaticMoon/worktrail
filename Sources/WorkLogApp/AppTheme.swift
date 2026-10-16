@@ -27,6 +27,11 @@ enum WorkLogTheme {
     static func outlineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
         contrast == .increased ? 2 : 1
     }
+
+    /// Custom input rings follow the system focus color and increased contrast.
+    static func focusColor(for contrast: ColorSchemeContrast) -> Color {
+        contrast == .increased ? text : Color(nsColor: .keyboardFocusIndicatorColor)
+    }
 }
 
 /// Source-list and task rows share a quiet selection, independent of button chrome.
