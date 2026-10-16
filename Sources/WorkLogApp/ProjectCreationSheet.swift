@@ -6,6 +6,7 @@ import WorkLogCore
     let model: ProjectsModel
     let onCreated: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var name = ""
     @State private var errorMessage: String?
     @State private var isCreating = false
@@ -27,7 +28,14 @@ import WorkLogCore
                     .onSubmit(create)
             }
             if let errorMessage {
-                Text(errorMessage).font(.callout).foregroundStyle(WorkLogTheme.text)
+                Label {
+                    Text(errorMessage).foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {

@@ -70,7 +70,7 @@ import Observation
             .overlay {
                 RoundedRectangle(cornerRadius: 5)
                     .strokeBorder(focused ? WorkLogTheme.focusColor(for: contrast) : .clear,
-                                  lineWidth: contrast == .increased ? 2 : 1.5)
+                                  lineWidth: contrast == .increased ? 3 : 1.5)
                     .allowsHitTesting(false)
             }
             .id(id)
@@ -1153,7 +1153,7 @@ extension View {
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7)
                 .strokeBorder(navigation.current == "body" ? WorkLogTheme.focusColor(for: contrast) : WorkLogTheme.outlineColor(for: contrast),
-                              lineWidth: navigation.current == "body" ? 2 : WorkLogTheme.outlineWidth(for: contrast))
+                              lineWidth: navigation.current == "body" ? (contrast == .increased ? 3 : 2) : WorkLogTheme.outlineWidth(for: contrast))
                 .allowsHitTesting(false))
             if !captureEditorCandidates(model).isEmpty {
                 candidateList

@@ -574,7 +574,7 @@ import WorkLogCore
         .overlay {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(focused ? WorkLogTheme.focusColor(for: contrast) : WorkLogTheme.outlineColor(for: contrast),
-                              lineWidth: focused ? 2 : WorkLogTheme.outlineWidth(for: contrast))
+                              lineWidth: focused ? (contrast == .increased ? 3 : 2) : WorkLogTheme.outlineWidth(for: contrast))
                 .allowsHitTesting(false)
         }
     }

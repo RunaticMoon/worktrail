@@ -103,15 +103,18 @@ Context7에서 `/websites/developer_apple_swiftui` ID를 확인한 뒤 `colorSch
 
 | 항목 | 파일:줄 | 심각도 | 근거·사용자 영향 | 조치 |
 |---|---|---|---|---|
-| F1. 빠른 입력의 사용자 지정 컨트롤 포커스가 시스템 효과를 끈 뒤 강조색 1.5pt에 고정되고, 본문 포커스도 대비 증가 시 label 색으로 전환되지 않는다. | `CapturePanel.swift:63`, `CapturePanel.swift:1155`, `AppTheme.swift:32` | P2 | native Accessibility/Theming, HIG Focus; 사용자 강조색에 따라 포커스 구별이 약해질 위험 | **수정.** 공통 `focusColor(for:)`로 기본은 시스템 keyboardFocusIndicatorColor, 대비 증가에서는 label 색을 사용한다. 컨트롤 링은 대비 증가에서 2pt. 본문 장식 경계는 hit testing에서 제외했다. 포커스 상태·등록·키 처리·순서는 그대로다. |
+| F1. 빠른 입력의 사용자 지정 컨트롤 포커스가 시스템 효과를 끈 뒤 강조색 1.5pt에 고정되고, 본문 포커스도 대비 증가 시 label 색으로 전환되지 않는다. | `CapturePanel.swift:72`, `CapturePanel.swift:1155`, `AppTheme.swift:32` | P2 | native Accessibility/Theming, HIG Focus; 사용자 강조색에 따라 포커스 구별이 약해질 위험 | **수정.** 공통 `focusColor(for:)`로 기본은 시스템 keyboardFocusIndicatorColor, 대비 증가에서는 label 색을 사용한다. 컨트롤 링은 대비 증가에서 2pt. 본문 장식 경계는 hit testing에서 제외했다. 포커스 상태·등록·키 처리·순서는 그대로다. |
 | F2. 검색어 필드가 패널 외곽선과 달리 대비 증가를 읽지 않고 포커스 강조색도 60%·1pt에 고정된다. | `SearchScreen.swift:576` | P2 | native Accessibility/Theming; 입력 위치 식별 규칙이 공통 테마와 다름 | **수정.** 공통 outline/focus 색을 적용하고 포커스 또는 대비 증가에서 2pt. 장식 경계를 hit testing에서 제외했다. 메인 검색과 패널이 함께 적용된다. |
 | F3. 보고서 본문 편집 경계가 separator 색 1pt로 고정된다. | `ReportsScreen.swift:284` | P2 | native Theming, polish/system drift; 다른 편집 영역과 달리 대비 증가 미반영 | **수정.** 기존 outlineColor/outlineWidth를 재사용했다. 주간보고·성과자료 각 모델·편집·확정 로직과 시스템 포커스 효과는 그대로다. |
 | F4. 설정 검증·단축키 등록 실패, 프로젝트 생성 오류, 평가 기간 오류 문구 전체가 주황/빨강이다. | `SettingsScreen.swift:186`, `SettingsScreen.swift:312`, `ProjectCreationSheet.swift:30`, `ReportsScreen.swift:527` | P2 | native Theming; `ux-components.md`의 상태 문구는 시스템 label 색으로 읽는 원칙 이탈 | **수정.** 오류/복구 문구와 경고 기호·설정의 옅은 경고 배경은 유지하고 본문 전경을 label 색으로 통일했다. 새 레이블이나 컨트롤은 만들지 않았다. |
-| F5. Secret 상세 편집이 콘텐츠 폭 700pt에서 VStack/HSplitView 분기로 재생성될 수 있다. | `SecretsScreen.swift:55`, `SecretsScreen.swift:65`, `SecretEditorView.swift:24` | P2 | native Adaptivity; 편집기의 로컬 FocusState·붙여넣기 펼침 상태가 폭 전환에서 유지되는지 불명확. 모델 초안 손실이 확인된 것은 아니다. | **제안.** Mac에서 한글 조합·셀 편집·붙여넣기 미리보기 중 경계를 왕복해 먼저 확인한다. 필요 시 편집 뷰 정체성을 유지하는 구조로 별도 수정한다. Secret 편집·목록 전환 구조 변경은 이번 범위의 안전한 polish에서 제외했다. |
+| F5. Secret 상세 편집이 콘텐츠 폭 700pt에서 VStack/HSplitView 분기로 재생성될 수 있다. | `SecretsScreen.swift:55`, `SecretsScreen.swift:65`, `SecretEditorView.swift:21/22` | P2 | native Adaptivity; 편집기의 로컬 FocusState·붙여넣기 펼침 상태가 폭 전환에서 유지되는지 불명확. 모델 초안 손실이 확인된 것은 아니다. | **제안.** Mac에서 한글 조합·셀 편집·붙여넣기 미리보기 중 경계를 왕복해 먼저 확인한다. 필요 시 편집 뷰 정체성을 유지하는 구조로 별도 수정한다. Secret 편집·목록 전환 구조 변경은 이번 범위의 안전한 polish에서 제외했다. |
 | F6. 그래프 Canvas의 연결선은 대비 증가와 무관하게 비강조 membership 25%·선택 이외 35% 농도를 사용한다. | `GraphScreen.swift:661` | P2 | native Accessibility/Theming; 옅은 선을 따라가기 어려울 위험. 연결 목록·선 종류/화살표 대안은 있음 | **제안.** 라이트/다크 × 대비 증가에서 실측 후 Canvas 농도/선 굵기를 함께 보정한다. 실제 렌더링 근거 없이 그래프의 시각적 중요도를 바꾸지 않았다. |
 | F7. Secret 검색 key 행 경계가 선택 강조색/비선택 separator로 고정되어 대비 증가 규칙을 사용하지 않는다. | `SearchSecretScope.swift:61` | P3 | native Theming; 선택/비선택 경계의 읽기 차이를 Mac에서 확인할 필요 | **제안.** 가짜 Secret으로 시스템 포커스·선택 채움·경계의 구별을 먼저 확인한 뒤 별도 보정한다. 값·복사·인증·AX 계약은 수정하지 않았다. |
 
 검토 범위는 메인 창의 오늘·업무·프로젝트·주간보고·성과자료·Secret·검색·그래프·휴지통·백업·설정과 연결된 메모/업무 상세·계획, CapturePanel·SearchPanel, Components/AppTheme다. 기존 검색 도구 행의 폭 문제(A 제안)는 중복이라 신규 표에서 제외했다. 시스템 NavigationSplitView/List/toolbar·Form/DisclosureGroup·시스템 버튼, 공통 상태/복구 컴포넌트, 의미 색·Reduce Motion 처리는 유지할 장점이다. Source의 glass는 두 floating 조작 헤더에만 있으며 본문 glass 추가·시스템 사이드바/시트 배경 중첩은 하지 않았다. 이번에는 폭 분기·AnyLayout·Divider·입력 뷰 구조를 바꾸지 않았다.
+
+F-1 후속: 프로젝트 생성·평가 기간 오류에 경고 아이콘을 추가하고, 설정의 경고도 텍스트는 label 색·아이콘은 의미 색(대비 증가 시 label 색)으로 분리했다. 기존 문구는 유지한다.
+입력 포커스는 항상 시스템 keyboardFocusIndicatorColor를 쓰며 대비 증가에서는 빠른 입력 컨트롤·본문·검색어 링을 3pt로 표시해 비포커스 2pt 경계와 구별한다. 위 F1·F2·F4의 조치는 이 후속 수정으로 보완된다.
 
 #### 변경·검증·Mac 인계
 

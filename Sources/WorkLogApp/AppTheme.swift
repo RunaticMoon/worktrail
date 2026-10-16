@@ -28,9 +28,9 @@ enum WorkLogTheme {
         contrast == .increased ? 2 : 1
     }
 
-    /// Custom input rings follow the system focus color and increased contrast.
+    /// Custom input rings retain the system focus color at every contrast level.
     static func focusColor(for contrast: ColorSchemeContrast) -> Color {
-        contrast == .increased ? text : Color(nsColor: .keyboardFocusIndicatorColor)
+        Color(nsColor: .keyboardFocusIndicatorColor)
     }
 }
 

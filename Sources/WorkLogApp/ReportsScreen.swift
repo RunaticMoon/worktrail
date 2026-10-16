@@ -524,7 +524,14 @@ private struct ReportWorkspace: View {
                 }
             }
             if let error = model.errorMessage {
-                Text(error).font(.callout).foregroundStyle(WorkLogTheme.text)
+                Label {
+                    Text(error).foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }.disabled(selectionLocked)

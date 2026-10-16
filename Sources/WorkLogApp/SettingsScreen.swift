@@ -12,6 +12,7 @@ struct SettingsScreen: View {
     let backups: BackupModel?
     let onOpenBackups: (() -> Void)?
     @Environment(\.hotkeyDiagnostics) private var hotkeyDiagnostics
+    @Environment(\.colorSchemeContrast) private var contrast
     @FocusState private var errorFocused: Bool
     @FocusState private var headingFocused: Bool
     @State private var query = ""
@@ -182,8 +183,14 @@ struct SettingsScreen: View {
     @ViewBuilder private var feedback: some View {
         if !model.errors.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Label("설정을 확인하세요", systemImage: "exclamationmark.triangle")
-                    .font(.headline).foregroundStyle(WorkLogTheme.text)
+                Label {
+                    Text("설정을 확인하세요").foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.headline)
                     .focusable().focused($errorFocused)
                 ForEach(model.errors, id: \.self) { error in
                     Text(error).fixedSize(horizontal: false, vertical: true)
@@ -308,8 +315,14 @@ struct SettingsScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let failure = diagnostic.lastFailure, failure != diagnostic.registrationText {
-                Label("최근 등록 시도 · \(failure)", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(WorkLogTheme.text)
+                Label {
+                    Text("최근 등록 시도 · \(failure)").foregroundStyle(WorkLogTheme.text)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(contrast == .increased ? WorkLogTheme.text : StatusTone.warning.color)
+                        .accessibilityHidden(true)
+                }
+                    .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
