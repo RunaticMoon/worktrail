@@ -2,7 +2,8 @@
 import AppKit
 import SwiftUI
 
-/// Shared surfaces stay opaque and follow the system appearance, including panels.
+/// Semantic colors for readable content. Navigation and controls use system styles
+/// so macOS owns their Liquid Glass appearance and accessibility adaptations.
 enum WorkLogTheme {
     static let cornerRadius: CGFloat = 10
     static let contentInset: CGFloat = 16
@@ -92,51 +93,6 @@ private struct WorkLogCardModifier: ViewModifier {
     }
 }
 
-struct WorkLogButtonStyle: ButtonStyle {
-    var prominent = false
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.isFocused) private var isFocused
-    @Environment(\.colorSchemeContrast) private var contrast
-    @State private var isHovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.callout.weight(.medium))
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .frame(minHeight: 30)
-            .foregroundStyle(foreground(role: configuration.role))
-            .background(background(pressed: configuration.isPressed, role: configuration.role), in: RoundedRectangle(cornerRadius: 7))
-            .overlay {
-                if isFocused || contrast == .increased {
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(contrast == .increased ? WorkLogTheme.text : WorkLogTheme.accent,
-                                      lineWidth: isFocused ? 1.5 : 1)
-                        .allowsHitTesting(false)
-                }
-            }
-            .focusEffectDisabled()
-            .opacity(isEnabled ? 1 : (contrast == .increased ? 0.7 : 0.45))
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-            .onHover { isHovering = $0 }
-    }
-
-    private func foreground(role: ButtonRole?) -> Color {
-        // Text stays on a light accent wash, rather than depending on the user's
-        // accent color having sufficient contrast against white text.
-        if contrast == .increased || prominent { return WorkLogTheme.text }
-        return role == .destructive ? Color(nsColor: .systemRed) : WorkLogTheme.text
-    }
-
-    private func background(pressed: Bool, role: ButtonRole?) -> Color {
-        if prominent {
-            let color = role == .destructive ? Color(nsColor: .systemRed) : WorkLogTheme.accent
-            return color.opacity(pressed ? 0.24 : (isHovering ? 0.18 : 0.12))
-        }
-        if pressed { return WorkLogTheme.text.opacity(0.10) }
-        return isHovering ? WorkLogTheme.rowHover : .clear
-    }
-}
-
 struct Keycap: View {
     let label: String
     @Environment(\.colorSchemeContrast) private var contrast
@@ -156,17 +112,6 @@ struct Keycap: View {
                 }
             }
             .fixedSize()
-    }
-}
-
-struct WorkLogGroupBoxStyle: GroupBoxStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            configuration.label.font(.headline)
-            configuration.content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .worklogCard()
     }
 }
 

@@ -4,6 +4,7 @@ import SwiftUI
 import WorkLogCore
 
 @MainActor struct TaskListScreen: View {
+    @Environment(\.worklogContentAutofocus) private var contentAutofocus
     @Bindable var model: TaskListModel
     let onOpen: (String) -> Void
     let onCapture: () -> Void
@@ -16,6 +17,7 @@ import WorkLogCore
         VStack(alignment: .leading, spacing: 12) {
             ScreenHeader(title: "업무", purpose: "") {
                 Button(action: onCapture) { ShortcutLabel(title: "새 업무", keys: "⌘N") }
+                    .buttonStyle(.borderedProminent)
             }
             HStack(spacing: 12) {
                 TextField("업무 이름으로 찾기", text: $model.query)
@@ -35,31 +37,34 @@ import WorkLogCore
                     actionTitle: "검색어 지우기", action: { model.query = "" })
             } else {
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
-                            if !model.openRows.isEmpty {
-                                groupHeading("현재 업무", count: model.openRows.count)
-                                ForEach(model.openRows) { row in taskButton(row) }
-                            } else if !model.isSearching {
-                                Text("현재 진행할 업무가 없습니다.")
-                                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                                    .padding(.horizontal, 8).padding(.vertical, 16)
+                    List(selection: $selection) {
+                        if !model.openRows.isEmpty {
+                            Section("현재 업무 \(model.openRows.count)개") {
+                                ForEach(model.openRows) { row in selectableTaskRow(row) }
                             }
-                            if !model.closedRows.isEmpty {
-                                closedHeading
-                                    .padding(.top, model.openRows.isEmpty ? 0 : 16)
-                                if model.showsClosedRows {
-                                    ForEach(model.closedRows) { row in taskButton(row) }
+                        } else if !model.isSearching {
+                            Text("현재 진행할 업무가 없습니다.")
+                                .foregroundStyle(.secondary)
+                        }
+                        if !model.closedRows.isEmpty {
+                            if model.isSearching {
+                                Section("완료·취소 \(model.closedRows.count)개") {
+                                    ForEach(model.closedRows) { row in selectableTaskRow(row) }
                                 }
+                            } else {
+                                DisclosureGroup(isExpanded: $model.isClosedExpanded) {
+                                    ForEach(model.closedRows) { row in selectableTaskRow(row) }
+                                } label: {
+                                    Text("완료·취소 \(model.closedRows.count)개")
+                                }
+                                .help("완료·취소한 업무 기록 보기 · 목록에서 ← 접기 / → 펼치기")
                             }
                         }
-                        .padding(2)
                     }
-                    .focusable()
-                    .focusEffectDisabled()
+                    .listStyle(.inset)
                     .focused($listFocused)
                     .accessibilityLabel("업무 목록")
-                    .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
+                    .onKeyPress(keys: [.leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
                         guard listFocused, press.modifiers.isEmpty,
                               (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
                         if press.key == .leftArrow || press.key == .rightArrow {
@@ -67,7 +72,7 @@ import WorkLogCore
                             model.isClosedExpanded = press.key == .rightArrow
                         } else if press.key == .return {
                             if press.phase == .down, let selection { onOpen(selection) }
-                        } else { moveSelection(press.key == .upArrow ? -1 : 1) }
+                        }
                         return .handled
                     }
                     .onChange(of: listFocused) { _, focused in
@@ -95,7 +100,9 @@ import WorkLogCore
         .worklogFocusContent { focusContent() }
         .onAppear {
             model.load()
-            DispatchQueue.main.async { focusContent() }
+            DispatchQueue.main.async {
+                if contentAutofocus { focusContent() }
+            }
         }
         .onChange(of: model.visibleRows.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = listFocused ? ids.first : nil }
@@ -142,50 +149,15 @@ import WorkLogCore
         }
     }
 
-    private func groupHeading(_ title: String, count: Int) -> some View {
-        HStack(spacing: 8) {
-            Text(title).font(.callout.weight(.semibold))
-            Text("\(count)").font(.caption).monospacedDigit()
-        }
-        .foregroundStyle(WorkLogTheme.muted)
-        .padding(.horizontal, 8).padding(.vertical, 9)
-    }
-
-    @ViewBuilder private var closedHeading: some View {
-        if model.isSearching {
-            groupHeading("완료·취소", count: model.closedRows.count)
-        } else {
-            Button {
-                model.isClosedExpanded.toggle()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: model.isClosedExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold)).frame(width: 12)
-                    Text("완료·취소").font(.callout.weight(.semibold))
-                    Text("\(model.closedRows.count)").font(.caption).monospacedDigit()
-                    Spacer()
-                }
-                .foregroundStyle(WorkLogTheme.muted)
-                .padding(.horizontal, 8).padding(.vertical, 9)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("완료·취소 업무 \(model.closedRows.count)개")
-            .accessibilityValue(model.isClosedExpanded ? "펼쳐짐" : "접힘")
-            .help("완료·취소한 업무 기록 보기 · 목록에서 ← 접기 / → 펼치기")
-        }
-    }
-
-    private func taskButton(_ row: TaskListRow) -> some View {
-        Button { selection = row.id; listFocused = true } label: { taskRow(row) }
-            .buttonStyle(WorkLogSourceRowStyle(isSelected: selection == row.id,
-                isFocused: listFocused && selection == row.id))
-            .focusable(false)
+    private func selectableTaskRow(_ row: TaskListRow) -> some View {
+        taskRow(row)
+            .tag(row.id)
             .id(row.id)
+            .contentShape(Rectangle())
             .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(row.id) })
-            .accessibilityAddTraits(selection == row.id ? .isSelected : [])
             .accessibilityLabel(Text(rowLabel(row)))
             .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
+            .accessibilityAction(named: Text("업무 상세 열기")) { onOpen(row.id) }
     }
 
     private func taskRow(_ row: TaskListRow) -> some View {
@@ -198,12 +170,12 @@ import WorkLogCore
                         HStack(spacing: 12) { metadata(row) }
                         VStack(alignment: .leading, spacing: 4) { metadata(row) }
                     }
-                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    .font(.callout).foregroundStyle(.secondary)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             Text(row.status?.koreanLabel ?? "상태 없음")
                 .font(.callout.weight(.medium))
-                .foregroundStyle(row.status == .inProgress ? WorkLogTheme.accent : WorkLogTheme.muted)
+                .foregroundStyle(.secondary)
                 .frame(width: 56, alignment: .trailing)
                 .accessibilityLabel("Task 전체 상태: \(row.status?.koreanLabel ?? "상태 없음")")
         }
@@ -222,21 +194,13 @@ import WorkLogCore
         }
         if let due = row.dueLabel {
             Label(due, systemImage: row.isOverdue ? "exclamationmark.triangle" : "calendar")
-                .foregroundStyle(row.isOverdue ? WorkLogTheme.text : WorkLogTheme.muted)
+                .foregroundStyle(row.isOverdue ? .primary : .secondary)
                 .fixedSize()
                 .help(row.isOverdue ? "마감이 지난 업무 · \(due)" : "마감 · \(due)")
         }
         if row.isInThisWeekPlan {
             Label("이번 주 계획", systemImage: "calendar.badge.clock").fixedSize()
         }
-    }
-
-    private func moveSelection(_ offset: Int) {
-        let ids = model.visibleRows.map(\.id)
-        guard !ids.isEmpty else { return }
-        if let selection, let index = ids.firstIndex(of: selection) {
-            self.selection = ids[min(max(index + offset, 0), ids.count - 1)]
-        } else { selection = offset < 0 ? ids.last : ids.first }
     }
 
     private func rowLabel(_ row: TaskListRow) -> String {

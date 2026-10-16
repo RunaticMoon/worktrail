@@ -14,7 +14,7 @@ appDependencies.append(.product(name: "Sparkle", package: "Sparkle"))
 // WorkLog — 임시 코드명. 표시 이름·bundle id·데이터 경로는 AppIdentity에서 교체한다.
 let package = Package(
     name: "WorkLog",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     products: [
         .library(name: "WorkLogCore", targets: ["WorkLogCore"]),
         .executable(name: "WorkLogApp", targets: ["WorkLogApp"]),

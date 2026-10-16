@@ -62,7 +62,7 @@ macOS CI와 릴리즈 job은 다음을 확인한다.
 
 1. `swift build --build-tests`, `swift test`
 2. 아이콘을 `.icns`로 만들고 Sparkle framework를 symlink·실행권한·helper 서명 그대로 앱에 포함
-3. DMG 안 앱 이름·버전·bundle ID·arm64 실행 파일·아이콘·Sparkle 공개키/feed 설정 검사
+3. DMG 안 앱 이름·버전·최소 macOS 26.0·bundle ID·arm64 실행 파일·아이콘·Sparkle 공개키/feed 설정 검사
 4. `codesign --verify --deep --strict`, 실행 파일의 framework 링크·런타임 검색 경로 검사
 5. 마운트된 앱의 `--updater-smoke-test` 실행: 실제 dyld framework 로딩과 updater 생성 확인. 앱 `AppController`를 만들기 전에 종료하므로 저장소·Keychain·AI·업데이트 네트워크에 접근하지 않음
 6. DMG manifest·SHA-256 확인
@@ -73,7 +73,7 @@ macOS CI와 릴리즈 job은 다음을 확인한다.
 
 - 앱은 **ad-hoc 코드 서명**이다. Developer ID 서명·Apple 공증이 없어 Gatekeeper가 첫 실행을 막을 수 있다. 앱과 소스를 확인한 뒤 시스템 설정 › 개인정보 보호 및 보안에서 직접 허용한다. quarantine 속성을 지우거나 Gatekeeper를 끄는 스크립트는 없다.
 - ad-hoc 서명은 번들 무결성 확인용이다. 새 버전에서 Keychain 항목 접근 승인이 다시 필요할 수 있다.
-- Apple Silicon(arm64), macOS 14 이상 전용이다.
+- Apple Silicon(arm64), macOS 26.0 이상 전용이다. Package.swift·번들 `LSMinimumSystemVersion`·Sparkle `minimumSystemVersion`을 모두 26.0으로 유지한다. 이전 macOS에는 이 업데이트를 제공하지 않는다.
 - CI smoke는 framework 로딩까지 검증한다. 사용자 Mac에서의 첫 설치 승인과 실제 다운로드 → 교체 → 재시작 전체 흐름은 별도 수동 검증 대상이다.
 
 ## 로컬 확인

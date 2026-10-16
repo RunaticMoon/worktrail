@@ -19,3 +19,11 @@
 - 상태·날짜·집계·확정은 결정적 로직이 정한다. AI 출력은 검증 후 초안으로만 저장.
 - 자기 작업 범위 밖 파일은 수정하지 않는다. 공용 계약(Models.swift 등) 변경이 필요하면 수정하지 말고 보고한다.
 - 실제 회사 자격증명·Keychain·Codex 토큰을 읽거나 출력하지 않는다. 테스트 데이터는 가짜 값만.
+
+## macOS UI/UX
+- 최소 지원 버전은 **macOS 26.0**. Swift 6.3 도구체인과 macOS 26 이상 SDK를 사용한다. Package.swift, 앱 번들, Sparkle 피드의 최소 버전을 일치시킨다.
+- Apple [Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines)와 [Liquid Glass 적용 지침](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)을 따른다. 탐색은 `NavigationSplitView`·사이드바 `List`·`toolbar`, 입력은 `Picker`·`DatePicker`·`Toggle`·`Form`, 펼침은 `DisclosureGroup`, 그룹은 기본 `GroupBox`를 우선 사용한다.
+- Liquid Glass는 탐색·조작 계층에만 사용한다. 시스템 사이드바·툴바·시트 위에 불투명 배경이나 별도 glass를 겹치지 않는다. 메모·보고서·목록·Secret 표 등 본문에는 가독성 높은 시스템 의미 색/표준 소재를 사용한다.
+- 일반 버튼은 시스템 스타일을 사용하고 직접 그린 공통 버튼 스타일로 덮어쓰지 않는다. 사용자 지정 floating control에만 필요한 범위로 `.glass`/`.glassProminent`/`glassEffect`를 적용한다. 색·투명도·모션·키보드 포커스·VoiceOver는 시스템 접근성 설정을 존중한다.
+- 날짜 선택기는 `WorkCalendar`의 calendar/timeZone을 명시한다. UI 변경으로 IME, 단축키, 초안 보존, Secret 격리, 보고서 구분을 바꾸지 않는다.
+- Linux 빌드는 SwiftUI 타입 검사나 화면 검증을 대신하지 않는다. UI 변경은 macOS SDK 빌드와 가짜 fixture 화면·키보드 검증 결과를 구분해 기록한다.

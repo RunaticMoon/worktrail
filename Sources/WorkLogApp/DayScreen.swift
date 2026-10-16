@@ -4,6 +4,7 @@ import SwiftUI
 import WorkLogCore
 
 @MainActor struct DayScreen: View {
+    @Environment(\.worklogContentAutofocus) private var contentAutofocus
     @Bindable var model: DayViewModel
     let calendar: WorkCalendar
     let onCapture: () -> Void
@@ -57,7 +58,9 @@ import WorkLogCore
         .worklogFocusContent { focusSelectedRegion() }
         .onAppear {
             model.load()
-            DispatchQueue.main.async { focusSelectedRegion() }
+            DispatchQueue.main.async {
+                if contentAutofocus { focusSelectedRegion() }
+            }
         }
         .onChange(of: selectedRegion) { _, _ in
             focusedRegion = nil
@@ -93,7 +96,7 @@ import WorkLogCore
 
     private var captureButton: some View {
         Button(action: onCapture) { Label("기록 추가", systemImage: "square.and.pencil") }
-            .buttonStyle(WorkLogButtonStyle(prominent: true))
+            .buttonStyle(.borderedProminent)
             .worklogHelp("기록 추가", keys: "⌘N")
     }
 

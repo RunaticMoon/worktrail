@@ -15,14 +15,19 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Swift version
-        run: swift --version
+      - name: macOS and Xcode toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          test "${sdk_version%%.*}" -ge 26
       - name: Test release tooling
         run: python3 -m unittest discover -s distribution/tests -v
       - name: Build all targets (including WorkLogApp)

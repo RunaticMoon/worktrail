@@ -2,6 +2,19 @@
 import AppKit
 import SwiftUI
 
+/// Native sidebar selection changes the destination while the list keeps focus.
+/// Screens may autofocus on normal entry, but must not interrupt that navigation.
+private struct WorkLogContentAutofocusKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var worklogContentAutofocus: Bool {
+        get { self[WorkLogContentAutofocusKey.self] }
+        set { self[WorkLogContentAutofocusKey.self] = newValue }
+    }
+}
+
 private struct WorkLogContentFocusKey: FocusedValueKey {
     typealias Value = () -> Void
 }

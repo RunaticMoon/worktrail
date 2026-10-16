@@ -37,6 +37,17 @@ class AppcastTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'version mismatch'):
             release.verify_appcast('v0.2.0', self.root)
 
+    def test_update_requires_liquid_glass_capable_macos(self):
+        item = ET.parse(self.root / 'appcast.xml').find('./channel/item')
+        self.assertEqual(item.findtext('{%s}minimumSystemVersion' % release.SPARKLE), '26.0')
+
+    def test_rejects_lower_or_missing_os_requirement(self):
+        for minimum in ('14.0', '15.0', None):
+            with self.subTest(minimum=minimum):
+                self.mutate(lambda item: setattr(item.find('{%s}minimumSystemVersion' % release.SPARKLE), 'text', minimum))
+                with self.assertRaisesRegex(ValueError, 'minimum macOS version'):
+                    release.verify_appcast('v0.2.0', self.root)
+
     def test_rejects_download_from_other_origin(self):
         self.mutate(lambda item: item.find('enclosure').set('url', 'https://untrusted.invalid/update.dmg'))
         with self.assertRaisesRegex(ValueError, 'Unexpected update URL'):

@@ -38,3 +38,7 @@ SwiftPM 패키지 하나. `WorkLogCore`(플랫폼 공통 로직, Linux에서 전
 ## 프로젝트·입력 UI 후속 개선 (2026-10-13)
 
 화면별 ⌘N과 독립 프로젝트 생성, 단축키 설정 크기, 자동 AI 모델명 표시, @/# 연결 토큰, 직접 노출하는 프로젝트별 상태 옵션, 접힌 사이드바 상단 정렬을 반영한다. 공용 계약과 스키마 변경 없이 기존 저장·프로필 실행 경로를 사용한다. Linux 회귀 및 격리된 macOS 화면 검증 범위는 `docs/ui-refresh.md`에 기록한다.
+
+## macOS 26 · Apple HIG 적용 (2026-10-15)
+
+최소 지원 버전을 macOS 26.0으로 올리고 SwiftUI 표준 사이드바·툴바·시스템 버튼·날짜/분할 선택기·설정 Form·DisclosureGroup을 적용한다. Liquid Glass는 탐색과 조작 영역에 한정하고 본문에는 시스템 의미 색을 사용한다. Package.swift, 번들, Sparkle 피드, macOS CI를 함께 갱신한다. 도메인·저장 스키마·Core 공용 계약은 유지한다. 실제 변경과 검증/미검증 범위는 `docs/ui-refresh.md`의 같은 날짜 항목에 기록한다.

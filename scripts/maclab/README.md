@@ -5,7 +5,7 @@
 ## 준비와 실행
 
 - 기존 Maclab 플러그인 연결, 계정·예산 설정, `.build/maclab` 업로드 허용이 필요하다. 이 도구는 계정이나 예산 설정을 생성·변경하지 않는다.
-- 원격 Mac에는 macOS 14 이상, 프로젝트가 요구하는 Swift 도구체인, System Events 자동화·손쉬운 사용 권한이 필요하다. 패키지 의존성 다운로드에는 네트워크가 필요할 수 있다.
+- 원격 Mac에는 macOS 26.0 이상, macOS 26 이상 SDK와 프로젝트가 요구하는 Swift 도구체인, System Events 자동화·손쉬운 사용 권한이 필요하다. 패키지 의존성 다운로드에는 네트워크가 필요할 수 있다.
 - 검토할 소스와 `.maclab/tests/*.json`을 커밋하고 작업 트리를 정리한 뒤 저장소 루트에서 아카이브를 만든다. `after`는 현재 작업 트리를 복사하므로 커밋과 아카이브가 일치해야 한다.
 
 ```sh
@@ -93,3 +93,7 @@ Task는 가짜 진행 기록 추가, 보고서는 편집·저장·계획 확인�
 ## 설정과 종료 업무 확인 (2026-10-13)
 
 현재 helper는 `settings-task-review.js --action settings|tasks|capture`로 실행한다. 세 action은 각각 실행하며, 마지막 capture는 패널을 열어 둔다. 가짜 `many` 실행 인자를 검사한 뒤 설정 검색·모델 선택기와 종료 업무 접힘·검색, 취소 업무의 입력 후보 제외를 확인한다. 설정 저장·계정 확인·AI 호출·Secret 열기는 하지 않는다. Maclab 대화형 exec의 작업 디렉터리는 prepare 단계와 다를 수 있으므로, 빌드 출력의 `BUILT_APP` 상위 디렉터리를 기준으로 helper 절대 경로를 전달한다. 원격 실제 실행 결과는 `docs/ui-refresh.md`에 기록한다.
+
+## macOS 26 표준 목록 (2026-10-15)
+
+`keyboard-flow.js`는 네이티브 `List`의 AXOutline/AXTable/AXList/AXScrollArea 역할과 입력 유형 segmented Picker의 명시적 AX 선택값을 허용한다. 역할 변경만으로 성공을 추정하지 않고 동일 레이블·창·실제 포커스 조상 관계를 검사한다. `--action main`은 사이드바에서 업무↔프로젝트 방향키 이동을 3회 반복하여 새 화면이 포커스를 빼앗지 않는지도 확인한다. 실제 실행·helper 해시·미검증 범위는 `docs/ui-refresh.md`에 기록한다.

@@ -56,7 +56,7 @@ build_review_app() {
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$review_version</string>
 <key>CFBundleVersion</key><string>$review_version</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>SUEnableAutomaticChecks</key><false/>

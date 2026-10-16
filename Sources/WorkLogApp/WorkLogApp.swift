@@ -25,7 +25,8 @@ enum WorkLogEntryPoint {
                 .frame(minWidth: 840, minHeight: 560)
                 .task { await controller.start() }
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .defaultSize(width: 1180, height: 800)
         .commands {
             WorkLogFocusCommands()
@@ -47,6 +48,10 @@ enum WorkLogEntryPoint {
                     controller.sidebarExpanded.toggle()
                 }.keyboardShortcut("s", modifiers: [.control, .command])
                     .disabled(controller.isPanelKeyWindow)
+                Divider()
+                Button("새로고침") { controller.refresh() }
+                    .disabled(controller.isPanelKeyWindow || controller.environment == nil
+                              || controller.selectedTaskId != nil || controller.selectedMemoId != nil)
             }
             CommandGroup(replacing: .newItem) {
                 Button(controller.newItemTitle) { controller.createNewItem(onCreateProject: createProject) }
@@ -54,6 +59,9 @@ enum WorkLogEntryPoint {
                     .disabled(controller.isPanelKeyWindow || controller.environment == nil
                               || controller.selectedTaskId != nil || controller.selectedMemoId != nil
                               || (controller.route == .projects && createProject == nil))
+                Button("빠른 입력") { controller.showCapture() }
+                    .disabled(controller.isPanelKeyWindow || controller.environment == nil
+                              || controller.selectedTaskId != nil || controller.selectedMemoId != nil)
                 Button("검색") { controller.showSearch() }.keyboardShortcut("f", modifiers: .command)
                     .disabled(controller.isPanelKeyWindow)
                 Divider()

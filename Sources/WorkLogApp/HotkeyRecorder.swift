@@ -39,14 +39,6 @@ struct HotkeyRecorder: View {
                     onRecord: onRecord, onBegin: onBeginRecording, onEnd: onEndRecording
                 )
                 .frame(width: 148, height: 28)
-                .background(WorkLogTheme.rowHover, in: RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    if recorder.isRecording {
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.accentColor, lineWidth: 2)
-                            .allowsHitTesting(false)
-                    }
-                }
                 if recorder.isRecording {
                     Text(recorder.errorMessage ?? "Esc로 취소")
                         .font(.caption)
@@ -213,7 +205,7 @@ private struct HotkeyRecorderButton: NSViewRepresentable {
         let button = HotkeyRecordingButton()
         button.setButtonType(.momentaryPushIn)
         button.bezelStyle = .rounded
-        button.isBordered = false
+        button.isBordered = true
         button.controlSize = .regular
         button.font = .systemFont(ofSize: NSFont.systemFontSize)
         button.focusRingType = .exterior

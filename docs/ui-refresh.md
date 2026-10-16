@@ -1,5 +1,30 @@
 # 플로팅 패널과 워크스페이스 UI
 
+
+## macOS 26 · Liquid Glass와 표준 컴포넌트 (2026-10-15)
+
+사용자 요청으로 최소 지원 버전을 macOS 26.0으로 올렸다. Package.swift, 앱과 UI 리뷰 번들의 `LSMinimumSystemVersion`, Sparkle 피드의 `minimumSystemVersion`을 함께 변경하고 CI·릴리즈 러너는 `macos-26`을 사용한다. macOS 앱 빌드에는 macOS 26 이상 SDK가 필요하다. Core의 Linux 지원, Swift 5 언어 모드와 저장·Secret·AI 계약은 유지한다.
+
+- 메인 창은 표준 제목 표시줄·`NavigationSplitView`·사이드바 `List`·`toolbar`를 사용한다. 시스템이 탐색 계층의 Liquid Glass를 관리하며 불투명 전체 배경과 자체 헤더는 제거했다. 사이드바 접기는 표준 열 숨기기로 동작한다. 빠른 입력·검색·새로고침·키보드 도움말은 메뉴에서도 접근한다.
+- 시스템 버튼 스타일과 기본 `GroupBox`를 사용하고 자체 `WorkLogButtonStyle`/`WorkLogGroupBoxStyle`을 제거했다. 펼침 섹션은 `DisclosureGroup`, 날짜 입력은 표준 compact `DatePicker`다. 날짜 바인딩은 `WorkCalendar`의 달력·시간대·`WorkDate` 변환을 명시한다.
+- 빠른 입력 유형은 표준 segmented `Picker`다. 빠른 입력·검색 패널의 조작 헤더에만 regular Liquid Glass를 적용하고 편집기·목록·보고서·Secret 표는 읽기 편한 콘텐츠 배경을 유지한다. 사용자 지정 모션은 동작 줄이기 설정을 따른다.
+- 설정은 표준 선택 목록·grouped `Form`·`LabeledContent`, 단축키 기록은 네이티브 `NSButton` 외관을 사용한다. 업무 목록은 표준 `List`와 접힌 완료/취소 `DisclosureGroup`을 사용한다. 목록 선택 텍스트는 시스템 계층 색을 사용한다.
+- 네이티브 사이드바 방향키 탐색 중 새 화면의 자동 포커스가 선택 목록을 방해하지 않도록 앱 내부 환경값으로 제어한다. 명시적인 본문 이동, 상세 닫기 후 복귀, 패널 입력 포커스는 유지한다. 업무 목록의 선택·Return·더블클릭과 날짜 선택은 시스템 표준 조작을 따른다.
+
+기준: [Apple Materials HIG](https://developer.apple.com/design/human-interface-guidelines/materials), [Liquid Glass 적용](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass), [Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars), [Buttons](https://developer.apple.com/design/human-interface-guidelines/buttons), [macOS 디자인](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos). 이후 작업에도 적용하도록 `AGENTS.md`에 UI/UX 규칙을 기록했다.
+
+검증: Linux Swift 6.3.3 `swift build --build-tests`와 전체 테스트 807개(실패 0), 배포 도구 테스트 25개, macOS 26 타깃 Swift 구문 분석과 shell/JS 구문 검사 및 `git diff --check` 통과.
+
+Maclab `fbb48f5e-2ff8-4435-83b3-46fabb106afd`에서 커밋 `8232854`의 앱을 macOS 26.6.2 / Xcode 27.0으로 빌드했다. 업로드 아카이브 SHA-256은 `80e1259872f9d7e21d06e6e2de7ffe9182aced39434dd1ee3bd6c23e3b2f9967`이다. `ui-flows`의 빌드, 앱 실행, 메모 저장·이전 앱 복귀, ⌘N 입력창, 창 유지 assertion은 모두 통과했다. 실제 회사 데이터·계정·Keychain을 사용하지 않는 DEBUG `many` fixture만 실행했다.
+
+대화형 추가 검증에서 빠른 입력의 전역 진입, ⌘1·2·3 유형 전환 3회 반복, ⌃Tab 순환, Tab/Shift+Tab 포커스와 Esc 닫기가 통과했다. 메인 화면은 ⌘숫자 이동, ⌘0/⌘⇧0, 사이드바 ↑↓ 반복 이동 시 포커스 유지, 업무 Return 상세 열기·Esc 후 목록 복귀, 오늘 영역 순환을 통과했다. 다크 모드 검색은 전역 진입→결과→가짜 메모 편집/⌘S 저장→검색어·선택·포커스 복귀→Esc 닫기까지 통과했다.
+
+첫 메인 키보드 helper는 목록을 `AXScrollArea`로 한정하여 실패했다. 실제 AX 조회에서 사이드바와 업무 목록이 `AXOutline`임을 확인하고, helper를 동일 레이블·역할·창과 실제 포커스 조상 관계로 판정하도록 수정했다. 수정 helper SHA-256 `15dc748b2e92d54ca630330458c4f2cbaf79f967a9f276b0d0795ad041c072e7`를 원격에 동기화하고 위 키보드 동선을 재실행해 통과했다. 앱 소스는 이 과정에서 변경하지 않았다.
+
+실제 화면은 오늘 1280×800 (`fcec9b7b-8bbe-4a2b-826e-b4248e51c9da`), 메모 패널 (`fee92487-ed51-4861-b062-a2cb0290d2fc`), 설정 960×640 (`cbd7d598-c0b3-4c39-af85-a51790ccf9fe`), 다크 업무 목록 960×640 (`aa0d4fd4-ec82-4911-9dca-c84d82416dec`)에서 확인했다. 설정의 입력·저장 버튼과 선택 행의 제목·상태가 보이는 것을 확인했다. Xcode 27 빌드에는 기존 AppKit actor 격리/Sendable 및 weak 변수 경고가 남아 있으며 Swift 5 언어 모드에서 빌드는 통과했다. 전체 VoiceOver·한글 IME·투명도/대비/모션 설정 조합 및 배포용 DMG 재생성·업데이트 설치는 이번 Maclab 실행 범위에 포함하지 않았다.
+
+추가 수동 확인 항목: 투명도 줄이기·대비 높이기·동작 줄이기, VoiceOver·한글 IME 전체 조합, 날짜 팝오버와 서울 시간대 경계, 미저장 초안/Undo/다중 창, 완료 목록 접기와 설정 저장의 전체 조합. 가짜 fixture만 사용한다.
+
 ## 빠른 입력에서 새로 작성 (2026-10-13)
 
 - 메모·업무 입력의 날짜 행 오른쪽에 `새로 작성`을 표시한다. 남아 있는 초안은 `계속 작성` 또는 `버리고 새로 작성` 확인을 거치고, 빈 초안은 바로 오늘 날짜로 시작한다. Esc·닫기 후 재열기는 기존 초안을 유지한다.

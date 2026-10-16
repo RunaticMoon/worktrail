@@ -4,6 +4,7 @@ import AppKit
 import WorkLogCore
 
 @MainActor struct SearchScreen: View {
+    @Environment(\.worklogContentAutofocus) private var contentAutofocus
     @Bindable var model: SearchModel
     let environment: AppEnvironment
     var secrets: SecretsModel? = nil
@@ -246,7 +247,7 @@ import WorkLogCore
 
     private func initializeSearch() {
         isActive = true
-        focused = true
+        focused = contentAutofocus
         guard !hasInitialized else { updateSearch(); validateSelection(); return }
         hasInitialized = true
         query = model.text
@@ -826,7 +827,7 @@ import WorkLogCore
 
     private func taskSourceSheet(_ detail: TaskDetailModel) -> some View {
         TaskDetailScreen(model: detail, onClose: closeSource)
-            .buttonStyle(WorkLogButtonStyle())
+            .buttonStyle(.bordered)
             .frame(minWidth: 560, minHeight: 480)
     }
 
@@ -924,12 +925,12 @@ import WorkLogCore
                 Spacer()
                 if let onEdit {
                     Button(sourceTitle == "메모" ? "본문 편집" : "업무 관리", action: onEdit)
-                        .buttonStyle(WorkLogButtonStyle())
+                        .buttonStyle(.bordered)
                         .keyboardShortcut("e", modifiers: .command)
                         .worklogHelp(sourceTitle == "메모" ? "저장된 메모 편집" : "업무 상태·진행 기록 관리", keys: "⌘E")
                 }
                 Button("닫기", action: onClose)
-                    .buttonStyle(WorkLogButtonStyle())
+                    .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
             }
             if let error { InlineNotice(message: error) }

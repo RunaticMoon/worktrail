@@ -1,32 +1,34 @@
 # WorkLog (임시 코드명)
 
-로컬 우선 Mac 업무 기록 앱. 빠른 Memo·Task 기록, 날짜별 3열 화면, 이번 주 계획, **제출용 주간보고**와 **상세 성과 리포트**(서로 분리), 회사 Codex를 통한 선택적 AI 초안, AI를 쓰지 않는 Secret 보관함, 자동 백업을 제공한다.
+로컬 우선 Mac 업무 기록 앱. 빠른 Memo·Task 기록, 날짜별 활동·업무·메모 화면, 이번 주 계획, **제출용 주간보고**와 **상세 성과 리포트**(서로 분리), 회사 Codex를 통한 선택적 AI 초안, AI를 쓰지 않는 Secret 보관함, 자동 백업을 제공한다.
 
 - 제품 요구: `docs/mac_worklog_ai_handoff/02_PRODUCT_SPEC.md` (실행 지시: `01_AI_BUILD_PROMPT.md`)
 - 구현 계획: `docs/plan.md` · 기술 결정: `docs/decisions.md` · 인수 테스트 대응표: `docs/acceptance-tests.md`
 
-> **검증 범위 안내** — 이 저장소는 Linux(aarch64, Swift 6.3) 개발 서버에서 작성했다. `WorkLogCore`와 `worklog` CLI는 Linux에서 실제 빌드·테스트했고, GitHub Actions `macos-15` 러너(run 36946540946)에서 macOS 앱을 포함한 전체 빌드와 WorkLogCore 테스트 472개도 통과했다. 그러나 **macOS 앱(SwiftUI/AppKit) 실행, Keychain, Touch ID, 전역 단축키, NSPasteboard, 실제 Codex Enterprise 계정 연결은 실행해 보지 않았다(미검증).** 자세한 목록은 아래 [미검증 항목](#미검증-항목).
+> **검증 범위 안내** — Linux(aarch64, Swift 6.3.3)에서 전체 빌드와 테스트 807개, 배포 도구 테스트 25개가 통과했다. macOS 26.6.2/Xcode 27에서 앱을 빌드하고 가짜 fixture로 입력·메뉴 탐색·업무 상세 복귀를 확인했다. 실제 Keychain·Touch ID·회사 Codex 계정과 전체 접근성/IME 조합은 별도 검증 대상이다. 최신 실행 증거와 범위는 [`docs/ui-refresh.md`](docs/ui-refresh.md)를 참고한다.
 
 ## 구조
 
 | 경로 | 내용 | 검증 |
 |---|---|---|
 | `Sources/WorkLogCore` | 도메인(Task 이벤트 재생, 계획, 날짜), 저장(SQLite), 검색(FTS5), Secret(AES-GCM, 세션 잠금, 클립보드), 백업·복원, 리포트(제출용/성과), AI 실행기·Codex 어댑터, 스케줄러, 앱 구성 루트(`AppEnvironment`), CLI 로직 | Linux `swift test` |
-| `Sources/WorkLogApp` | macOS SwiftUI/AppKit 앱(메뉴 막대, 빠른 입력 패널, 화면) | macOS CI 컴파일 통과 · 실행은 **미검증** |
+| `Sources/WorkLogApp` | macOS SwiftUI/AppKit 앱(메뉴 막대, 빠른 입력 패널, 화면) | macOS 26 빌드·가짜 fixture UI 검증 (범위는 UI 문서) |
 | `Sources/worklog` | 개발·시연용 CLI | Linux 실행 확인 |
 | `Tests/WorkLogCoreTests` | XCTest | Linux |
 | `scripts/build-macos-app.sh`, `scripts/build-dmg.sh` | `.app` 번들(ad-hoc 서명)과 `WorkLog-<VERSION>-arm64.dmg` 생성 | macOS CI에서 실행 |
 | `distribution/` | 릴리즈 버전·해시 검사(`release.py`), DMG 검증, Release 업로드 | `release.py`는 Linux 단위 테스트 |
-| `.github/workflows/macos.yml` | macOS 15 러너에서 전체 빌드·테스트·DMG 생성 검증 | PR·push마다 실행 |
+| `.github/workflows/macos.yml` | macOS 26 러너에서 전체 빌드·테스트·DMG 생성 검증 | PR·push마다 실행 |
 | `.github/workflows/macos-release.yml` | 수동 실행: 태그·버전 검사 후 DMG를 artifact/draft/공개 Release로 | 실제 릴리즈 실행 **미검증** |
 
 데이터는 두 SQLite 파일로 분리한다: `work.sqlite`(일반 기록) / `vault.sqlite`(Secret 암호문만). 암호화 키는 macOS Keychain에만 있고 DB·백업에는 없다.
 
 ## 요구 환경
 
-- macOS 14 이상(제안값), Swift 6.x 툴체인(Xcode 16 이상 또는 swift.org 툴체인)
+- macOS 26.0 이상, Swift 6.3 툴체인과 macOS 26 이상 SDK(Xcode 필요)
 - Linux 개발: Swift 6.3, `libsqlite3-dev`(FTS5 포함)
 - AI 기능(선택): 회사 계정으로 로그인한 공식 `codex` CLI (`codex app-server` 사용)
+
+UI는 Apple Human Interface Guidelines에 따라 표준 탐색·입력 컴포넌트와 Liquid Glass를 사용한다. 적용 범위와 이번 변경의 검증 결과는 [`docs/ui-refresh.md`](docs/ui-refresh.md)의 macOS 26 항목을 참고한다.
 
 ## 빌드·테스트
 
@@ -130,12 +132,12 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 - 표(key/value) 입력, `A=B`·`A : B` 붙여넣기 분리, 저장 시 trim, JSON/문자열 원문 보존, 버전·휴지통.
 - 모든 복호화·수정은 `VaultSession`(기기 인증 후, 미사용 30분 자동 잠금)을 거친다.
 
-## 화면 (macOS, 미검증)
+## 화면 (macOS 26 이상)
 
-`Sources/WorkLogApp`에 SwiftUI/AppKit 코드가 있다. macOS CI에서 컴파일은 통과했지만 앱을 실행해 화면·키 입력을 확인하지는 않았다.
+`Sources/WorkLogApp`에 SwiftUI/AppKit 코드가 있다. 표준 사이드바·툴바·입력 컨트롤을 사용하고 Liquid Glass는 탐색·조작 영역에 적용한다.
 
-- 사이드바: 날짜(3열: 타임라인·Task·Memo), 업무, 검색, 그래프, 리포트(제출용/상세 성과를 상단 선택기로 분리), 이번 주 계획, Secret, 설정, 백업
-- 빠른 입력 패널(`⌃⌥Space` 기본값): 메모·업무·시크릿 세 탭. Tab/Shift+Tab으로 탭을 순환하고 Option+Tab으로 필드를 이동한다. Return은 줄바꿈, ⌘Return은 활성 탭 저장, Esc는 초안을 보존하고 닫는다. 한글 IME 조합 중에는 탭 변경·저장을 하지 않는다. 업무 탭은 `+ New task` 또는 기존 업무 검색 후 진행기록 추가/상태 변경을 고르며, 완료 시 남은 체크리스트·프로젝트를 확인한다. 메모·업무 탭은 `@프로젝트`·`#태그` 자동완성과 관련 기록 선택을 제공하고, 저장 후 이전 앱으로 복귀한다.
+- 사이드바: 오늘(활동 기록·업무 상태·메모), 업무, 프로젝트, 주간보고(팀 제출용), 성과자료, Secret, 검색, 관계 그래프, 휴지통, 백업, 설정. 제출용 주간보고와 성과자료는 별도 화면이다.
+- 빠른 입력 패널(`⌃⌥Space` 기본값): 메모·업무·시크릿 세 탭. ⌃Tab/⌃⇧Tab 또는 ⌘1·2·3으로 유형을 바꾸고 Tab/Shift+Tab으로 입력 항목을 이동한다. Return은 줄바꿈, ⌘Return은 활성 탭 저장, Esc는 초안을 보존하고 닫는다. 한글 IME 조합 중에는 탭 변경·저장을 하지 않는다. 업무 탭은 `+ New task` 또는 기존 업무 검색 후 진행기록 추가/상태 변경을 고르며, 완료 시 남은 체크리스트·프로젝트를 확인한다. 메모·업무 탭은 `@프로젝트`·`#태그` 자동완성과 관련 기록 선택을 제공하고, 저장 후 이전 앱으로 복귀한다.
 - 시크릿 탭: 기존 Secret 편집기를 그대로 재사용하고 메인 창과 동시에 편집하지 못한다(소유권은 `SecretsModel`이 관리). 기본 입력 유형이 Secret이어도 패널의 시크릿 탭에서 편집하며, Secret 값은 일반 기록·검색·그래프·AI 경로로 흘러가지 않는다(decisions T25, T20 변경됨).
 - 검색(`⌃⌥D` 기본값): 원문 검색, 명시적으로 요청할 때만 AI 답변(Secret 제외)
 - 그래프(decisions T26): 메모·업무·진행기록·리포트 버전과 프로젝트·태그·수동 관련 연결을 한 화면에서 본다. 기간·종류 필터, 선택 노드 기준 2-hop 주변 보기, 접근 가능한 노드 목록과 원문 이동을 제공한다. 리포트 근거는 버전·revision 기준이라 당시 원문을 보여 주며, 삭제된 근거는 역사 노드로 표시한다. 한 번에 최대 250개 노드를 그리고 초과 시 잘림을 안내한다.
@@ -156,8 +158,8 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 
 실제로 실행하지 못한 것은 통과로 보지 않는다.
 
-- macOS 앱 실행(컴파일은 CI 통과), SwiftUI 화면, 메뉴 막대, 빠른 입력 패널(NSPanel), 이전 앱으로 포커스 복귀
-- 전역 단축키 등록·충돌 처리(Carbon)
+- 모든 화면×크기×데이터 수 조합, VoiceOver·한글 IME 전체 조합 및 모든 접근성 설정
+- 실제 사용자 환경의 전역 단축키 충돌·재등록·다중 모니터 동작 (격리 fixture의 기본 전역 입력·검색 진입은 확인)
 - Keychain 키 저장(`KeychainVaultKeyStore`), Touch ID/암호 인증(`LocalDeviceAuthenticator`), `NSPasteboard` 조건부 삭제(`SystemPasteboard`)
 - 실제 Codex Enterprise 계정 로그인·스킬 조회·턴 실행, 회사 정책 오류 분류(가짜 app-server 프로세스로 프로토콜만 테스트), 승인 거절 응답의 `decision` 필드 값
 - Codex read-only sandbox가 실제로 vault·백업 파일 읽기를 막는지(AI-T07). 앱은 입력에서 해당 경로를 빼고 출력에 흔적이 있으면 저장하지 않을 뿐이다

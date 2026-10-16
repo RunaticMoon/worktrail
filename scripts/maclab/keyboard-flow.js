@@ -117,12 +117,36 @@ function run(args) {
         }
         return null;
     }
-    function sameFocusedScrollArea(focused, target) {
+    function isCollectionRole(role) {
+        return ['AXOutline', 'AXTable', 'AXList', 'AXScrollArea'].indexOf(role) >= 0;
+    }
+    function taskList() {
+        var matches = [];
+        walk(mainWindow(), function (node, role) {
+            if (isCollectionRole(role) && keyboardLabel(node) === '업무 목록') matches.push(node);
+            return false;
+        }, false);
+        // SwiftUI may label both a native list and its scroll container. Accept
+        // the deepest node only when every match belongs to its ancestor chain;
+        // unrelated controls with the same label must not satisfy this check.
+        var candidates = matches.filter(function (candidate) {
+            return matches.every(function (other) {
+                var ancestor = candidate;
+                for (var depth = 0; ancestor && depth < 35; depth += 1) {
+                    if (keyboardSame(ancestor, other)) return true;
+                    ancestor = keyboardAXRead(ancestor, 'AXParent');
+                }
+                return false;
+            });
+        });
+        return candidates.length === 1 ? candidates[0] : null;
+    }
+    function sameFocusedCollection(focused, target) {
         // SwiftUI can export different AX proxies for its focus owner and its
-        // tree node. Match only a uniquely labelled scroll area in the SAME
-        // native window; never infer focus from selection or appearance.
-        if (keyboardText(focused, 'AXRole') !== 'AXScrollArea' ||
-            keyboardText(target, 'AXRole') !== 'AXScrollArea') return false;
+        // tree node. Match only a uniquely labelled collection of the same role
+        // in the SAME native window; never infer focus from selection.
+        var targetRole = keyboardText(target, 'AXRole');
+        if (!isCollectionRole(targetRole) || keyboardText(focused, 'AXRole') !== targetRole) return false;
         var label = keyboardLabel(target);
         if (!label || keyboardLabel(focused) !== label) return false;
         var focusedWindow = owningWindow(focused), targetWindow = owningWindow(target);
@@ -131,7 +155,7 @@ function run(args) {
         if (focusedID && targetID && focusedID !== targetID) return false;
         var matches = 0;
         walk(targetWindow, function (node, role) {
-            if (role === 'AXScrollArea' && keyboardLabel(node) === label) matches += 1;
+            if (role === targetRole && keyboardLabel(node) === label) matches += 1;
             return matches > 1;
         }, false);
         if (matches !== 1) return false;
@@ -142,11 +166,12 @@ function run(args) {
         if (!root) return false;
         var focused = keyboardAXRead(appAX, 'AXFocusedUIElement');
         for (var depth = 0; focused && depth < 35; depth += 1) {
-            if (keyboardSame(focused, root) || sameFocusedScrollArea(focused, root)) return true;
+            if (keyboardSame(focused, root) || sameFocusedCollection(focused, root)) return true;
             focused = keyboardAXRead(focused, 'AXParent');
         }
         var value = keyboardAXRead(root, 'AXFocused');
-        return value !== null && Boolean(ObjC.unwrap(value));
+        var isFocused = value === null ? null : ObjC.unwrap(value);
+        return isFocused === true || isFocused === 1;
     }
     function foregroundProcess() {
         // NSWorkspace can retain a stale frontmostApplication in a synchronous
@@ -195,8 +220,25 @@ function run(args) {
         waitFor(function () { return front() && windowNamed(title); }, 'PANEL_NOT_OPENED_IN_REVIEW_FOREGROUND');
     }
     function selectedCaptureTab(title) {
-        var node = labelled(windowNamed('빠른 입력'), title, 'AXButton');
-        return node && keyboardText(node, 'AXValue') === '선택됨';
+        var matches = 0, selected = false;
+        walk(windowNamed('빠른 입력'), function (node, role) {
+            // A native segmented Picker exports radio buttons. Older fixture
+            // builds used buttons with a localized selection value. Match only
+            // the exact tab label and explicit true/1 selection, never truthy
+            // strings, the group's selected index, or keyboard focus.
+            if (role !== 'AXRadioButton' && role !== 'AXButton') return false;
+            var label = keyboardLabel(node);
+            if (label !== title && label !== title + ', 초안 있음' && label !== title + ' •') return false;
+            matches += 1;
+            var rawValue = keyboardAXRead(node, 'AXValue');
+            var rawSelected = keyboardAXRead(node, 'AXSelected');
+            var value = rawValue === null ? null : ObjC.unwrap(rawValue);
+            var isSelected = rawSelected === null ? null : ObjC.unwrap(rawSelected);
+            selected = value === '선택됨' || value === true || value === 1 ||
+                isSelected === true || isSelected === 1;
+            return false;
+        });
+        return matches === 1 && selected;
     }
     function expectTab(title, code) {
         waitFor(function () { return selectedCaptureTab(title); }, code);
@@ -255,9 +297,9 @@ function run(args) {
     function mainFlow() {
         stage = 'main_numbered_screens';
         key(19, ['command down']);
-        // The keyboard focus owner is an AXScrollArea; SwiftUI may export a
-        // different tree proxy. focusInside checks its unique label and window.
-        waitFor(function () { return labelled(mainWindow(), '업무 목록', 'AXScrollArea'); }, 'COMMAND_2_TASKS_FAILED');
+        // Native List roles vary by SwiftUI version. Match the semantic region;
+        // focusInside still checks actual focus ancestry or a unique AX proxy.
+        waitFor(taskList, 'COMMAND_2_TASKS_FAILED');
         key(20, ['command down']);
         waitFor(function () { return labelled(mainWindow(), '프로젝트 목록'); }, 'COMMAND_3_PROJECTS_FAILED');
         key(18, ['command down']);
@@ -266,20 +308,30 @@ function run(args) {
         check('mainNumberedScreens', true);
         stage = 'main_content_focus';
         key(19, ['command down']);
-        waitFor(function () { return labelled(mainWindow(), '업무 목록', 'AXScrollArea'); }, 'TASK_LIST_MISSING');
+        waitFor(taskList, 'TASK_LIST_MISSING');
         key(29, ['command down']);
         check('mainSidebarFocus', waitFor(function () {
             return focusInside(labelled(mainWindow(), '사이드바')) || focusInside(labelled(mainWindow(), '업무', 'AXButton'));
         }, 'COMMAND_0_SIDEBAR_NOT_FOCUSED'));
+        stage = 'main_sidebar_arrow_navigation';
+        for (var navigationRound = 0; navigationRound < 3; navigationRound += 1) {
+            key(125);
+            waitFor(function () { return labelled(mainWindow(), '프로젝트 목록'); }, 'SIDEBAR_DOWN_PROJECTS_FAILED');
+            need(focusInside(labelled(mainWindow(), '사이드바')), 'PROJECT_APPEAR_STOLE_SIDEBAR_FOCUS');
+            key(126);
+            waitFor(taskList, 'SIDEBAR_UP_TASKS_FAILED');
+            need(focusInside(labelled(mainWindow(), '사이드바')), 'TASK_APPEAR_STOLE_SIDEBAR_FOCUS');
+        }
+        check('sidebarRepeatedArrowsKeepFocus', true);
         key(29, ['command down', 'shift down']);
-        check('mainContentFocus', waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록', 'AXScrollArea')); }, 'COMMAND_SHIFT_0_CONTENT_NOT_FOCUSED'));
+        check('mainContentFocus', waitFor(function () { return focusInside(taskList()); }, 'COMMAND_SHIFT_0_CONTENT_NOT_FOCUSED'));
         stage = 'main_task_roundtrip';
         key(125);
         key(36);
         waitFor(function () { return sheet(mainWindow()); }, 'TASK_DETAIL_NOT_OPENED');
         key(53);
         waitFor(function () { return !sheet(mainWindow()); }, 'TASK_DETAIL_NOT_CLOSED');
-        check('taskFocusRestored', waitFor(function () { return focusInside(labelled(mainWindow(), '업무 목록', 'AXScrollArea')); }, 'TASK_LIST_FOCUS_NOT_RESTORED'));
+        check('taskFocusRestored', waitFor(function () { return focusInside(taskList()); }, 'TASK_LIST_FOCUS_NOT_RESTORED'));
         stage = 'main_day_tabs';
         key(18, ['command down']);
         key(18, ['command down', 'option down']);
