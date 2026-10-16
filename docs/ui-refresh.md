@@ -72,6 +72,8 @@ Mac 실기 재현 필요: macOS 26 이상 SDK 빌드 후 가짜 fixture로 설�
 
 빌드/테스트 로그: `/tmp/lgux-90df-a1-build.log`, `/tmp/lgux-90df-a1-test.log`.
 
+- A-2 (2026-10-16 KST): 설정 목차와 Form 사이 구분선을 compact에서는 `VStack(spacing: 0)`(가로선), regular에서는 `HStack(spacing: 0)`(세로선)으로 감싸 `AnyLayout`의 축 위임 여부와 무관하게 방향을 확정하며, 목차와 `detail`의 자식 위치·구조는 유지한다.
+
 ### 실제 Mac 후속 확인 (이번 작업에서는 미실행)
 
 macOS 26 이상 SDK로 앱을 빌드한 뒤 `--ui-test-fixture empty|few|many`를 각각 사용한다. 실제 회사 계정·Secret·Keychain·AI 토큰은 사용하지 않는다.

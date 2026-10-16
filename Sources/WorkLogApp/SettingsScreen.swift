@@ -50,7 +50,7 @@ struct SettingsScreen: View {
                 // Keep the form's identity while changing the navigation placement.
                 layout {
                     navigationColumn(isCompact: isCompact)
-                    Divider()
+                    navigationDivider(isCompact: isCompact)
                     detail
                 }
             }
@@ -69,6 +69,14 @@ struct SettingsScreen: View {
         }
         .sheet(item: $promptEditor) { selection in
             PromptEditorView(prompts: prompts, job: selection.job)
+        }
+    }
+
+    @ViewBuilder private func navigationDivider(isCompact: Bool) -> some View {
+        if isCompact {
+            VStack(spacing: 0) { Divider() }
+        } else {
+            HStack(spacing: 0) { Divider() }
         }
     }
 
