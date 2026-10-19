@@ -290,6 +290,14 @@ class MacOSSigningContinuityTests(unittest.TestCase):
             result = original_run(*args, **kwargs)
             if args and args[0][0] == '/usr/bin/codesign' and result.returncode:
                 sys.stderr.write('Synthetic codesign: ' + result.stderr.decode())
+                if '--keychain' in args[0]:
+                    keychain = args[0][args[0].index('--keychain') + 1]
+                    identities = original_run(
+                        ['/usr/bin/security', 'find-identity', '-p', 'codesigning', keychain],
+                        capture_output=True,
+                    )
+                    # This path contains ONLY the fresh identity made by this test.
+                    sys.stderr.write('Synthetic identity status: ' + identities.stdout.decode())
             return result
 
         patch = mock.patch.object(signing.subprocess, 'run', side_effect=run)
