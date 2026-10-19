@@ -231,7 +231,7 @@ class SigningTests(unittest.TestCase):
             signing.verify(self.app, self.certificate)
         self.assertEqual(command.call_args_list[0].args,
                          ('/usr/bin/codesign', '--verify', '--deep', '--strict', '-R',
-                          expected, str(self.app)))
+                          '=' + expected, str(self.app)))
 
     def test_verify_rejects_replaced_or_version_bound_designated_requirement(self):
         expected = signing.requirement(self.certificate)
@@ -311,7 +311,7 @@ class MacOSSigningContinuityTests(unittest.TestCase):
             first_requirement = next(line.removeprefix('designated => ')
                                      for line in first_details.decode().splitlines()
                                      if line.startswith('designated => '))
-            signing.command('/usr/bin/codesign', '--verify', '--strict', '-R', first_requirement, str(second))
+            signing.command('/usr/bin/codesign', '--verify', '--strict', '-R', '=' + first_requirement, str(second))
 
             other_certificate, other_identity = provision.generate_identity()
             other_public = root / 'other-public.pem'
@@ -319,7 +319,7 @@ class MacOSSigningContinuityTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {signing.SECRET_NAME: base64.b64encode(other_identity).decode()}):
                 signing.sign(impostor, other_public)
             with self.assertRaises(RuntimeError):
-                signing.command('/usr/bin/codesign', '--verify', '--strict', '-R', first_requirement, str(impostor))
+                signing.command('/usr/bin/codesign', '--verify', '--strict', '-R', '=' + first_requirement, str(impostor))
             with self.assertRaises(RuntimeError):
                 signing.verify(impostor, public)
 

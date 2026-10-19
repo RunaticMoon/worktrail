@@ -53,7 +53,7 @@ def requirement(certificate):
 
 def verify(app, certificate=PUBLIC_FILE):
     expected = requirement(certificate)
-    command('/usr/bin/codesign', '--verify', '--deep', '--strict', '-R', expected, str(app))
+    command('/usr/bin/codesign', '--verify', '--deep', '--strict', '-R', '=' + expected, str(app))
     details = command('/usr/bin/codesign', '--display', '--requirements', '-', str(app),
                       include_stderr=True).decode()
     designated = [line.removeprefix('designated => ') for line in details.splitlines()
@@ -109,7 +109,7 @@ def sign(app, certificate=PUBLIC_FILE):
                     '-s', '-k', password, keychain)
             command('/usr/bin/codesign', '--force', '--sign', fingerprint,
                     '--keychain', keychain, '--timestamp=none',
-                    '--requirements', 'designated => ' + expected, str(app))
+                    '--requirements', '=designated => ' + expected, str(app))
             verify(app, certificate)
         finally:
             command('/usr/bin/security', 'delete-keychain', keychain)
