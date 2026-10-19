@@ -314,12 +314,18 @@ struct SectionDisclosure<Content: View>: View {
     let summary: String
     @Binding private var isExpanded: Bool
     private let content: Content
+    private let actionTitle: String?
+    private let action: (() -> Void)?
 
-    init(title: String, summary: String, isExpanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
+    init(title: String, summary: String, isExpanded: Binding<Bool>,
+         actionTitle: String? = nil, action: (() -> Void)? = nil,
+         @ViewBuilder content: () -> Content) {
         self.title = title
         self.summary = summary
         self._isExpanded = isExpanded
         self.content = content()
+        self.actionTitle = actionTitle
+        self.action = action
     }
 
     var body: some View {
@@ -328,15 +334,107 @@ struct SectionDisclosure<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 8)
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                if !isExpanded && !summary.isEmpty {
-                    Text(summary).font(.callout).foregroundStyle(.secondary)
+            Text(title).font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .disclosureGroupStyle(SectionDisclosureRowStyle(title: title, summary: summary,
+                                                       actionTitle: actionTitle, action: action))
+        .worklogAnimation(.easeInOut(duration: 0.16), value: isExpanded)
+    }
+}
+
+private struct SectionDisclosureRowStyle: DisclosureGroupStyle {
+    let title: String
+    let summary: String
+    let actionTitle: String?
+    let action: (() -> Void)?
+
+    func makeBody(configuration: Configuration) -> some View {
+        SectionDisclosureBody(configuration: configuration, title: title, summary: summary,
+                              actionTitle: actionTitle, action: action)
+    }
+}
+
+private struct SectionDisclosureBody: View {
+    let configuration: DisclosureGroupStyleConfiguration
+    let title: String
+    let summary: String
+    let actionTitle: String?
+    let action: (() -> Void)?
+    @State private var isHovering = false
+    @FocusState private var headerFocused: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button { configuration.isExpanded.toggle() } label: {
+                    HStack(spacing: 10) {
+                        headerLabel
+                        Image(systemName: "chevron.right")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(WorkLogTheme.muted)
+                            .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(isHovering && isEnabled ? WorkLogTheme.rowHover : .clear,
+                            in: RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius))
+                .overlay {
+                    if headerFocused {
+                        RoundedRectangle(cornerRadius: WorkLogTheme.rowCornerRadius)
+                            .strokeBorder(WorkLogTheme.focusColor(for: contrast),
+                                          lineWidth: contrast == .increased ? 3 : 2)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .onHover { isHovering = $0 }
+                .focusable().focused($headerFocused)
+                .worklogKeyboardActivation { configuration.isExpanded.toggle() }
+                .accessibilityLabel(Text(title))
+                .accessibilityValue(Text((configuration.isExpanded ? "펼쳐짐" : "접힘")
+                                         + (summary.isEmpty ? "" : ", \(summary)")))
+                .accessibilityHint(configuration.isExpanded ? "섹션 접기" : "섹션 펼치기")
+                .accessibilityIdentifier("section-disclosure-\(title)-toggle")
+
+                // Keep the direct action outside the disclosure button's hit area.
+                if let actionTitle, let action {
+                    Button(actionTitle, action: action)
+                        .focusable()
+                        .worklogKeyboardActivation(action)
+                        .accessibilityLabel(Text("\(title) \(actionTitle)"))
+                        .accessibilityIdentifier("section-disclosure-\(title)-action")
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
+            if configuration.isExpanded { configuration.content }
         }
-        .worklogAnimation(.easeInOut(duration: 0.16), value: isExpanded)
+    }
+
+    private var headerLabel: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                configuration.label.fixedSize()
+                Spacer(minLength: 8)
+                summaryLabel.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                configuration.label
+                summaryLabel
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private var summaryLabel: some View {
+        if !summary.isEmpty {
+            Text(summary).font(.callout).foregroundStyle(WorkLogTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

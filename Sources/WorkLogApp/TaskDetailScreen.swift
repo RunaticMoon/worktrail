@@ -12,6 +12,7 @@ import WorkLogCore
     @State private var checklistExpanded = false
     @State private var evidenceExpanded = false
     @State private var activitiesExpanded = true
+    @State private var initializedTaskID: String?
     @State private var confirmsDiscardInput = false
     @State private var resumeChecklistAfterClose = false
     @FocusState private var activityFocused: Bool
@@ -67,7 +68,9 @@ import WorkLogCore
                                                   isExpanded: $projectsExpanded) { projectStatuses(detail) }
                                 Divider()
                                 SectionDisclosure(title: "체크리스트", summary: model.checklistSummary ?? "항목 없음",
-                                                  isExpanded: $checklistExpanded) { checklist(detail) }
+                                                  isExpanded: $checklistExpanded,
+                                                  actionTitle: model.asOf == nil ? "항목 추가" : nil,
+                                                  action: focusChecklistInput) { checklist(detail) }
                                 Divider()
                                 SectionDisclosure(title: "근거·이력", summary: "완료 이력 \(detail.completionDates.count)개 · 관계 \(detail.relations.count)개 · 링크 \(detail.links.count)개",
                                                   isExpanded: $evidenceExpanded) { evidence(detail) }
@@ -79,6 +82,9 @@ import WorkLogCore
                         .onChange(of: activityFocused) { _, focused in
                             if focused { proxy.scrollTo("activities", anchor: .top) }
                         }
+                        .onChange(of: checklistFocused) { _, focused in
+                            if focused { proxy.scrollTo("checklist-input", anchor: .center) }
+                        }
                     }
                 } else {
                     StateView(kind: model.errorMessage == nil ? .empty : .failure, title: "업무를 불러올 수 없습니다",
@@ -87,6 +93,9 @@ import WorkLogCore
             }
         }
         .padding(WorkLogTheme.contentInset)
+        .onChange(of: model.detail?.task.id, initial: true) { _, _ in
+            initializeSectionExpansion()
+        }
         .interactiveDismissDisabled(hasUnsavedInput)
         .background(WorkLogKeyHandler(handle: handleKey))
         .alert("업무 입력을 버리고 닫을까요?", isPresented: $confirmsDiscardInput) {
@@ -121,13 +130,29 @@ import WorkLogCore
             return true
         }
         if modifiers == [.command, .shift], event.keyCode == 38 {
-            if !event.isARepeat {
-                checklistExpanded = true
-                DispatchQueue.main.async { checklistFocused = true }
-            }
+            if !event.isARepeat { focusChecklistInput() }
             return true
         }
         return false
+    }
+
+    private func initializeSectionExpansion() {
+        guard let detail = model.detail, initializedTaskID != detail.task.id else { return }
+        initializedTaskID = detail.task.id
+        // Apply defaults once per task, preserving the user's choices after saves.
+        projectsExpanded = detail.projects.count <= 3
+        checklistExpanded = detail.checklist.count <= 3 || !model.checklistText.isEmpty
+        evidenceExpanded = false
+        activitiesExpanded = true
+    }
+
+    private func focusChecklistInput() {
+        guard model.asOf == nil, model.completionCheck == nil, !hasMarkedText else { return }
+        checklistExpanded = true
+        activityFocused = false
+        actionsFocused = false
+        checklistFocused = false
+        DispatchQueue.main.async { checklistFocused = true }
     }
 
     private func requestClose() {
@@ -268,10 +293,10 @@ import WorkLogCore
 
     private func projectSummary(_ detail: TaskDetail) -> String {
         guard !detail.projects.isEmpty else { return "연결된 프로젝트 없음" }
-        let names = detail.projects.prefix(2).map { project in
-            project.project.name + (project.link.trackingEnabled ? " · " + (project.status?.koreanLabel ?? "상태 없음") : "")
-        }.joined(separator: " / ")
-        return names + (detail.projects.count > 2 ? " 외 \(detail.projects.count - 2)개" : "")
+        let tracked = detail.projects.filter { $0.link.trackingEnabled }
+        guard !tracked.isEmpty else { return "\(detail.projects.count)개 · 업무 전체 상태로 관리" }
+        let completed = tracked.filter { $0.status == .completed }.count
+        return "\(detail.projects.count)개 · 개별 적용 완료 \(completed)/\(tracked.count)"
     }
 
     private func projectStatuses(_ detail: TaskDetail) -> some View {
@@ -296,6 +321,7 @@ import WorkLogCore
                                 model.changeProjectStatus(projectId: project.project.id, kind: .completed)
                             }
                             .disabled(project.status == .completed)
+                            .accessibilityIdentifier("task-detail-project-\(project.project.id)-complete")
                             Menu("다른 적용 상태") {
                                 if project.status == .planned { Button("시작") { model.changeProjectStatus(projectId: project.project.id, kind: .started) } }
                                 if project.status == .inProgress { Button("보류") { model.changeProjectStatus(projectId: project.project.id, kind: .paused) } }
@@ -304,6 +330,8 @@ import WorkLogCore
                                 if project.status == .cancelled { Button("예정으로") { model.changeProjectStatus(projectId: project.project.id, kind: .replanned) } }
                                 if project.status != .cancelled { Button("적용 취소") { model.changeProjectStatus(projectId: project.project.id, kind: .cancelled) } }
                             }.focusable()
+                                .accessibilityLabel("\(project.project.name) 적용 상태 변경")
+                                .accessibilityIdentifier("task-detail-project-\(project.project.id)-status")
                         }
                     } else {
                         Text("업무 전체 상태로 관리 · \(detail.status?.koreanLabel ?? "상태 없음")")
@@ -321,11 +349,14 @@ import WorkLogCore
                 Toggle(entry.item.text, isOn: Binding(get: { entry.done }, set: { model.setChecklist(itemId: entry.item.id, done: $0) }))
                     .focusable()
                     .disabled(model.asOf != nil)
+                    .accessibilityIdentifier("task-detail-checklist-\(entry.item.id)")
             }
             if model.asOf == nil {
                 HStack {
                     TextField("새 체크리스트 항목", text: $model.checklistText).accessibilityLabel("새 체크리스트 항목")
                         .focused($checklistFocused)
+                        .id("checklist-input")
+                        .accessibilityIdentifier("task-detail-checklist-input")
                         .onSubmit {
                             guard !hasMarkedText, !model.checklistText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                             model.addChecklistItem()
@@ -335,6 +366,7 @@ import WorkLogCore
                         .focusable()
                         .worklogKeyboardActivation { model.addChecklistItem() }
                         .disabled(model.checklistText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("task-detail-checklist-add")
                 }
                 Text("체크리스트를 모두 체크해도 Task 전체 상태는 바뀌지 않습니다.")
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
