@@ -293,6 +293,7 @@ final class ReportsPlanPresentationTests: XCTestCase {
     }
     @MainActor func testAIOnlyRunsOnExplicitGenerationWithUseAIEnabled() async throws {
         let provider = MockAIProvider(); let env = try environment(provider: provider)
+        _ = try env.tasks.createTask(title: "AI 생성 대상 업무", initialStatus: .inProgress, workDate: prior)
         let model = ReportsModel(environment: env)
         XCTAssertTrue(model.useAI); XCTAssertTrue(model.isAIAvailable)
         model.load(); model.loadSelection(); XCTAssertEqual(provider.runCount, 0)
