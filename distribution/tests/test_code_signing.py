@@ -8,7 +8,6 @@ import hashlib
 import importlib.util
 import os
 import plistlib
-import shlex
 import stat
 import subprocess
 import sys
@@ -161,7 +160,7 @@ class SigningTests(unittest.TestCase):
                     signing.sign(app, self.certificate)
             command.assert_not_called()
 
-    def test_signing_refuses_to_modify_trust_outside_disposable_runners(self):
+    def test_signing_refuses_to_modify_search_list_outside_disposable_runners(self):
         for runner, github_actions in (('self-hosted', 'true'), ('', 'true'),
                                        ('github-hosted', 'false'), ('github-hosted', '')):
             with self.subTest(runner=runner, github_actions=github_actions):
@@ -189,101 +188,119 @@ class SigningTests(unittest.TestCase):
         self.assertTrue(command.call_args_list)
         self.assertTrue(all(call.args[0] == 'openssl' for call in command.call_args_list))
 
-    def test_signing_failure_removes_temporary_identity_and_keychain(self):
-        for failure in ('import', 'codesign'):
-            with self.subTest(failure=failure):
-                keychains = []
-                private_files = []
+    def mock_signing_commands(self, intercept=None):
+        previous = ['/Users/fake/Library/Keychains/login.keychain-db',
+                    '/tmp/another fake.keychain-db']
+        state = {'previous': previous, 'search_list': previous.copy(),
+                 'keychain': None, 'private': None, 'deleted': False, 'snapshots': 0}
 
-                def run(*args, **kwargs):
-                    self.assertNotIn(signing.SECRET_NAME, os.environ)
-                    if args[:2] == ('openssl', 'pkcs12'):
-                        self.assertEqual(kwargs['input'], self.p12)
-                        self.assertIn('-nokeys', args)
-                        return b'fake public PEM'
-                    if args[:2] == ('openssl', 'x509'):
-                        return self.der
-                    if args[:2] == ('/usr/bin/security', 'create-keychain'):
-                        keychains.append(Path(args[-1]))
-                    if args[:2] == ('/usr/bin/security', 'import'):
-                        private = Path(args[2])
-                        private_files.append(private)
-                        self.assertEqual(private.read_bytes(), self.p12)
-                        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o600)
-                        if failure == 'import':
-                            raise RuntimeError('simulated import failure')
-                    if args[0] == '/usr/bin/codesign':
-                        self.assertFalse(private_files[0].exists())
-                        self.assertIn('--keychain', args)
-                        self.assertEqual(args[args.index('--keychain') + 1], str(keychains[0]))
-                        raise RuntimeError('simulated codesign failure')
-                    return b''
-
-                with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
-                    with mock.patch.object(signing, 'command', side_effect=run) as command:
-                        with self.assertRaisesRegex(RuntimeError, 'simulated ' + failure + ' failure'):
-                            signing.sign(self.app, self.certificate)
-                self.assertEqual(command.call_args.args,
-                                 ('/usr/bin/security', 'delete-keychain', str(keychains[0])))
-                trust_removals = [call for call in command.call_args_list if 'remove-trusted-cert' in call.args]
-                if failure == 'codesign':
-                    self.assertEqual(len(trust_removals), 1)
-                    self.assertEqual(command.call_args_list[-2].args,
-                                     ('/usr/bin/sudo', '-n', '/usr/bin/security', 'remove-trusted-cert',
-                                      '-d', str(self.certificate)))
+        def run(*args, **kwargs):
+            self.assertNotIn(signing.SECRET_NAME, os.environ)
+            self.assertNotIn('/usr/bin/sudo', args)
+            self.assertNotIn('add-trusted-cert', args)
+            self.assertNotIn('remove-trusted-cert', args)
+            if intercept is not None:
+                intercept(state, args)
+            if args[:2] == ('openssl', 'pkcs12'):
+                self.assertEqual(kwargs['input'], self.p12)
+                self.assertIn('-nokeys', args)
+                return b'fake public PEM'
+            if args[:2] == ('openssl', 'x509'):
+                return self.der
+            if args[:2] == ('/usr/bin/security', 'list-keychains'):
+                self.assertEqual(args[2:4], ('-d', 'user'))
+                if '-s' in args:
+                    state['search_list'] = list(args[5:])
                 else:
-                    self.assertEqual(trust_removals, [])
-                self.assertFalse(keychains[0].parent.exists())
-                self.assertTrue(private_files)
-                self.assertFalse(private_files[0].exists())
-
-    def test_trust_removal_failure_still_deletes_temporary_keychain_and_skips_verification(self):
-        keychains = []
-
-        def run(*args, **kwargs):
-            if args[:2] == ('openssl', 'x509'):
-                return self.der
+                    state['snapshots'] += 1
+                    return ''.join('    "' + path + '"\n' for path in state['search_list']).encode()
             if args[:2] == ('/usr/bin/security', 'create-keychain'):
-                keychains.append(Path(args[-1]))
-            if 'remove-trusted-cert' in args:
-                raise RuntimeError('simulated trust removal failure')
-            return b''
-
-        with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
-            with mock.patch.object(signing, 'command', side_effect=run) as command:
-                with mock.patch.object(signing, 'verify') as verify:
-                    with self.assertRaisesRegex(RuntimeError, 'simulated trust removal failure'):
-                        signing.sign(self.app, self.certificate)
-        verify.assert_not_called()
-        self.assertEqual(command.call_args.args,
-                         ('/usr/bin/security', 'delete-keychain', str(keychains[0])))
-        self.assertFalse(keychains[0].parent.exists())
-
-    def test_verification_runs_only_after_signer_trust_and_temporary_keychain_are_removed(self):
-        state = {'trusted': False, 'deleted': False, 'keychain': None}
-
-        def run(*args, **kwargs):
-            if args[:2] == ('openssl', 'x509'):
-                return self.der
-            if args[:2] == ('/usr/bin/security', 'create-keychain'):
+                self.assertGreater(state['snapshots'], 0, 'snapshot must precede keychain creation')
                 state['keychain'] = Path(args[-1])
-            if 'add-trusted-cert' in args:
-                self.assertEqual(args,
-                                 ('/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
-                                  '-d', '-r', 'trustRoot', '-p', 'codeSign', '-p', 'basic', '-k',
-                                  str(state['keychain']), str(self.certificate)))
-                state['trusted'] = True
+                # Keychain creation can change the default search list itself.
+                state['search_list'].append(str(state['keychain']))
+                state['private'] = state['keychain'].with_name('identity.p12')
+                self.assertEqual(state['private'].read_bytes(), self.p12)
+                self.assertEqual(stat.S_IMODE(state['private'].stat().st_mode), 0o600)
             if args[0] == '/usr/bin/codesign':
-                self.assertTrue(state['trusted'])
-            if 'remove-trusted-cert' in args:
-                state['trusted'] = False
+                self.assertEqual(state['search_list'], [str(state['keychain'])])
+                self.assertEqual(args[args.index('--keychain') + 1], str(state['keychain']))
+                self.assertFalse(state['private'].exists())
             if args[:2] == ('/usr/bin/security', 'delete-keychain'):
-                self.assertFalse(state['trusted'])
+                self.assertEqual(args[-1], str(state['keychain']))
                 state['deleted'] = True
             return b''
 
+        return state, run
+
+    def test_signing_failure_restores_search_list_and_removes_temporary_material(self):
+        for failure in ('import', 'restrict', 'codesign', 'codesign timeout'):
+            with self.subTest(failure=failure):
+                def fail(state, args):
+                    at_import = args[:2] == ('/usr/bin/security', 'import')
+                    at_restrict = (args[:5] == ('/usr/bin/security', 'list-keychains', '-d', 'user', '-s')
+                                   and list(args[5:]) != state['previous'])
+                    at_codesign = args[0] == '/usr/bin/codesign'
+                    if ((failure == 'import' and at_import) or
+                        (failure == 'restrict' and at_restrict) or
+                        (failure.startswith('codesign') and at_codesign)):
+                        raise RuntimeError('simulated ' + failure)
+
+                state, run = self.mock_signing_commands(fail)
+                with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
+                    with mock.patch.object(signing, 'command', side_effect=run) as command:
+                        with mock.patch.object(signing, 'verify') as verify:
+                            with self.assertRaisesRegex(RuntimeError, 'simulated ' + failure):
+                                signing.sign(self.app, self.certificate)
+                verify.assert_not_called()
+                self.assertEqual(state['search_list'], state['previous'])
+                self.assertEqual(state['snapshots'], 2)
+                self.assertTrue(state['deleted'])
+                self.assertEqual(command.call_args.args,
+                                 ('/usr/bin/security', 'delete-keychain', str(state['keychain'])))
+                self.assertFalse(state['keychain'].parent.exists())
+                self.assertFalse(state['private'].exists())
+
+    def test_restore_failure_still_deletes_temporary_keychain_and_skips_verification(self):
+        for failure in ('failed', 'timed out'):
+            with self.subTest(failure=failure):
+                def fail(state, args):
+                    if (args[:5] == ('/usr/bin/security', 'list-keychains', '-d', 'user', '-s')
+                            and list(args[5:]) == state['previous']):
+                        raise RuntimeError('simulated search list restore ' + failure)
+
+                state, run = self.mock_signing_commands(fail)
+                with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
+                    with mock.patch.object(signing, 'command', side_effect=run):
+                        with mock.patch.object(signing, 'verify') as verify:
+                            with self.assertRaisesRegex(RuntimeError, 'simulated search list restore ' + failure):
+                                signing.sign(self.app, self.certificate)
+                verify.assert_not_called()
+                self.assertTrue(state['deleted'])
+                self.assertFalse(state['keychain'].parent.exists())
+
+    def test_restore_readback_mismatch_fails_even_when_security_reports_success(self):
+        state, run = self.mock_signing_commands()
+        with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
+            with mock.patch.object(signing, 'command', side_effect=run):
+                with mock.patch.object(signing, 'keychain_search_list',
+                                       side_effect=[state['previous'], ['/tmp/unexpected.keychain-db']]):
+                    # The helper is mocked, so mark the initial snapshot for the
+                    # separate command fixture's creation-order assertion.
+                    state['snapshots'] = 1
+                    with mock.patch.object(signing, 'verify') as verify:
+                        with self.assertRaisesRegex(RuntimeError, 'search list was not restored'):
+                            signing.sign(self.app, self.certificate)
+        verify.assert_not_called()
+        self.assertTrue(state['deleted'])
+        self.assertFalse(state['keychain'].parent.exists())
+
+    def test_verification_runs_only_after_search_list_and_temporary_keychain_are_restored(self):
+        state, run = self.mock_signing_commands()
+
         def verify(app, certificate):
-            self.assertFalse(state['trusted'])
+            self.assertEqual(state['search_list'], state['previous'])
+            self.assertEqual(state['snapshots'], 2)
             self.assertTrue(state['deleted'])
             self.assertFalse(state['keychain'].parent.exists())
 
@@ -292,6 +309,23 @@ class SigningTests(unittest.TestCase):
                 with mock.patch.object(signing, 'verify', side_effect=verify) as verification:
                     signing.sign(self.app, self.certificate)
         verification.assert_called_once_with(self.app.resolve(), self.certificate)
+
+    def test_unsafe_search_list_snapshot_stops_before_keychain_creation(self):
+        def run(*args, **kwargs):
+            if args[:2] == ('openssl', 'x509'):
+                return self.der
+            if args[:2] == ('/usr/bin/security', 'list-keychains'):
+                self.assertNotIn('-s', args)
+                return b'"/tmp/unterminated.keychain-db'
+            self.assertEqual(args[:2], ('openssl', 'pkcs12'))
+            return b'fake public PEM'
+
+        with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
+            with mock.patch.object(signing, 'command', side_effect=run):
+                with mock.patch.object(signing, 'verify') as verify:
+                    with self.assertRaisesRegex(RuntimeError, 'parse the keychain search list'):
+                        signing.sign(self.app, self.certificate)
+        verify.assert_not_called()
 
     def verify_with(self, designated, extracted):
         def run(*args, **kwargs):
@@ -329,6 +363,29 @@ class SigningTests(unittest.TestCase):
                 signing.verify(self.app, self.certificate)
 
 
+class KeychainSearchListTests(unittest.TestCase):
+    def test_paths_with_spaces_are_preserved_in_order_without_reading_keychain_contents(self):
+        with mock.patch.object(signing, 'command', return_value=(
+                b'    "/Users/fake/Library/Keychains/login.keychain-db"\n'
+                b'    "/tmp/a fake keychain.keychain-db"\n')) as command:
+            self.assertEqual(signing.keychain_search_list(), [
+                '/Users/fake/Library/Keychains/login.keychain-db', '/tmp/a fake keychain.keychain-db'])
+        command.assert_called_once_with('/usr/bin/security', 'list-keychains', '-d', 'user')
+
+    def test_empty_search_list_can_be_restored(self):
+        with mock.patch.object(signing, 'command', return_value=b'\n'):
+            self.assertEqual(signing.keychain_search_list(), [])
+
+    def test_invalid_path_listing_is_rejected_without_mutation(self):
+        for listing in (b'"/tmp/unclosed', b'"relative.keychain-db"', b'""',
+                        b'"/tmp/null\x00.keychain-db"', b'"/tmp/new\nline.keychain-db"', b'\xff'):
+            with self.subTest(listing=listing):
+                with mock.patch.object(signing, 'command', return_value=listing) as command:
+                    with self.assertRaisesRegex(RuntimeError, 'parse the keychain search list'):
+                        signing.keychain_search_list()
+                command.assert_called_once_with('/usr/bin/security', 'list-keychains', '-d', 'user')
+
+
 class ProcessIsolationTests(unittest.TestCase):
     def test_commands_never_inherit_signing_secret_or_expose_failed_diagnostics(self):
         secret = 'FAKE-SECRET-MUST-NOT-APPEAR'
@@ -347,6 +404,14 @@ class ProcessIsolationTests(unittest.TestCase):
                 self.assertNotIn(signing.SECRET_NAME, run.call_args.kwargs['env'])
                 self.assertEqual(run.call_args.kwargs['env']['WORKLOG_TEST'], 'visible')
 
+    def test_command_timeout_is_bounded_and_does_not_expose_arguments_or_output(self):
+        secret = 'FAKE-CREDENTIAL-IN-ARGS-AND-OUTPUT'
+        with mock.patch.object(signing.subprocess, 'run', side_effect=subprocess.TimeoutExpired(
+                ['/fake/fake-tool', secret], 30, output=secret.encode(), stderr=secret.encode())) as run:
+            with self.assertRaisesRegex(RuntimeError, '^Code signing command timed out: fake-tool$'):
+                signing.command('/fake/fake-tool', secret)
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+
     def test_certificate_conversion_never_inherits_secret_or_exposes_failed_diagnostics(self):
         secret = 'FAKE-P12-NOT-FOR-OPENSSL-ENV'
         result = subprocess.CompletedProcess(['openssl'], 1, stdout=b'', stderr=secret.encode())
@@ -363,47 +428,14 @@ class ProcessIsolationTests(unittest.TestCase):
                      'requires a disposable macOS GitHub-hosted runner')
 class MacOSSigningContinuityTests(unittest.TestCase):
     def setUp(self):
-        # Diagnostics here run ONLY on freshly generated fake identities.
+        # Only this fixture's freshly generated identities may expose diagnostics.
         original_run = subprocess.run
 
         def run(*args, **kwargs):
+            result = original_run(*args, **kwargs)
             argv = args[0]
-            try:
-                result = original_run(*args, **kwargs)
-            except subprocess.TimeoutExpired:
-                if 'remove-trusted-cert' in argv:
-                    replacement = original_run(
-                        ['/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
-                         '-d', '-r', 'unspecified', '-p', 'codeSign', '-p', 'basic', argv[-1]],
-                        capture_output=True, timeout=10,
-                    )
-                    sys.stderr.write(f'Synthetic revoke trust: exit={replacement.returncode} '
-                                     + replacement.stderr.decode())
-                    for policy in ('basic', 'codeSign'):
-                        check = original_run(['/usr/bin/security', 'verify-cert', '-c', argv[-1],
-                                              '-p', policy], capture_output=True, timeout=10)
-                        sys.stderr.write(f'Synthetic trust after revoke {policy}: exit={check.returncode} '
-                                         + check.stderr.decode())
-                raise
-            if argv[0] == '/usr/bin/codesign' and result.returncode and '--keychain' in argv:
-                sys.stderr.write('Synthetic codesign: ' + result.stderr.decode())
-                keychain = argv[argv.index('--keychain') + 1]
-                for policy in ('basic', 'codesigning'):
-                    check = original_run(['/usr/bin/security', 'find-identity', '-p', policy, keychain],
-                                         capture_output=True, timeout=10)
-                    sys.stderr.write(f'Synthetic identity {policy}: ' + check.stdout.decode())
-                previous = original_run(['/usr/bin/security', 'list-keychains', '-d', 'user'],
-                                        capture_output=True, check=True, timeout=10)
-                paths = shlex.split(previous.stdout.decode())
-                try:
-                    original_run(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', keychain],
-                                 capture_output=True, check=True, timeout=10)
-                    retry = original_run(argv, capture_output=True, timeout=10)
-                    sys.stderr.write(f'Synthetic restricted search list: exit={retry.returncode} '
-                                     + retry.stderr.decode())
-                finally:
-                    original_run(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', *paths],
-                                 capture_output=True, check=True, timeout=10)
+            if argv[0] == '/usr/bin/codesign' and '--keychain' in argv and result.returncode:
+                sys.stderr.write('Synthetic codesign: ' + result.stderr.decode(errors='replace'))
             return result
 
         patch = mock.patch.object(signing.subprocess, 'run', side_effect=run)

@@ -78,7 +78,9 @@ jobs:
       - name: Test release tooling
         timeout-minutes: 5
         run: |
-          export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+          openssl_bin="$(brew --prefix openssl@3)/bin"
+          printf '%s\n' "$openssl_bin" >> "$GITHUB_PATH"
+          export PATH="$openssl_bin:$PATH"
           python3 -m unittest discover -s distribution/tests -v
       - name: Test WorkLogCore
         timeout-minutes: 20

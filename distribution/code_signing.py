@@ -2,8 +2,9 @@
 """Sign releases with one persistent identity, without opening the login Keychain.
 
 Only a disposable keychain containing the dedicated release identity is used.
-Signing is restricted to disposable GitHub-hosted runners because modern
-codesign also requires temporary signer-side trust for a self-signed identity.
+Signing is restricted to disposable GitHub-hosted runners because codesign
+requires temporarily restricting the user keychain search list to this keychain.
+System certificate trust is never modified.
 The committed public certificate pins both the signer and designated requirement.
 Do not add hardened runtime/library validation: Sparkle has a different signer.
 """
@@ -12,6 +13,7 @@ import hashlib
 import os
 import plistlib
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,7 +43,7 @@ def certificate_der(certificate):
     # OpenSSL output here is public DER, not a secret.
     result = subprocess.run(
         ['openssl', 'x509', '-in', str(certificate), '-outform', 'DER'],
-        capture_output=True,
+        capture_output=True, timeout=30,
         env={key: value for key, value in os.environ.items() if key != SECRET_NAME},
     )
     if result.returncode or not result.stdout:
@@ -72,11 +74,22 @@ def verify(app, certificate=PUBLIC_FILE):
             raise RuntimeError('The app signer differs from the pinned certificate')
 
 
+def keychain_search_list():
+    # Read paths only, never the contents of any pre-existing keychain.
+    try:
+        paths = shlex.split(command('/usr/bin/security', 'list-keychains', '-d', 'user').decode())
+    except (UnicodeDecodeError, ValueError):
+        raise RuntimeError('Unable to parse the keychain search list') from None
+    if any(not Path(path).is_absolute() or '\x00' in path or '\n' in path for path in paths):
+        raise RuntimeError('Unable to parse the keychain search list')
+    return paths
+
+
 def sign(app, certificate=PUBLIC_FILE):
     if sys.platform != 'darwin':
         raise RuntimeError('App code signing requires macOS')
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
-        raise RuntimeError('Signing requires a disposable GitHub-hosted runner; local trust is not modified')
+        raise RuntimeError('Signing requires a disposable GitHub-hosted runner')
     app = Path(app).resolve()
     with (app / 'Contents/Info.plist').open('rb') as stream:
         if plistlib.load(stream).get('CFBundleIdentifier') != BUNDLE_ID:
@@ -105,7 +118,7 @@ def sign(app, certificate=PUBLIC_FILE):
             stream.write(identity)
         keychain = str(directory / 'release.keychain-db')
         password = secrets.token_urlsafe(32)
-        trusted = False
+        previous_keychains = keychain_search_list()
         try:
             command('/usr/bin/security', 'create-keychain', '-p', password, keychain)
             command('/usr/bin/security', 'set-keychain-settings', '-lut', '3600', keychain)
@@ -115,23 +128,21 @@ def sign(app, certificate=PUBLIC_FILE):
             p12.unlink()
             command('/usr/bin/security', 'set-key-partition-list', '-S', 'apple-tool:,apple:',
                     '-s', '-k', password, keychain)
-            # TN3161: codesign needs a trusted signing identity on the build Mac.
-            # Identity lookup also uses Basic X.509 policy (SecItem _FilterWithTrust).
-            # Limit trust to these two policies on a disposable runner, never SSL.
-            command('/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
-                    '-d', '-r', 'trustRoot', '-p', 'codeSign', '-p', 'basic', '-k', keychain, str(certificate))
-            trusted = True
+            # --keychain only RESTRICTS a search; it does not add the keychain
+            # to the search list (Apple DTS forums/thread/728073). Exclude all
+            # pre-existing keychains while resolving the dedicated identity.
+            command('/usr/bin/security', 'list-keychains', '-d', 'user', '-s', keychain)
             command('/usr/bin/codesign', '--force', '--sign', fingerprint,
                     '--keychain', keychain, '--timestamp=none',
                     '--requirements', '=designated => ' + expected, str(app))
         finally:
             try:
-                if trusted:
-                    command('/usr/bin/sudo', '-n', '/usr/bin/security', 'remove-trusted-cert',
-                            '-d', str(certificate))
+                command('/usr/bin/security', 'list-keychains', '-d', 'user', '-s', *previous_keychains)
+                if keychain_search_list() != previous_keychains:
+                    raise RuntimeError('The original keychain search list was not restored')
             finally:
                 command('/usr/bin/security', 'delete-keychain', keychain)
-    # Verify after removing signer-side trust: recipients need only the pinned DR.
+    # This works without installing or trusting the certificate on any Mac.
     verify(app, certificate)
 
 
