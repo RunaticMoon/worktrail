@@ -21,7 +21,13 @@ import WorkLogCore
     @State private var selectedResult: SearchResultSelection?
     @State private var openingId: String?
     @State private var isActive = false
+    @State private var isWindowActive = false
+    @State private var hasAppeared = false
     @State private var hasInitialized = false
+    // The model is shared with the other search window; presentation belongs to this screen.
+    @State private var recordResults: [SearchHit] = []
+    @State private var recordSearchError: String?
+    @State private var previewVisible = false
     @State private var secretNotice: String?
     @State private var secretSelection = SearchSecretSelection()
     @FocusState private var focusedResult: SearchResultSelection?
@@ -39,7 +45,9 @@ import WorkLogCore
     @State private var filterError: String?
     @State private var filtersExpanded = false
     @State private var typeFilter: SearchSourceType?
-    @State private var reportExcludedFilters: (projectIds: [String], tagIds: [String])?
+    @State private var projectFilterIds: [String] = []
+    @State private var tagFilterIds: [String] = []
+    @State private var filterRange: DateRange?
     @State private var aiExpanded = false
     @State private var sourceOpenedFromQuery = false
 
@@ -60,6 +68,7 @@ import WorkLogCore
         .tint(WorkLogTheme.accent)
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
+        .background(SearchWindowActivityObserver(onChange: windowActivityDidChange))
         .worklogFocusContent { returnToResults() }
     }
 
@@ -127,12 +136,17 @@ import WorkLogCore
         .onChange(of: filtersExpanded) { _, expanded in
             if !expanded { focusQuery() }
         }
+        .onChange(of: model.hits) { _, _ in refreshRecordResults() }
+        .onChange(of: model.errorMessage) { _, _ in refreshRecordResults() }
     }
 
     private var searchLifecycle: some View {
         searchWithQueryObservers
         .onAppear { initializeSearch() }
-        .onDisappear { isActive = false; cancelSecretOpening() }
+        .onDisappear {
+            hasAppeared = false; isActive = false; isWindowActive = false
+            cancelSecretOpening()
+        }
         .task(id: openingId) { await openSecretSelection() }
     }
 
@@ -161,16 +175,7 @@ import WorkLogCore
         }
         // A manual type from another scope must never hide this scope's results.
         typeFilter = nil
-        if current == .reports {
-            // SearchIndex's relationship filters exclude reports. Suspend them only here.
-            reportExcludedFilters = (model.projectIds, model.tagIds)
-            model.projectIds = []
-            model.tagIds = []
-        } else if previous == .reports, let excluded = reportExcludedFilters {
-            model.projectIds = excluded.projectIds
-            model.tagIds = excluded.tagIds
-            reportExcludedFilters = nil
-        }
+        // Relationship filters stay local, and are suspended only while searching reports.
         updateSearch()
         validateSelection()
         focusQuery()
@@ -196,7 +201,8 @@ import WorkLogCore
 
     /// The scope itself is navigation, not a user-applied filter.
     private var activeFilterCount: Int {
-        (typeFilter == nil ? 0 : 1) + model.projectIds.count + model.tagIds.count + (model.range == nil ? 0 : 1)
+        (typeFilter == nil ? 0 : 1) + (scope == .reports ? 0 : projectFilterIds.count + tagFilterIds.count)
+            + (filterRange == nil ? 0 : 1)
     }
 
     private var keyboardHints: some View {
@@ -217,11 +223,11 @@ import WorkLogCore
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if scope != .secret {
-                            if model.errorMessage != nil {
+                            if recordSearchError != nil {
                                 RecoveryNotice(failed: "검색하지 못했습니다", preserved: "입력과 필터는 그대로입니다",
-                                    retryTitle: "다시 검색", retry: { model.search() })
+                                    retryTitle: "다시 검색", retry: { updateSearch() })
                             }
-                            if aiExpanded, model.isAIAvailable, let message = model.aiMessage {
+                            if isActive, aiExpanded, model.isAIAvailable, let message = model.aiMessage {
                                 Label(message, systemImage: "info.circle")
                                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -230,13 +236,13 @@ import WorkLogCore
                                 Text("필터는 일반 검색 결과에만 적용됩니다. Secret은 제목·그룹명으로 검색합니다.")
                                     .font(.caption).foregroundStyle(WorkLogTheme.muted)
                             }
-                            if model.isSearching { ProgressView("원문 검색 중…") }
-                            if !model.hits.isEmpty {
+                            if isActive, model.isSearching { ProgressView("원문 검색 중…") }
+                            if !recordHits.isEmpty {
                                 if scope == .all && !secretTitles.isEmpty {
                                     Text("기록").font(.caption.weight(.semibold)).foregroundStyle(WorkLogTheme.muted)
                                         .padding(.vertical, 8).accessibilityAddTraits(.isHeader)
                                 }
-                                ForEach(model.hits, id: \.key) { hit in
+                                ForEach(recordHits, id: \.key) { hit in
                                     resultRow(hit).id(SearchResultSelection.record(hit.key))
                                 }
                             }
@@ -260,10 +266,10 @@ import WorkLogCore
                         } else if includesSecrets, secrets == nil {
                             InlineNotice(message: "Secret 검색을 연결하지 못했습니다. 기록 검색은 사용할 수 있습니다.")
                         }
-                        if resultIDs.isEmpty && (scope == .secret || !model.isSearching)
-                            && (scope == .secret || model.errorMessage == nil)
+                        if resultIDs.isEmpty && (scope == .secret || !isActive || !model.isSearching)
+                            && (scope == .secret || recordSearchError == nil)
                             && !(scope == .secret && (secrets == nil || secretSearchError != nil)) { emptyResults }
-                        if scope != .secret, !secretSelected, aiExpanded {
+                        if isActive, scope != .secret, !secretSelected, aiExpanded {
                             if model.isAskingAI { ProgressView("답변 생성 중…").controlSize(.small) }
                             if let answer = model.answer { answerView(answer) }
                         }
@@ -277,28 +283,36 @@ import WorkLogCore
                 }
                 .onAppear { if let key = selectedResult { proxy.scrollTo(key) } }
             }
-            if scope != .secret, isRecordSelected, model.isPreviewVisible, let hit = model.selectedHit {
+            if scope != .secret, previewVisible, let hit = selectedRecordHit {
                 ScrollView { preview(hit) }.frame(maxHeight: 160)
             }
         }
     }
 
     private func initializeSearch() {
-        isActive = true
+        hasAppeared = true
+        isActive = isWindowActive
         focused = contentAutofocus
         guard !hasInitialized else { updateSearch(); validateSelection(); return }
         hasInitialized = true
         query = model.text
         recordQuery = query
-        typeFilter = model.types?.count == 1 ? model.types?.first : nil
-        if let key = model.selectedKey { selectedResult = .record(key) }
+        // A new screen starts at All, without inheriting the other screen's scope or filters.
         let today = environment.calendar.workDate(of: environment.options.clock.now())
-        filterStart = model.range?.start ?? today
-        filterEnd = model.range.map { environment.calendar.adding(days: -1, to: $0.endExclusive) } ?? today
-        useDates = model.range != nil
+        filterStart = today
+        filterEnd = today
         do { projects = try environment.repo.projects(); tags = try environment.repo.tags() }
         catch { filterError = "필터 후보를 불러오지 못했습니다." }
         updateSearch()
+    }
+
+    private func windowActivityDidChange(_ active: Bool) {
+        isWindowActive = active
+        isActive = active && hasAppeared
+        guard isActive, hasInitialized else { return }
+        // Panels retain their hosting view when hidden, so onAppear alone cannot restore scope.
+        updateSearch()
+        validateSelection()
     }
 
     private var showsSecretKeys: Bool {
@@ -312,6 +326,17 @@ import WorkLogCore
         return false
     }
 
+    private var selectedRecordHit: SearchHit? {
+        guard case .record(let key) = selectedResult else { return nil }
+        return recordHits.first { $0.key == key }
+    }
+
+    private var recordHits: [SearchHit] {
+        guard scope != .secret else { return [] }
+        guard let scopedTypes else { return recordResults }
+        return recordResults.filter { scopedTypes.contains($0.sourceType) }
+    }
+
     private var secretSelected: Bool {
         if case .secret = selectedResult { return true }
         return showsSecretKeys
@@ -319,24 +344,43 @@ import WorkLogCore
 
     private var resultIDs: [SearchResultSelection] {
         var ids: [SearchResultSelection] = []
-        if scope != .secret { ids += model.hits.map { SearchResultSelection.record($0.key) } }
+        if scope != .secret { ids += recordHits.map { SearchResultSelection.record($0.key) } }
         if includesSecrets, secrets != nil { ids += secretTitles.map { SearchResultSelection.secret($0.id) } }
         return ids
     }
 
     private func updateSearch() {
+        guard isActive, hasInitialized else { return }
         // Only the user-authored query is copied. Never assign a Secret title/key/value to SearchModel.
         if scope != .secret {
             if model.text != query { model.text = query }
             if model.types != scopedTypes { model.types = scopedTypes }
+            let projectIds = scope == .reports ? [] : projectFilterIds
+            let tagIds = scope == .reports ? [] : tagFilterIds
+            if model.projectIds != projectIds { model.projectIds = projectIds }
+            if model.tagIds != tagIds { model.tagIds = tagIds }
+            if model.range != filterRange { model.range = filterRange }
             model.search()
+            recordResults = model.hits
+            recordSearchError = model.errorMessage
+            if let hit = selectedRecordHit { model.select(hit) }
+            model.isPreviewVisible = previewVisible
         }
         refreshSecretTitles()
         completedQuery = query
     }
 
+    private func refreshRecordResults() {
+        // AppController can refresh the shared model after a source edit.
+        guard isActive, scope != .secret, model.text == query, model.types == scopedTypes,
+              model.projectIds == (scope == .reports ? [] : projectFilterIds),
+              model.tagIds == (scope == .reports ? [] : tagFilterIds), model.range == filterRange else { return }
+        recordResults = model.hits
+        recordSearchError = model.errorMessage
+    }
+
     private func refreshSecretTitles() {
-        guard isActive else { return }
+        guard hasAppeared else { return }
         guard includesSecrets else { secretTitles = []; secretSearchError = nil; return }
         guard secrets != nil else { secretTitles = []; secretSearchError = nil; return }
         // App-owned metadata results: leave the shared Secret screen's query and titles untouched.
@@ -353,7 +397,7 @@ import WorkLogCore
         selectedResult = key
         switch key {
         case .record(let recordKey):
-            if let hit = model.hits.first(where: { $0.key == recordKey }) { model.select(hit) }
+            if isActive, let hit = recordHits.first(where: { $0.key == recordKey }) { model.select(hit) }
         case .secret(let id): secretSelection.selectedTitleId = id
         }
     }
@@ -415,7 +459,8 @@ import WorkLogCore
         }
         let requestWindow = NSApp.keyWindow
         if secrets.isLocked { await secrets.unlock() }
-        guard !Task.isCancelled, isActive, openingId == id, requestWindow?.isVisible == true,
+        // Device authentication can temporarily take key focus; the original screen must remain visible.
+        guard !Task.isCancelled, hasAppeared, openingId == id, requestWindow?.isVisible == true,
               !secrets.isLocked, !secrets.hasUnsavedDraft, !secrets.hasRecoverableDraft,
               (secrets.editorOwner == nil || !secrets.isEditing), selectedResult == .secret(id) else {
             if secrets.hasRecoverableDraft { secretNotice = "Secret 화면에서 보존된 초안을 확인한 뒤 다시 여세요." }
@@ -438,19 +483,20 @@ import WorkLogCore
     }
 
     private func askAI() {
-        guard scope != .secret, !secretSelected else { return }
+        guard isActive, scope != .secret, !secretSelected else { return }
         // Explicit invocation passes only the typed question. GroundedAnswerService uses ordinary records.
-        if model.text != query { model.text = query }
+        updateSearch()
         guard model.canAskAI else { return }
         aiExpanded = true
         Task {
-            guard scope != .secret, !secretSelected else { return }
+            guard isActive, scope != .secret, !secretSelected else { return }
+            updateSearch()
             await model.askAI()
         }
     }
 
     private func handleKey(_ event: NSEvent, editingText: Bool) -> Bool {
-        guard source == nil else { return false }
+        guard isActive, source == nil else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers == .command, event.keyCode == 3 {
             filtersExpanded = false
@@ -521,7 +567,7 @@ import WorkLogCore
         }
         if navigatingResults, modifiers == .command, event.keyCode == 14,
            case .record(let key) = selectedResult ?? resultIDs.first,
-           let hit = model.hits.first(where: { $0.key == key }), hit.sourceType != .report {
+           let hit = recordHits.first(where: { $0.key == key }), hit.sourceType != .report {
             if !event.isARepeat { selectResult(.record(key)); openSource(hit, editing: true) }
             return true
         }
@@ -538,14 +584,14 @@ import WorkLogCore
         if isRecordSelected, event.keyCode == 49,
            (navigatingResults && modifiers == .option && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || modifiers.isEmpty && !editingText && focusedResult != nil) {
-            model.togglePreview(); return true
+            togglePreview(); return true
         }
         if navigatingResults, modifiers.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
             if !event.isARepeat, let selectedResult = selectedResult ?? resultIDs.first {
                 selectResult(selectedResult)
                 switch selectedResult {
                 case .record(let key):
-                    if let hit = model.hits.first(where: { $0.key == key }) { openSource(hit) }
+                    if let hit = recordHits.first(where: { $0.key == key }) { openSource(hit) }
                 case .secret(let id): requestSecret(id)
                 }
             }
@@ -649,16 +695,16 @@ import WorkLogCore
             }
             }
             Spacer(minLength: 0)
-            if scope != .secret, isRecordSelected, model.selectedHit != nil {
-                Button { model.togglePreview() } label: {
-                    Label(model.isPreviewVisible ? "미리보기 닫기" : "미리보기", systemImage: "doc.text.viewfinder")
+            if scope != .secret, selectedRecordHit != nil {
+                Button(action: togglePreview) {
+                    Label(previewVisible ? "미리보기 닫기" : "미리보기", systemImage: "doc.text.viewfinder")
                 }
                 .worklogHelp("미리보기", keys: "⌥Space · 결과 행 Space")
             }
             if scope != .secret, !secretSelected, model.isAIAvailable {
                 Button(action: askAI) { Label("AI 질문", systemImage: "sparkles") }
                     .disabled(!model.canAskAI)
-                    .worklogHelp(model.tagIds.isEmpty ? "입력한 질문에 기록을 근거로 답변" : "AI 질문은 태그 필터를 해제한 뒤 실행", keys: "⌘Return")
+                    .worklogHelp(scope == .reports || tagFilterIds.isEmpty ? "입력한 질문에 기록을 근거로 답변" : "AI 질문은 태그 필터를 해제한 뒤 실행", keys: "⌘Return")
             }
         }
         .controlSize(.small)
@@ -681,17 +727,17 @@ import WorkLogCore
                     ForEach(availableTypes, id: \.self) { Text(sourceLabel($0)).tag($0.rawValue) }
                 }
             }
-            Picker("프로젝트", selection: Binding(get: { model.projectIds.first ?? "" }, set: {
-                model.projectIds = $0.isEmpty ? [] : [$0]
-                model.search()
+            Picker("프로젝트", selection: Binding(get: { projectFilterIds.first ?? "" }, set: {
+                projectFilterIds = $0.isEmpty ? [] : [$0]
+                updateSearch()
             })) {
                 Text("전체").tag("")
                 ForEach(projects) { Text($0.name).tag($0.id) }
             }
             .disabled(scope == .reports)
-            Picker("태그", selection: Binding(get: { model.tagIds.first ?? "" }, set: {
-                model.tagIds = $0.isEmpty ? [] : [$0]
-                model.search()
+            Picker("태그", selection: Binding(get: { tagFilterIds.first ?? "" }, set: {
+                tagFilterIds = $0.isEmpty ? [] : [$0]
+                updateSearch()
             })) {
                 Text("전체").tag("")
                 ForEach(tags) { Text($0.name).tag($0.id) }
@@ -708,7 +754,7 @@ import WorkLogCore
                 dateFilters(start: start, end: end)
             }
             if let filterError { InlineNotice(message: filterError) }
-            if !model.tagIds.isEmpty {
+            if scope != .reports, !tagFilterIds.isEmpty {
                 Text("태그 필터는 로컬 원문 검색에 적용됩니다.").font(.caption).foregroundStyle(WorkLogTheme.muted)
             }
             if activeFilterCount > 0 { Button("필터 초기화", action: resetFilters) }
@@ -873,20 +919,25 @@ import WorkLogCore
         useDates = false
         filterError = nil
         typeFilter = nil
-        model.projectIds = []
-        model.tagIds = []
-        model.range = nil
+        if scope != .reports { projectFilterIds = []; tagFilterIds = [] }
+        filterRange = nil
         updateSearch()
     }
 
     private func applyDates() {
         filterError = nil
-        if !useDates { model.range = nil; model.search(); return }
+        if !useDates { filterRange = nil; updateSearch(); return }
         guard let start = filterStart, let end = filterEnd, start <= end else {
             filterError = "종료일은 시작일보다 빠를 수 없습니다."; return
         }
-        model.range = DateRange(start: start, endExclusive: environment.calendar.adding(days: 1, to: end))
-        model.search()
+        filterRange = DateRange(start: start, endExclusive: environment.calendar.adding(days: 1, to: end))
+        updateSearch()
+    }
+
+    private func togglePreview() {
+        guard isActive, selectedRecordHit != nil else { return }
+        previewVisible.toggle()
+        model.isPreviewVisible = previewVisible
     }
 
     @ViewBuilder private var sourceSheet: some View {
@@ -911,7 +962,7 @@ import WorkLogCore
         guard let memo = detail.memo else { throw WorkLogError.notFound("memo") }
         _ = try environment.repo.updateMemoBody(id: memo.id, body: body, workDate: memo.workDate)
         detail.load(id: memo.id)
-        model.search()
+        updateSearch()
     }
 
     private func taskSourceSheet(_ detail: TaskDetailModel) -> some View {
@@ -985,6 +1036,71 @@ import WorkLogCore
         case .task: return "checkmark.circle"
         case .activity: return "bolt"
         case .report: return "doc.text"
+        }
+    }
+}
+
+/// Observe the hosting window rather than app activation: the hotkey panel is non-activating.
+@MainActor private struct SearchWindowActivityObserver: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> WindowView {
+        let view = WindowView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: WindowView, context: Context) { view.onChange = onChange }
+    static func dismantleNSView(_ view: WindowView, coordinator: ()) { view.stopObserving() }
+
+    final class WindowView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopObserving()
+            guard window != nil else { return }
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.publishActivity(keyWindow: notification.object as? NSWindow)
+                }
+            })
+            observers.append(center.addObserver(forName: NSWindow.didResignKeyNotification,
+                object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    guard let self, self.ownsKeyWindow(notification.object as? NSWindow) else { return }
+                    self.onChange?(false)
+                }
+            })
+            // Attachment can happen during a SwiftUI update, before onAppear.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil else { return }
+                self.publishActivity(keyWindow: NSApp.keyWindow)
+            }
+        }
+
+        private func publishActivity(keyWindow: NSWindow?) {
+            onChange?(window?.isVisible == true && !isHiddenOrHasHiddenAncestor && ownsKeyWindow(keyWindow))
+        }
+
+        private func ownsKeyWindow(_ candidate: NSWindow?) -> Bool {
+            guard let window else { return false }
+            var current = candidate
+            while let keyWindow = current {
+                if keyWindow === window { return true }
+                // Keep this screen's filters and source sheet associated with their owner.
+                current = keyWindow.sheetParent ?? keyWindow.parent
+            }
+            return false
+        }
+
+        func stopObserving() {
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+            observers = []
         }
     }
 }
