@@ -104,3 +104,5 @@ bash distribution/verify-dmg.sh "release/WorkLog-$(cat VERSION)-arm64.dmg" "$(ca
 같은 release 디렉터리에 이전 버전 DMG가 있으면 manifest 검사가 실패한다. 빌드·DMG·Sparkle 런타임 검증은 macOS에서 실행한다.
 
 서명 회귀 테스트는 Linux에서 인증서/P12 생성·검증·실패 시 차단을, 일회용 macOS CI에서는 새 가짜 인증서·임시 keychain으로 서로 다른 두 앱 바이너리의 DR 호환성과 가짜 항목의 재승인 없는 읽기·다른 서명자 거부를 확인한다. 패키징한 앱의 임시 복사본에도 가짜 인증서로 서명해 Sparkle 로더 smoke를 실행한다. macOS 테스트에는 Homebrew `openssl@3`를 PATH 앞에 둔다. 이 테스트는 실제 사용자의 Keychain 경고나 기존 항목의 최초 재승인을 자동으로 검증하지 않는다.
+
+2026-10-19 검증: [macOS CI 39239121884](https://github.com/RunaticMoon/worktrail/actions/runs/39239121884)에서 앱 전체 빌드, Core 테스트 826개, 배포 도구 테스트, 가짜 Keychain 업데이트 연속성·다른 서명자 거부, DMG 패키징과 자체서명 앱의 Sparkle 로더 실행을 통과했다. 실제 사용자 항목의 최초 재승인과 Sparkle의 전체 업데이트 설치는 별도 확인 대상이다.

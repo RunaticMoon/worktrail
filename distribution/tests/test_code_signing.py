@@ -428,21 +428,6 @@ class ProcessIsolationTests(unittest.TestCase):
                      and os.environ.get('GITHUB_ACTIONS') == 'true',
                      'requires a disposable macOS GitHub-hosted runner')
 class MacOSSigningContinuityTests(unittest.TestCase):
-    def setUp(self):
-        # Only this fixture's freshly generated identities may expose diagnostics.
-        original_run = subprocess.run
-
-        def run(*args, **kwargs):
-            result = original_run(*args, **kwargs)
-            argv = args[0]
-            if argv[0] == '/usr/bin/codesign' and result.returncode:
-                sys.stderr.write('Synthetic codesign: ' + result.stderr.decode(errors='replace'))
-            return result
-
-        patch = mock.patch.object(signing.subprocess, 'run', side_effect=run)
-        patch.start()
-        self.addCleanup(patch.stop)
-
     def test_updated_binary_satisfies_previous_release_requirement_but_another_signer_does_not(self):
         # No existing identity, certificate, private key, or login Keychain is read.
         # Use the same fresh-generation helper as provisioning, never provision().

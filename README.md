@@ -15,7 +15,7 @@
 | `Sources/WorkLogApp` | macOS SwiftUI/AppKit 앱(메뉴 막대, 빠른 입력 패널, 화면) | macOS 26 빌드·가짜 fixture UI 검증 (범위는 UI 문서) |
 | `Sources/worklog` | 개발·시연용 CLI | Linux 실행 확인 |
 | `Tests/WorkLogCoreTests` | XCTest | Linux |
-| `scripts/build-macos-app.sh`, `scripts/build-dmg.sh` | `.app` 번들(ad-hoc 서명)과 `WorkLog-<VERSION>-arm64.dmg` 생성 | macOS CI에서 실행 |
+| `scripts/build-macos-app.sh`, `scripts/build-dmg.sh` | `.app` 번들과 `WorkLog-<VERSION>-arm64.dmg` 생성(로컬은 ad-hoc, 릴리즈는 고정 인증서 서명) | macOS CI에서 실행 |
 | `distribution/` | 릴리즈 버전·해시 검사(`release.py`), DMG 검증, Release 업로드 | `release.py`는 Linux 단위 테스트 |
 | `.github/workflows/macos.yml` | macOS 26 러너에서 전체 빌드·테스트·DMG 생성 검증 | PR·push마다 실행 |
 | `.github/workflows/macos-release.yml` | 수동 실행: 태그·버전 검사 후 DMG를 artifact/draft/공개 Release로 | 실제 릴리즈 실행 **미검증** |
@@ -98,7 +98,7 @@ swift run worklog --data-dir "$D" backup create && swift run worklog --data-dir 
 
 | 권한 | 용도 | 비고 |
 |---|---|---|
-| Keychain | Secret 암호화 키 보관 | ad-hoc 서명 빌드는 접근 시 허용 여부를 물을 수 있음 |
+| Keychain | Secret 암호화 키 보관 | 릴리즈는 고정 서명으로 업데이트 간 승인을 유지. 기존 ad-hoc에서 첫 전환은 항상 허용 재승인이 필요할 수 있음([배포 안내](docs/RELEASE.md)) |
 | Touch ID/암호 (LocalAuthentication) | Secret 보관함 열기 | 30분 미사용·화면 잠금·종료 시 자동 잠금(제안값) |
 | 전역 단축키 | 빠른 입력 `⌃⌥Space`, 검색 `⌃⌥D` (기본값) | Carbon `RegisterEventHotKey` — 손쉬운 사용 권한 불필요(미검증). 기존 settings.json의 저장값은 보존하며 설정의 '기본값으로 되돌리기'로 새 기본값 적용(decisions T28) |
 | 클립보드 | Secret 값 복사 | 120초 뒤, 그 사이 다른 복사가 없을 때만 지움(제안값) |
