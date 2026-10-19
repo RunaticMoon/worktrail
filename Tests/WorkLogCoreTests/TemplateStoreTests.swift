@@ -201,13 +201,48 @@ final class TemplateStoreTests: XCTestCase {
         let composed = try store.composeInstructions(versionId: submission.id)
         XCTAssertTrue(composed.hasPrefix(DefaultPrompts.commonInstructions + "\n\n"))
         XCTAssertTrue(composed.contains(submission.instructions))
-        XCTAssertTrue(composed.contains("\n\n출력 예시:\n" + submission.outputExample))
+        XCTAssertTrue(composed.contains("문체 참고용 출력 예시 (JSON 안의 문장에만 적용):\n" + submission.outputExample))
+        let schemaText = try XCTUnwrap(composed.components(separatedBy: "앱 필수 출력 JSON Schema:\n").last)
+        let schema = try JSONDecoder().decode(JSONValue.self, from: Data(schemaText.utf8))
+        XCTAssertEqual(schemaText, try StableJSON.string(schema), "재실행 입력 digest를 위해 키 순서를 고정한다")
+        XCTAssertEqual(schema["properties"]?["jobType"]?["enum"]?.arrayValue, [.string("submission_weekly")])
+        XCTAssertTrue(composed.contains("facts.tasks"))
+        XCTAssertTrue(composed.contains("facts.confirmedPlans"))
 
         // outputExample이 비어 있으면 출력 예시 섹션이 없다.
         let daily = try XCTUnwrap(try store.activeVersion(templateId: dailyId))
         let dailyComposed = try store.composeInstructions(versionId: daily.id)
         XCTAssertFalse(dailyComposed.contains("출력 예시:"))
         XCTAssertTrue(dailyComposed.hasPrefix("너는 개인의 업무 기록을 정리하는 보조자다."))
+    }
+
+    func testSavedSubmissionStyleCannotReplaceRuntimeJSONContract() throws {
+        let store = try makeStore()
+        try store.seedDefaults()
+        let original = try XCTUnwrap(try store.activeVersion(templateId: submissionId))
+        let custom = try store.saveNewVersion(templateId: submissionId,
+            instructions: "팀 주간보고를 간결한 문장으로 작성한다.",
+            outputExample: "공통 업무\n완료 변경 내용\n진행 검증 내용", skillRef: nil)
+
+        for version in [original, custom] {
+            let composed = try store.composeInstructions(versionId: version.id)
+            XCTAssertTrue(composed.contains(version.instructions))
+            XCTAssertTrue(composed.contains(version.outputExample))
+            let parts = composed.components(separatedBy: "앱 필수 출력 JSON Schema:\n")
+            XCTAssertEqual(parts.count, 2)
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(parts.last!.utf8))
+            XCTAssertEqual(Set(schema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []),
+                           ["schemaVersion", "jobType", "groups", "reviewNotes", "warnings"])
+            XCTAssertEqual(try store.version(id: version.id), version,
+                           "실행 지침 보강은 저장된 프롬프트 버전을 변경하지 않는다")
+        }
+        XCTAssertEqual(try store.versions(templateId: submissionId).count, 2)
+        XCTAssertEqual(try store.activeVersion(templateId: submissionId)?.id, custom.id)
+
+        let withoutExample = try store.saveNewVersion(templateId: submissionId,
+            instructions: custom.instructions, outputExample: "", skillRef: nil)
+        XCTAssertTrue(try store.composeInstructions(versionId: withoutExample.id)
+            .contains("앱 필수 출력 JSON Schema:\n"), "출력 예시가 없는 사용자 템플릿에도 계약을 붙인다")
     }
 
     // MARK: 10 — v3 트리거 (template_version 불변)

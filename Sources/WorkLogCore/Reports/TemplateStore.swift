@@ -184,16 +184,33 @@ public final class TemplateStore {
     }
 
     /// AI 지시문 조립.
-    /// DefaultPrompts.commonInstructions + "\n\n" + version.instructions
-    /// (+ outputExample이 비어 있지 않으면 "\n\n출력 예시:\n" + outputExample).
-    /// 공통 보호 규칙은 항상 맨 앞에 포함되며 사용자 템플릿이 제거할 수 없다.
+    /// 공통 보호 규칙 → 저장된 작업 지침·문체 예시 → 앱 필수 출력 계약 순으로 조립한다.
+    /// 문체 예시는 JSON 반환 형식을 대체하지 않는다. 저장된 버전은 변경하지 않는다.
     public func composeInstructions(versionId: String) throws -> String {
         guard let version = try version(id: versionId) else {
             throw WorkLogError.notFound("template_version \(versionId)")
         }
         var composed = DefaultPrompts.commonInstructions + "\n\n" + version.instructions
         if !version.outputExample.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            composed += "\n\n출력 예시:\n" + version.outputExample
+            composed += "\n\n문체 참고용 출력 예시 (JSON 안의 문장에만 적용):\n" + version.outputExample
+            composed += "\n\n예시의 문체만 JSON 안의 문장에 반영한다. 최종 응답은 지정된 JSON 객체 하나만 반환한다. 일반 텍스트 보고서, 코드 펜스, 앞뒤 설명은 반환하지 않는다."
+        }
+        if try template(id: version.templateId)?.purpose == .submissionWeekly {
+            // 사용자 템플릿에서 반환 형식을 지웠거나 예전 버전의 문체 예시를 사용해도
+            // 실제 디코더와 turn/start.outputSchema의 계약을 실행 시점에 명시한다.
+            composed += """
+
+
+            앱 필수 주간보고 계약:
+            팀별 지침과 출력 예시는 groups의 heading과 items의 text에 문체를 적용하는 용도다.
+            입력 업무와 지난주 종료 상태는 facts.tasks, 이번 주 확정 계획은 facts.confirmedPlans에 있다. 상태·날짜·계획은 입력 facts를 따른다.
+            category는 completed / in_progress / planned만 사용한다. 완료·진행·예정 표기는 앱이 렌더링한다.
+            아래 JSON Schema의 모든 필드를 포함한다. 내용이 없는 배열도 생략하거나 null로 바꾸지 않고 []로 반환한다.
+            최종 응답은 이 계약에 맞는 JSON 객체 하나만 반환한다.
+            앱 필수 출력 JSON Schema:
+            """
+            // 지시문도 AI 입력 digest에 포함되므로 키 순서를 고정한다.
+            composed += "\n" + (try StableJSON.string(SubmissionOutputSchema.schema))
         }
         return composed
     }

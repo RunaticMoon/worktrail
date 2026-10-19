@@ -367,6 +367,90 @@ final class CodexAppServerProviderTests: XCTestCase {
         XCTAssertEqual(text, "$weekly-report\n{\"facts\":[]}")
     }
 
+    func testSubmissionUsesStrictOutputSchemaAndRoundTripsDraft() async throws {
+        let draft = SubmissionDraft(groups: [
+            SubmissionGroup(heading: "공통 업무", items: [
+                SubmissionItem(itemId: "line-1", category: .completed, text: "배포 검증 완료",
+                               taskIds: ["task-1"], projectIds: ["project-1"],
+                               evidenceIds: ["activity:activity-1"]),
+                SubmissionItem(itemId: "line-2", category: .inProgress, text: "문서 정리",
+                               taskIds: ["task-2"], projectIds: []),
+                SubmissionItem(itemId: "line-3", category: .planned, text: "운영 점검",
+                               taskIds: ["task-3"], projectIds: ["project-1"],
+                               planItemIds: ["plan-1"]),
+            ]),
+        ], reviewNotes: ["보류 항목 검토"], warnings: ["결과 근거 확인 필요"])
+        let server = FakeCodexServer()
+        scriptSuccessfulTurn(server: server, followups: [
+            agentMessageItem(threadId: "thread-1", turnId: "turn-1", text: try StableJSON.string(draft)),
+            turnCompleted(threadId: "thread-1", turnId: "turn-1", status: "completed"),
+        ])
+
+        let output = try await makeProvider(server: server).run(makeInput())
+        XCTAssertEqual(try StableJSON.decode(SubmissionDraft.self, from: output.rawJSON), draft)
+
+        let turnRequest = try XCTUnwrap(server.messages(withMethod: "turn/start").first)
+        let schema = try XCTUnwrap(turnRequest["params"]?["outputSchema"])
+        try assertSchema(schema, matches: JSONValue.from(draft))
+        XCTAssertEqual(schema["properties"]?["schemaVersion"]?["enum"], .array([.number(1)]))
+        XCTAssertEqual(schema["properties"]?["jobType"]?["enum"], .array([.string("submission_weekly")]))
+        let itemSchema = try XCTUnwrap(schema["properties"]?["groups"]?["items"]?["properties"]?["items"]?["items"])
+        XCTAssertEqual(itemSchema["properties"]?["category"]?["enum"]?.arrayValue,
+                       SubmissionCategory.allCases.map { .string($0.rawValue) })
+        for field in ["taskIds", "projectIds", "planItemIds", "evidenceIds"] {
+            XCTAssertEqual(itemSchema["properties"]?[field]?["type"]?.stringValue, "array")
+            XCTAssertEqual(itemSchema["properties"]?[field]?["items"]?["type"]?.stringValue, "string")
+        }
+    }
+
+    func testOtherJobTypesDoNotUseSubmissionOutputSchema() async throws {
+        for jobType in AIJobType.allCases where jobType != .submissionWeekly {
+            let server = FakeCodexServer()
+            scriptSuccessfulTurn(server: server, followups: [
+                agentMessageItem(threadId: "thread-1", turnId: "turn-1", text: "{}"),
+                turnCompleted(threadId: "thread-1", turnId: "turn-1", status: "completed"),
+            ])
+
+            _ = try await makeProvider(server: server).run(makeInput(type: jobType))
+
+            let turnRequest = try XCTUnwrap(server.messages(withMethod: "turn/start").first)
+            XCTAssertNil(turnRequest["params"]?["outputSchema"], jobType.rawValue)
+        }
+    }
+
+    /// 실제 Codable 출력의 키와 자료형을 비교해 계약 필드 누락·선택 필드화를 잡는다.
+    private func assertSchema(_ schema: JSONValue, matches value: JSONValue,
+                              file: StaticString = #filePath, line: UInt = #line) throws {
+        switch value {
+        case .object(let fields):
+            XCTAssertEqual(schema["type"]?.stringValue, "object", file: file, line: line)
+            XCTAssertEqual(schema["additionalProperties"]?.boolValue, false, file: file, line: line)
+            let properties = try XCTUnwrap(schema["properties"]?.objectValue, file: file, line: line)
+            XCTAssertEqual(Set(properties.keys), Set(fields.keys), file: file, line: line)
+            XCTAssertEqual(Set(schema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []),
+                           Set(fields.keys), file: file, line: line)
+            for (key, child) in fields {
+                try assertSchema(XCTUnwrap(properties[key], file: file, line: line),
+                                 matches: child, file: file, line: line)
+            }
+        case .array(let elements):
+            XCTAssertEqual(schema["type"]?.stringValue, "array", file: file, line: line)
+            let itemSchema = try XCTUnwrap(schema["items"], file: file, line: line)
+            for element in elements {
+                try assertSchema(itemSchema, matches: element, file: file, line: line)
+            }
+        case .string:
+            XCTAssertEqual(schema["type"]?.stringValue, "string", file: file, line: line)
+        case .number:
+            XCTAssertEqual(schema["type"]?.stringValue, "integer", file: file, line: line)
+        case .null, .bool:
+            XCTFail("제출용 계약에 없는 자료형", file: file, line: line)
+        }
+        if let allowed = schema["enum"]?.arrayValue {
+            XCTAssertTrue(allowed.contains(value), file: file, line: line)
+        }
+    }
+
     // MARK: - 6. 승인 요청 거절 (AI-T08)
 
     func testRunDeclinesCommandExecutionApproval() async throws {
