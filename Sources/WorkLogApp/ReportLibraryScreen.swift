@@ -34,26 +34,7 @@ import WorkLogCore
                         .disabled(isLoading)
                         .worklogHelp("저장된 리포트를 다시 불러오기")
                 }
-                ScrollView(.horizontal) {
-                    Picker("리포트 기간", selection: periodSelection) {
-                        ForEach(PeriodType.allCases, id: \.self) { type in
-                            Text("\(periodTitle(type)) (\(periodCount(type)))").tag(type)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .focused($periodFocused)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                if model.periodType == .weekly {
-                    Picker("리포트 계열", selection: $model.familyFilter) {
-                        Text("전체").tag(Optional<ReportFamily>.none)
-                        Text("주간보고").tag(Optional(ReportFamily.submission))
-                        Text("성과자료").tag(Optional(ReportFamily.performance))
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 420)
-                }
+                reportFilters
                 if let error = model.errorMessage {
                     RecoveryNotice(failed: error, preserved: "저장된 리포트와 마지막으로 불러온 본문은 보존됩니다.",
                         retry: { reload() })
@@ -87,6 +68,60 @@ import WorkLogCore
             if model.selectedItem == nil && listFocused { model.select(ids.first) }
         }
         .onChange(of: model.selectedItem?.latestVersion) { _, _ in copyMessage = nil }
+    }
+
+    private var reportFilters: some View {
+        // Shared label columns keep both tab rows aligned, including when tabs scroll.
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+            GridRow {
+                filterLabel("리포트 기간")
+                SegmentedFilterBar(selection: periodSelection, items: periodFilterItems)
+                    .focusable(interactions: .edit)
+                    .focused($periodFocused)
+                    .onKeyPress(keys: [.leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
+                        guard periodFocused, press.modifiers.isEmpty, !worklogHasMarkedText,
+                              let index = PeriodType.allCases.firstIndex(of: model.periodType) else { return .ignored }
+                        let next = index + (press.key == .rightArrow ? 1 : -1)
+                        if PeriodType.allCases.indices.contains(next) {
+                            periodSelection.wrappedValue = PeriodType.allCases[next]
+                        }
+                        return .handled
+                    }
+                    .accessibilityLabel("리포트 기간")
+                    .accessibilityHint("좌우 화살표로 기간을 선택합니다")
+                    .accessibilityIdentifier("report-library-period-filter")
+            }
+            if model.periodType == .weekly {
+                GridRow {
+                    filterLabel("리포트 계열")
+                    SegmentedFilterBar<ReportFamily?>(selection: $model.familyFilter, items: [
+                        SegmentedFilterItem(value: nil, label: "전체",
+                            accessibilityIdentifier: "report-library-family-all"),
+                        SegmentedFilterItem(value: .submission, label: "주간보고",
+                            accessibilityIdentifier: "report-library-family-submission"),
+                        SegmentedFilterItem(value: .performance, label: "성과자료",
+                            accessibilityIdentifier: "report-library-family-performance")
+                    ])
+                    .accessibilityLabel("리포트 계열")
+                    .accessibilityIdentifier("report-library-family-filter")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func filterLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.callout)
+            .foregroundStyle(WorkLogTheme.muted)
+            .fixedSize()
+    }
+
+    private var periodFilterItems: [SegmentedFilterItem<PeriodType>] {
+        PeriodType.allCases.map { type in
+            SegmentedFilterItem(value: type, label: periodTitle(type), count: periodCount(type),
+                accessibilityIdentifier: "report-library-period-\(type.rawValue)")
+        }
     }
 
     private var reportList: some View {
@@ -159,12 +194,7 @@ import WorkLogCore
                     }
                     Divider()
                     if let content = model.selectedContent, !content.isEmpty {
-                        Text(content)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("리포트 본문, 읽기 전용")
-                            .accessibilityValue(content)
+                        reportBody(item, content: content)
                     } else {
                         StateView(kind: .empty, title: "저장된 본문이 없습니다",
                             detail: "\(item.familyLabel) 화면에서 리포트를 만들 수 있습니다.",
@@ -179,6 +209,16 @@ import WorkLogCore
             StateView(kind: .empty, title: "리포트를 선택하세요",
                 detail: "목록에서 기간을 선택하면 최신 버전의 본문을 볼 수 있습니다.")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder private func reportBody(_ item: ReportLibraryItem, content: String) -> some View {
+        if item.report.family == .submission {
+            LibrarySubmissionPreview(text: content)
+                .id(item.latestVersion?.id)
+        } else {
+            MarkdownDocumentView(markdown: content, accessibilityIdentifier: "report-library-body")
+                .id(item.latestVersion?.id)
         }
     }
 
@@ -252,6 +292,42 @@ import WorkLogCore
         case .quarterly: return "분기"
         case .yearly: return "연간(평가 기간)"
         }
+    }
+}
+
+/// Submission reports use a plain-text template rather than Markdown syntax.
+private struct LibrarySubmissionPreview: View {
+    let text: String
+    @State private var mode: DisplayMode = .preview
+
+    private enum DisplayMode: Hashable { case preview, text }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if mode == .preview {
+                SubmissionReportRichView(text: text)
+            } else {
+                Text(text)
+                    .font(.system(size: 14, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("리포트 본문, 읽기 전용")
+                    .accessibilityValue(text)
+                    .accessibilityIdentifier("report-library-submission-source")
+            }
+            Divider()
+            Picker("본문 표시", selection: $mode) {
+                Text("미리보기").tag(DisplayMode.preview)
+                Text("텍스트").tag(DisplayMode.text)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 260)
+            .accessibilityIdentifier("report-library-submission-mode")
+            .help("미리보기는 주간보고 서식을 표시하고, 텍스트는 저장된 원문을 표시합니다.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("report-library-submission-body")
     }
 }
 #endif
