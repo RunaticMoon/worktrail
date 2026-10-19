@@ -130,6 +130,9 @@ class SigningTests(unittest.TestCase):
         self.platform = mock.patch.object(signing.sys, 'platform', 'darwin')
         self.platform.start()
         self.addCleanup(self.platform.stop)
+        runner = mock.patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'github-hosted'})
+        runner.start()
+        self.addCleanup(runner.stop)
         self.cert_patch = mock.patch.object(signing, 'certificate_der', return_value=self.der)
         self.cert_patch.start()
         self.addCleanup(self.cert_patch.stop)
@@ -155,6 +158,13 @@ class SigningTests(unittest.TestCase):
             with mock.patch.object(signing, 'command') as command:
                 with self.assertRaisesRegex(RuntimeError, 'unexpected app bundle identifier'):
                     signing.sign(app, self.certificate)
+            command.assert_not_called()
+
+    def test_signing_refuses_to_modify_trust_outside_disposable_runners(self):
+        with mock.patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'self-hosted'}):
+            with mock.patch.object(signing, 'command') as command:
+                with self.assertRaisesRegex(RuntimeError, 'disposable GitHub-hosted runner'):
+                    signing.sign(self.app, self.certificate)
             command.assert_not_called()
 
     def test_malformed_pkcs12_stops_before_any_keychain_operation(self):
@@ -279,7 +289,8 @@ class ProcessIsolationTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
 
 
-@unittest.skipUnless(sys.platform == 'darwin', 'requires macOS codesign and disposable keychains')
+@unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted',
+                     'requires a disposable macOS GitHub-hosted runner')
 class MacOSSigningContinuityTests(unittest.TestCase):
     def setUp(self):
         # Only this synthetic test exposes codesign diagnostics (public paths,
@@ -376,8 +387,9 @@ class MacOSSigningContinuityTests(unittest.TestCase):
                 signing.command('/usr/bin/security', 'delete-keychain', str(keychain))
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('WORKLOG_SIGNING_SMOKE_APP'),
-                     'requires macOS and WORKLOG_SIGNING_SMOKE_APP pointing to a packaged app')
+@unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                     and os.environ.get('WORKLOG_SIGNING_SMOKE_APP'),
+                     'requires a disposable macOS runner and WORKLOG_SIGNING_SMOKE_APP')
 class MacOSPackagedAppSigningTests(unittest.TestCase):
     def test_packaged_app_loads_sparkle_after_persistent_identity_signing(self):
         source = Path(os.environ['WORKLOG_SIGNING_SMOKE_APP']).resolve()

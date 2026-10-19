@@ -2,6 +2,8 @@
 """Sign releases with one persistent identity, without opening the login Keychain.
 
 Only a disposable keychain containing the dedicated release identity is used.
+Signing is restricted to disposable GitHub-hosted runners because modern
+codesign also requires temporary signer-side trust for a self-signed identity.
 The committed public certificate pins both the signer and designated requirement.
 Do not add hardened runtime/library validation: Sparkle has a different signer.
 """
@@ -70,6 +72,8 @@ def verify(app, certificate=PUBLIC_FILE):
 def sign(app, certificate=PUBLIC_FILE):
     if sys.platform != 'darwin':
         raise RuntimeError('App code signing requires macOS')
+    if os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
+        raise RuntimeError('Signing requires a disposable GitHub-hosted runner; local trust is not modified')
     app = Path(app).resolve()
     with (app / 'Contents/Info.plist').open('rb') as stream:
         if plistlib.load(stream).get('CFBundleIdentifier') != BUNDLE_ID:
@@ -98,6 +102,7 @@ def sign(app, certificate=PUBLIC_FILE):
             stream.write(identity)
         keychain = str(directory / 'release.keychain-db')
         password = secrets.token_urlsafe(32)
+        trusted = False
         try:
             command('/usr/bin/security', 'create-keychain', '-p', password, keychain)
             command('/usr/bin/security', 'set-keychain-settings', '-lut', '3600', keychain)
@@ -107,12 +112,24 @@ def sign(app, certificate=PUBLIC_FILE):
             p12.unlink()
             command('/usr/bin/security', 'set-key-partition-list', '-S', 'apple-tool:,apple:',
                     '-s', '-k', password, keychain)
+            # TN3161: codesign needs a trusted signing identity on the build Mac.
+            # Scope this to code signing on a disposable runner, not SSL or users'
+            # Macs. Admin trust with noninteractive sudo avoids GUI authorization.
+            command('/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
+                    '-d', '-r', 'trustRoot', '-p', 'codeSign', '-k', keychain, str(certificate))
+            trusted = True
             command('/usr/bin/codesign', '--force', '--sign', fingerprint,
                     '--keychain', keychain, '--timestamp=none',
                     '--requirements', '=designated => ' + expected, str(app))
-            verify(app, certificate)
         finally:
-            command('/usr/bin/security', 'delete-keychain', keychain)
+            try:
+                if trusted:
+                    command('/usr/bin/sudo', '-n', '/usr/bin/security', 'remove-trusted-cert',
+                            '-d', str(certificate))
+            finally:
+                command('/usr/bin/security', 'delete-keychain', keychain)
+    # Verify after removing signer-side trust: recipients need only the pinned DR.
+    verify(app, certificate)
 
 
 def main():

@@ -33,7 +33,7 @@ python3 distribution/provision-code-signing-key.py
 
 이 명령은 새 전용 RSA 3072 코드 서명 키·인증서를 만들고 PKCS#12를 GitHub Actions secret **`WORKLOG_CODESIGN_P12`**에 등록한다. 공개 인증서 **`distribution/code-signing-cert.pem`**만 저장소에 커밋한다. 기존 인증서·같은 이름의 secret이 있으면 덮어쓰지 않으며, 기존 Keychain·회사 자격증명·Codex 토큰을 읽지 않는다. 개인키는 메모리와 표준입력에서만 다룬다. PKCS#12는 macOS/OpenSSL의 빈 암호 호환성 문제를 피하기 위한 공개 고정 문자열을 암호로 사용한다. 비밀성은 GitHub Secret 암호화로 보호하므로 PKCS#12를 파일·로그·artifact에 보관하지 않는다.
 
-릴리즈 서명 step은 PKCS#12의 공개 인증서를 먼저 대조한 뒤, 전용 임시 keychain으로만 가져와 앱을 서명하고 임시 파일·keychain을 삭제한다. 사용자 login keychain이나 신뢰 설정은 변경하지 않는다. DR은 `dev.worklog.WorkLog`와 공개 인증서의 정확한 hash에 묶으며, bundle ID나 인증서 이름만 일치하는 다른 앱에는 접근을 허용하지 않는다. 누락·잘못된 secret·다른 인증서·ad-hoc 서명은 패키징/DMG 검증에서 실패하고 자동으로 대체하지 않는다.
+릴리즈 서명 step은 PKCS#12의 공개 인증서를 먼저 대조한 뒤, 전용 임시 keychain으로만 가져온다. [Apple TN3161](https://developer.apple.com/documentation/technotes/tn3161-inside-code-signing-certificates)에 따라 서명하는 Mac에는 인증서 신뢰가 필요하므로, 서명은 일회용 GitHub-hosted macOS 러너에서만 허용한다. 해당 러너에 한해 `sudo -n security add-trusted-cert`로 codeSign 정책의 임시 신뢰를 추가하고 성공/실패 후 제거하며, 임시 keychain·파일도 삭제한다. 신뢰를 제거한 뒤 다시 서명을 검증한다. 설치하는 사용자 Mac의 login keychain·신뢰 설정은 변경하지 않으며 인증서를 설치할 필요도 없다. DR은 `dev.worklog.WorkLog`와 공개 인증서의 정확한 hash에 묶으며, bundle ID나 인증서 이름만 일치하는 다른 앱에는 접근을 허용하지 않는다. 누락·잘못된 secret·다른 인증서·ad-hoc 서명은 패키징/DMG 검증에서 실패하고 자동으로 대체하지 않는다.
 
 인증서와 secret은 릴리즈마다 재생성하지 않는다. 잃어버리거나 교체하면 사용자 재승인이 필요하다. 기존 ad-hoc 버전에서 처음 전환할 때는 Keychain의 **항상 허용**을 한 번 더 선택해야 할 수 있으며, 이후 같은 인증서로 서명한 업데이트는 그 승인을 이어받는다. 기존 vault 키·service/account·암호문·ACL은 수정하거나 삭제하지 않는다. 이 서명은 Apple 공증이나 Gatekeeper 승인을 대신하지 않는다.
 
@@ -103,4 +103,4 @@ bash distribution/verify-dmg.sh "release/WorkLog-$(cat VERSION)-arm64.dmg" "$(ca
 
 같은 release 디렉터리에 이전 버전 DMG가 있으면 manifest 검사가 실패한다. 빌드·DMG·Sparkle 런타임 검증은 macOS에서 실행한다.
 
-서명 회귀 테스트는 Linux에서 인증서/P12 생성·검증·실패 시 차단을, macOS에서는 새 가짜 인증서와 임시 keychain만 사용해 서로 다른 두 앱 바이너리의 DR 호환성과 다른 서명자 거부를 확인한다. macOS 테스트에는 Homebrew `openssl@3`를 PATH 앞에 둔다. 이 테스트는 실제 사용자의 Keychain 경고나 기존 항목의 최초 재승인을 자동으로 검증하지 않는다.
+서명 회귀 테스트는 Linux에서 인증서/P12 생성·검증·실패 시 차단을, 일회용 macOS CI에서는 새 가짜 인증서·임시 keychain으로 서로 다른 두 앱 바이너리의 DR 호환성과 가짜 항목의 재승인 없는 읽기·다른 서명자 거부를 확인한다. 패키징한 앱의 임시 복사본에도 가짜 인증서로 서명해 Sparkle 로더 smoke를 실행한다. macOS 테스트에는 Homebrew `openssl@3`를 PATH 앞에 둔다. 이 테스트는 실제 사용자의 Keychain 경고나 기존 항목의 최초 재승인을 자동으로 검증하지 않는다.
