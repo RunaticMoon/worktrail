@@ -1,5 +1,6 @@
 #!/bin/bash
-# macOS에서 WorkLog.app을 버전별 DMG로 묶는다 (ad-hoc 서명, Developer ID·공증 없음).
+# macOS에서 WorkLog.app을 버전별 DMG로 묶는다 (Developer ID·공증 없음).
+# 릴리즈는 WORKLOG_REQUIRE_STABLE_SIGNATURE=1로 고정 인증서 서명을 검증한다.
 #
 # 사용법: scripts/build-dmg.sh [--skip-build]
 #   --skip-build  .build/app/WorkLog.app 이 이미 있을 때 앱 빌드를 생략한다.
@@ -49,6 +50,11 @@ APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$
 if [[ "$APP_VERSION" != "$VERSION" ]]; then
     echo "앱 번들 버전($APP_VERSION)이 VERSION($VERSION)과 다릅니다. --skip-build 없이 다시 실행하세요." >&2
     exit 1
+fi
+
+# Fail closed before packaging: never publish an ad-hoc app after identity setup.
+if [[ "${WORKLOG_REQUIRE_STABLE_SIGNATURE:-0}" == "1" ]]; then
+    python3 "$ROOT/distribution/code_signing.py" verify "$APP"
 fi
 
 RELEASE_DIR="$ROOT/release"

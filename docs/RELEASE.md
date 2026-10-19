@@ -19,7 +19,23 @@
 - 회사 기록·Secret·AI 입력은 업데이터에 전달하지 않는다. Sparkle 시스템 프로필 전송도 켜지 않는다.
 - 업데이터가 없던 기존 `1.x.x`/`0.1.0` 앱은 `0.2.0`을 한 번 직접 설치해야 한다.
 
-Apple Developer ID/공증과 Sparkle의 Ed25519 업데이트 서명은 별개다. [Sparkle 공식 보안 지침](https://sparkle-project.org/documentation/#3-segue-for-security-concerns)은 Developer ID를 가능한 경우 권장하고 Ed25519 검증을 지원한다. Apple 계정 없이도 후자를 쓸 수 있다. 첫 설치 시 Gatekeeper 승인이 필요할 수 있는 제한은 그대로다. 이 빌드는 Hardened Runtime Library Validation을 켜지 않는 ad-hoc 앱이며, [공식 통합 문서의 ad-hoc 로딩 제한](https://sparkle-project.org/documentation/#1-add-the-sparkle-framework-to-your-project)을 따른다.
+Apple Developer ID/공증과 Sparkle의 Ed25519 업데이트 서명은 별개다. [Sparkle 공식 보안 지침](https://sparkle-project.org/documentation/#3-segue-for-security-concerns)은 Developer ID를 가능한 경우 권장하고 Ed25519 검증을 지원한다. Apple 계정 없이도 후자를 쓸 수 있다. 앱은 업데이트 간 Keychain 접근 승인을 유지하도록 고정 자체서명 인증서를 사용한다. 첫 설치 시 Gatekeeper 승인이 필요할 수 있는 제한은 그대로다. Team ID가 없는 자체서명 앱에서 Sparkle을 로드할 수 있도록 Hardened Runtime Library Validation은 켜지 않는다.
+
+## 전용 앱 서명 인증서 최초 등록
+
+업데이트마다 나타나던 Keychain 승인은 ad-hoc 서명이 앱 바이너리 버전마다 달라지기 때문이다. [Apple TN3127](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)과 [TN2206](https://developer.apple.com/library/archive/technotes/tn2206/)에 따라, 같은 인증서와 designated requirement(DR)를 계속 사용한다. Apple 개발자 계정 없이 생성한 자체서명 인증서도 Keychain의 앱 식별에 사용할 수 있다.
+
+인증된 `gh` CLI와 OpenSSL 3이 있는 환경에서 한 번 실행한다.
+
+```sh
+python3 distribution/provision-code-signing-key.py
+```
+
+이 명령은 새 전용 RSA 3072 코드 서명 키·인증서를 만들고 PKCS#12를 GitHub Actions secret **`WORKLOG_CODESIGN_P12`**에 등록한다. 공개 인증서 **`distribution/code-signing-cert.pem`**만 저장소에 커밋한다. 기존 인증서·같은 이름의 secret이 있으면 덮어쓰지 않으며, 기존 Keychain·회사 자격증명·Codex 토큰을 읽지 않는다. 개인키는 메모리와 표준입력에서만 다룬다. 빈 암호 PKCS#12는 GitHub Secret 암호화로 보호되므로 파일·로그·artifact에 보관하지 않는다.
+
+릴리즈 서명 step은 PKCS#12의 공개 인증서를 먼저 대조한 뒤, 전용 임시 keychain으로만 가져와 앱을 서명하고 임시 파일·keychain을 삭제한다. 사용자 login keychain이나 신뢰 설정은 변경하지 않는다. DR은 `dev.worklog.WorkLog`와 공개 인증서의 정확한 hash에 묶으며, bundle ID나 인증서 이름만 일치하는 다른 앱에는 접근을 허용하지 않는다. 누락·잘못된 secret·다른 인증서·ad-hoc 서명은 패키징/DMG 검증에서 실패하고 자동으로 대체하지 않는다.
+
+인증서와 secret은 릴리즈마다 재생성하지 않는다. 잃어버리거나 교체하면 사용자 재승인이 필요하다. 기존 ad-hoc 버전에서 처음 전환할 때는 Keychain의 **항상 허용**을 한 번 더 선택해야 할 수 있으며, 이후 같은 인증서로 서명한 업데이트는 그 승인을 이어받는다. 기존 vault 키·service/account·암호문·ACL은 수정하거나 삭제하지 않는다. 이 서명은 Apple 공증이나 Gatekeeper 승인을 대신하지 않는다.
 
 ## 전용 업데이트 키 최초 등록
 
@@ -35,7 +51,7 @@ Sparkle 2.10의 현재 키 포맷은 `base64(32-byte seed)`다([공식 소스](h
 
 ## 새 버전 릴리즈 절차
 
-1. `VERSION`을 올리는 PR을 main에 머지한다. 공개키 파일이 커밋되어 있어야 한다.
+1. `VERSION`을 올리는 PR을 main에 머지한다. Sparkle 공개키·앱 서명 공개 인증서가 커밋되고 대응하는 두 전용 secret이 등록되어 있어야 한다.
 2. 머지된 main의 커밋 SHA를 확인한다: `git rev-parse origin/main`.
 3. 검토된 정확한 SHA로 수동 워크플로를 실행한다.
 
@@ -52,7 +68,7 @@ gh run list --workflow macos-release.yml --limit 3
 | `draft` | 위 + 전용 키로 DMG·appcast 서명, draft Release 생성, 업로드·재다운로드 바이트 비교 |
 | `publish` | 위 + draft를 공개 Release/latest로 전환. 설치된 앱의 새 feed가 됨 |
 
-빌드 job은 쓰기 권한·서명키가 없다. publish job의 서명 step만 전용 업데이트 secret을 받으며, `GITHUB_TOKEN`은 실제 Release 게시 step에만 주입된다.
+빌드·테스트·의존성 다운로드에는 쓰기 권한·서명키가 없다. 앱 조립 후 별도 서명 step만 전용 앱 서명 secret을 받는다. publish job의 업데이트 서명 step만 전용 Sparkle secret을 받으며, `GITHUB_TOKEN`은 실제 Release 게시 step에만 주입된다.
 
 산출물은 `WorkLog-<VERSION>-arm64.dmg`, DMG SHA-256을 담는 `release-manifest.json`, 서명된 `appcast.xml`이다. feed의 버전·다운로드 원본·파일명·크기를 검증하고 DMG/feed 서명을 공식 Sparkle 도구로 다시 검증한다. 업로드 후 세 파일을 다시 받아 로컬 바이트와 비교한 뒤 공개한다. 같은 태그의 tag/Release(초안 포함)가 있으면 덮어쓰지 않고 실패한다.
 
@@ -63,7 +79,7 @@ macOS CI와 릴리즈 job은 다음을 확인한다.
 1. `swift build --build-tests`, `swift test`
 2. 아이콘을 `.icns`로 만들고 Sparkle framework를 symlink·실행권한·helper 서명 그대로 앱에 포함
 3. DMG 안 앱 이름·버전·최소 macOS 26.0·bundle ID·arm64 실행 파일·아이콘·Sparkle 공개키/feed 설정 검사
-4. `codesign --verify --deep --strict`, 실행 파일의 framework 링크·런타임 검색 경로 검사
+4. `codesign --verify --deep --strict`, 실행 파일의 framework 링크·런타임 검색 경로 검사. 릴리즈는 공개 인증서·고정 DR까지 패키징 전과 마운트된 DMG에서 각각 검사
 5. 마운트된 앱의 `--updater-smoke-test` 실행: 실제 dyld framework 로딩과 updater 생성 확인. 앱 `AppController`를 만들기 전에 종료하므로 저장소·Keychain·AI·업데이트 네트워크에 접근하지 않음
 6. DMG manifest·SHA-256 확인
 
@@ -71,8 +87,8 @@ macOS CI와 릴리즈 job은 다음을 확인한다.
 
 ## 서명과 설치
 
-- 앱은 **ad-hoc 코드 서명**이다. Developer ID 서명·Apple 공증이 없어 Gatekeeper가 첫 실행을 막을 수 있다. 앱과 소스를 확인한 뒤 시스템 설정 › 개인정보 보호 및 보안에서 직접 허용한다. quarantine 속성을 지우거나 Gatekeeper를 끄는 스크립트는 없다.
-- ad-hoc 서명은 번들 무결성 확인용이다. 새 버전에서 Keychain 항목 접근 승인이 다시 필요할 수 있다.
+- 릴리즈 앱은 **고정 자체서명 인증서**로 코드 서명한다. Developer ID 서명·Apple 공증이 없어 Gatekeeper가 첫 실행을 막을 수 있다. 앱과 소스를 확인한 뒤 시스템 설정 › 개인정보 보호 및 보안에서 직접 허용한다. quarantine 속성을 지우거나 Gatekeeper를 끄는 스크립트는 없다.
+- 로컬 `build-macos-app.sh`와 PR CI는 여전히 ad-hoc 서명으로 조립하며 개인키를 받지 않는다. 이 산출물을 릴리즈 대신 설치하면 Keychain 재승인이 필요할 수 있다. 릴리즈 workflow는 조립 후 반드시 고정 인증서로 다시 서명한다.
 - Apple Silicon(arm64), macOS 26.0 이상 전용이다. Package.swift·번들 `LSMinimumSystemVersion`·Sparkle `minimumSystemVersion`을 모두 26.0으로 유지한다. 이전 macOS에는 이 업데이트를 제공하지 않는다.
 - CI smoke는 framework 로딩까지 검증한다. 사용자 Mac에서의 첫 설치 승인과 실제 다운로드 → 교체 → 재시작 전체 흐름은 별도 수동 검증 대상이다.
 
@@ -86,3 +102,5 @@ bash distribution/verify-dmg.sh "release/WorkLog-$(cat VERSION)-arm64.dmg" "$(ca
 ```
 
 같은 release 디렉터리에 이전 버전 DMG가 있으면 manifest 검사가 실패한다. 빌드·DMG·Sparkle 런타임 검증은 macOS에서 실행한다.
+
+서명 회귀 테스트는 Linux에서 인증서/P12 생성·검증·실패 시 차단을, macOS에서는 새 가짜 인증서와 임시 keychain만 사용해 서로 다른 두 앱 바이너리의 DR 호환성과 다른 서명자 거부를 확인한다. macOS 테스트에는 Homebrew `openssl@3`를 PATH 앞에 둔다. 이 테스트는 실제 사용자의 Keychain 경고나 기존 항목의 최초 재승인을 자동으로 검증하지 않는다.

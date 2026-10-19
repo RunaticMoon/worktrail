@@ -29,7 +29,9 @@ jobs:
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           test "${sdk_version%%.*}" -ge 26
       - name: Test release tooling
-        run: python3 -m unittest discover -s distribution/tests -v
+        run: |
+          export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+          python3 -m unittest discover -s distribution/tests -v
       - name: Build all targets (including WorkLogApp)
         run: swift build --build-tests
       - name: Test WorkLogCore
