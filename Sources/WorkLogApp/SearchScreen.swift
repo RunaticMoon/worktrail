@@ -36,6 +36,7 @@ import WorkLogCore
     @State private var filtersExpanded = false
     @State private var aiExpanded = false
     @State private var sourceOpenedFromQuery = false
+    @State private var showsScopeShortcuts = false
 
     // Secret-only input and selection never enter the controller-owned surface or SearchModel.
     private var query: String {
@@ -78,21 +79,45 @@ import WorkLogCore
         .navigationTitle("검색")
         .background(SearchKeyboardBridge(handle: handleKey))
         .background(SearchWindowActivityObserver(onChange: windowActivityDidChange))
+        .background {
+            if hasAppeared {
+                SearchScopeShortcutMonitor(modifier: isPanel ? .command : .control) {
+                    showsScopeShortcuts = $0
+                }
+            }
+        }
         .worklogFocusContent { returnToResults() }
     }
 
     private var scopePicker: some View {
         Picker("검색 범위", selection: $surface.scope) {
-            Text("전체 (\(scopeModifier)1)").tag(SearchScope.all)
-            Text("기록 (\(scopeModifier)2)").tag(SearchScope.records)
-            Text("업무 (\(scopeModifier)3)").tag(SearchScope.tasks)
-            Text("리포트 (\(scopeModifier)4)").tag(SearchScope.reports)
-            Text("Secret (\(scopeModifier)5)").tag(SearchScope.secret)
+            ForEach(SearchScope.allCases, id: \.self) { scope in
+                Text(scope.title)
+                    .accessibilityLabel("\(scope.title), 단축키 \(scopeModifier)\(scope.shortcutNumber)")
+                    .tag(scope)
+            }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .overlay(alignment: .top) {
+            // Overlay the control, not its native segment labels: badges never resize tabs.
+            if showsScopeShortcuts {
+                HStack(spacing: 0) {
+                    ForEach(SearchScope.allCases, id: \.self) { scope in
+                        Keycap("\(scopeModifier)\(scope.shortcutNumber)")
+                            .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 4))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.trailing, 4)
+                    }
+                }
+                .offset(y: -8)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .frame(maxWidth: 600)
-        .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 업무 · \(scopeModifier)4 리포트 · \(scopeModifier)5 Secret · ⌃Tab 다음 범위")
+        .accessibilityIdentifier("search.scope")
+        .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 업무 · \(scopeModifier)4 Secret · \(scopeModifier)5 리포트 · ⌃Tab 다음 범위")
     }
 
     @ViewBuilder private var searchResults: some View {
@@ -154,6 +179,7 @@ import WorkLogCore
         .onAppear { initializeSearch() }
         .onDisappear {
             hasAppeared = false; isActive = false; isWindowActive = false
+            showsScopeShortcuts = false
             cancelSecretOpening()
             secretQuery = ""; completedQuery = ""
             selectedSecretId = nil; secretTitles = []
@@ -513,13 +539,9 @@ import WorkLogCore
             return false
         }
         if modifiers == .control || (isPanel && modifiers == .command) {
-            switch event.keyCode {
-            case 18: changeScope(to: .all); return true
-            case 19: changeScope(to: .records); return true
-            case 20: changeScope(to: .tasks); return true
-            case 21: changeScope(to: .reports); return true
-            case 23: changeScope(to: .secret); return true
-            default: break
+            let scopeKeyCodes: [UInt16] = [18, 19, 20, 21, 23] // 1, 2, 3, 4, 5
+            if let index = scopeKeyCodes.firstIndex(of: event.keyCode) {
+                changeScope(to: SearchScope.allCases[index]); return true
             }
         }
         if event.keyCode == 48, modifiers == .control || modifiers == [.control, .shift] {
@@ -1042,6 +1064,79 @@ import WorkLogCore
         case .task: return "checkmark.circle"
         case .activity: return "bolt"
         case .report: return "doc.text"
+        }
+    }
+}
+
+/// Observe modifiers without consuming events or involving the query field/IME.
+@MainActor private struct SearchScopeShortcutMonitor: NSViewRepresentable {
+    let modifier: NSEvent.ModifierFlags
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.modifier = modifier
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: MonitorView, context: Context) {
+        view.modifier = modifier
+        view.onChange = onChange
+    }
+
+    static func dismantleNSView(_ view: MonitorView, coordinator: ()) { view.stopMonitoring() }
+
+    final class MonitorView: NSView {
+        var modifier: NSEvent.ModifierFlags = .control
+        var onChange: ((Bool) -> Void)?
+        private var monitor: Any?
+        private var observers: [NSObjectProtocol] = []
+        private var isShowing = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard let window else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                MainActor.assumeIsolated { self?.refresh(flags: event.modifierFlags) }
+                return event
+            }
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(forName: NSWindow.didResignKeyNotification,
+                object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.publish(false) }
+            })
+            observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification,
+                object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.publish(false) }
+            })
+            observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refresh(flags: NSEvent.modifierFlags) }
+            })
+            // A panel may appear while its opening shortcut is still held down.
+            DispatchQueue.main.async { [weak self] in self?.refresh(flags: NSEvent.modifierFlags) }
+        }
+
+        private func refresh(flags: NSEvent.ModifierFlags) {
+            // Check the key window rather than NSApp.isActive for the non-activating panel.
+            let eligible = window?.isKeyWindow == true && window?.isVisible == true
+                && window?.attachedSheet == nil && !isHiddenOrHasHiddenAncestor
+            publish(eligible && flags.contains(modifier))
+        }
+
+        private func publish(_ value: Bool) {
+            guard isShowing != value else { return }
+            isShowing = value
+            onChange?(value)
+        }
+
+        func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+            observers = []
         }
     }
 }

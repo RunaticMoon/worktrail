@@ -133,11 +133,10 @@ import WorkLogCore
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.callout).fontWeight(.semibold)
+                    Text("WorkLog 검색")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Text("검색").font(.callout.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Keycap("esc").accessibilityHidden(true)
                 }
@@ -150,12 +149,11 @@ import WorkLogCore
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("검색 패널 닫기")
+                .accessibilityIdentifier("search.panel.close")
                 .worklogHelp("닫고 이전 앱으로 돌아가기", keys: "Esc")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .glassEffect(.regular, in: .rect(cornerRadius: 16))
-            .padding(12)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
             SearchScreen(model: model, surface: surface, environment: environment, secrets: secrets,
                 onOpenSecrets: onOpenSecrets, isPanel: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
