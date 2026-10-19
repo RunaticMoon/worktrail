@@ -90,34 +90,30 @@ import WorkLogCore
     }
 
     private var scopePicker: some View {
-        Picker("검색 범위", selection: $surface.scope) {
-            ForEach(SearchScope.allCases, id: \.self) { scope in
-                Text(scope.title)
-                    .accessibilityLabel("\(scope.title), 단축키 \(scopeModifier)\(scope.shortcutNumber)")
-                    .tag(scope)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .overlay(alignment: .top) {
-            // Overlay the control, not its native segment labels: badges never resize tabs.
-            if showsScopeShortcuts {
-                HStack(spacing: 0) {
-                    ForEach(SearchScope.allCases, id: \.self) { scope in
-                        Keycap("\(scopeModifier)\(scope.shortcutNumber)")
-                            .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 4))
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .padding(.trailing, 4)
-                    }
-                }
-                .offset(y: -8)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-        }
+        SegmentedFilterBar(selection: $surface.scope, items: scopeItems,
+                           showsShortcutHints: showsScopeShortcuts)
         .frame(maxWidth: 600)
+        .accessibilityLabel("검색 범위")
         .accessibilityIdentifier("search.scope")
         .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 업무 · \(scopeModifier)4 Secret · \(scopeModifier)5 리포트 · ⌃Tab 다음 범위")
+    }
+
+    private var scopeItems: [SegmentedFilterItem<SearchScope>] {
+        SearchScope.allCases.map { scope in
+            SegmentedFilterItem(value: scope, label: scope.title, systemImage: scopeIcon(scope),
+                                accessibilityIdentifier: "search.scope.\(scope)",
+                                shortcutHint: "\(scopeModifier)\(scope.shortcutNumber)")
+        }
+    }
+
+    private func scopeIcon(_ scope: SearchScope) -> String {
+        switch scope {
+        case .all: return "magnifyingglass"
+        case .records: return sourceIcon(.memo)
+        case .tasks: return sourceIcon(.task)
+        case .secret: return "lock.fill"
+        case .reports: return sourceIcon(.report)
+        }
     }
 
     @ViewBuilder private var searchResults: some View {

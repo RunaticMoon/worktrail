@@ -77,6 +77,8 @@ struct SegmentedFilterBar<Value: Hashable>: View {
                 identifiedButton(item).id(item.value)
             }
         }
+        // Reserve the overlay's overhang even while hints are hidden, including inside the scroll view.
+        .padding(.top, items.contains { $0.shortcutHint != nil } ? 8 : 0)
     }
 
     @ViewBuilder private func identifiedButton(_ item: SegmentedFilterItem<Value>) -> some View {
@@ -102,9 +104,6 @@ struct SegmentedFilterBar<Value: Hashable>: View {
                         .padding(.vertical, 2)
                         .background(WorkLogTheme.text.opacity(0.08), in: Capsule())
                 }
-                if showsShortcutHints, let shortcutHint = item.shortcutHint {
-                    Keycap(shortcutHint)
-                }
             }
             .font(.callout.weight(selection == item.value ? .semibold : .medium))
             .fixedSize()
@@ -113,12 +112,27 @@ struct SegmentedFilterBar<Value: Hashable>: View {
         }
         .buttonStyle(SegmentedFilterTabStyle(isSelected: selection == item.value,
                                             isFocused: focusedValue == item.value))
+        .overlay(alignment: .topTrailing) {
+            if showsShortcutHints, let shortcutHint = item.shortcutHint {
+                Keycap(shortcutHint)
+                    .background(WorkLogTheme.surface, in: RoundedRectangle(cornerRadius: 4))
+                    .padding(.trailing, 4)
+                    .offset(y: -8)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .focused($focusedValue, equals: item.value)
         .focusEffectDisabled()
-        .accessibilityLabel(Text(item.count.map { "\(item.label), \($0)개" } ?? item.label))
+        .accessibilityLabel(Text(accessibilityLabel(for: item)))
         .accessibilityAddTraits(selection == item.value ? .isSelected : [])
         .worklogHelp(item.label, keys: item.shortcutHint)
         .worklogAnimation(.easeInOut(duration: 0.16), value: selection == item.value)
+    }
+
+    private func accessibilityLabel(for item: SegmentedFilterItem<Value>) -> String {
+        let label = item.count.map { "\(item.label), \($0)개" } ?? item.label
+        return item.shortcutHint.map { "\(label), 단축키 \($0)" } ?? label
     }
 }
 
