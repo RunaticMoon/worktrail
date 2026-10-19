@@ -203,9 +203,10 @@ public final class AppEnvironment {
         report.seededTemplates = (try? templates.seedDefaults()) ?? 0
         report.recoveredAIJobs = aiRunner.map { (try? $0.recoverInterrupted()) ?? 0 } ?? 0
         try? tasks.rebuildCachedStatuses()
-        // 이전 버전에서 제목만 색인된 업무 등 오래된 색인을 시작 시 한 번 복구한다.
+        // 이전 버전에서 제목만 색인된 업무 등 오래된 색인 문서만 복구한다.
+        // 색인이 최신이면 쓰기가 없으므로 일일 백업 판정(work.sqlite 해시)을 흔들지 않는다.
         // 실패해도 앱 시작을 막지 않는다(다음 시작에서 다시 시도).
-        try? search.rebuildAll()
+        _ = try? search.repairStaleTaskDocs()
 
         do {
             let info = try backup.createDailyBackupIfChanged(calendar: calendar)

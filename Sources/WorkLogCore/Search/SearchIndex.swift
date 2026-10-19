@@ -144,6 +144,48 @@ public final class SearchIndex: @unchecked Sendable {
         }
     }
 
+    /// 오래된 task 문서만 복구한다. 색인이 최신인 문서에는 쓰기를 하지 않는다.
+    ///
+    /// 이전 버전에서 제목만 색인된 업무 문서를 복구하는 것이 목적이다. 삭제되지 않은 모든 task의
+    /// 기대 텍스트·workDate를 `reindexTask`와 같은 규칙으로 계산해 현재 search_doc과 비교하고,
+    /// 없거나 다를 때만 upsert한다. 원본이 없는(삭제된) task의 남은 문서는 제거한다.
+    /// - Returns: 실제로 갱신·삭제한 문서 수. 0이면 DB에 쓰기가 없었다.
+    public func repairStaleTaskDocs() throws -> Int {
+        // 비교는 트랜잭션 밖 읽기로 끝내고, 실제로 바뀐 문서만 한 트랜잭션에서 쓴다.
+        var updates: [(id: String, workDate: WorkDate?, text: String)] = []
+        for task in try repo.tasks() {  // deleted_at IS NULL만 반환
+            let doc = try taskDoc(task)
+            if let row = try db.queryOneV("""
+                SELECT text AS text, work_date AS work_date FROM search_doc
+                WHERE source_type = ? AND source_id = ?
+                """, SearchSourceType.task.rawValue, task.id),
+               row.string("text") == doc.text,
+               row.workDate("work_date") == doc.workDate {
+                continue
+            }
+            updates.append((task.id, doc.workDate, doc.text))
+        }
+        var removals: [String] = []
+        for row in try db.queryV("""
+            SELECT source_id AS source_id FROM search_doc
+            WHERE source_type = ? AND source_id NOT IN (
+                SELECT id FROM task WHERE deleted_at IS NULL
+            )
+            """, SearchSourceType.task.rawValue) {
+            if let id = row.string("source_id") { removals.append(id) }
+        }
+        if updates.isEmpty && removals.isEmpty { return 0 }
+
+        try db.transaction {
+            for update in updates {
+                try upsertDoc(sourceType: .task, sourceId: update.id, taskId: nil,
+                              workDate: update.workDate, text: update.text)
+            }
+            for id in removals { try removeDoc(sourceType: .task, sourceId: id) }
+        }
+        return updates.count + removals.count
+    }
+
     /// 상세 리포트 본문(및 같은 방식의 제출용 리포트) 색인. 리포트 버전 생성 시 호출한다.
     public func indexReport(versionId: String, text: String, workDate: WorkDate?) throws {
         let date: WorkDate?
@@ -174,13 +216,18 @@ public final class SearchIndex: @unchecked Sendable {
             try removeDoc(sourceType: .task, sourceId: id)
             return
         }
-        var parts = [task.title]
-        parts.append(contentsOf: try repo.checklistItems(taskId: id).map { $0.text })
-        parts.append(contentsOf: try taskProjectNames(id))
-        parts.append(contentsOf: try taskTagNames(id))
-        let workDate = repo.calendar.workDate(of: task.createdAt)
+        let doc = try taskDoc(task)
         try upsertDoc(sourceType: .task, sourceId: id, taskId: nil,
-                      workDate: workDate, text: joined(parts))
+                      workDate: doc.workDate, text: doc.text)
+    }
+
+    /// task 원문의 기대 색인 텍스트·workDate. reindexTask와 repairStaleTaskDocs가 같은 규칙을 쓴다.
+    private func taskDoc(_ task: WorkTask) throws -> (text: String, workDate: WorkDate?) {
+        var parts = [task.title]
+        parts.append(contentsOf: try repo.checklistItems(taskId: task.id).map { $0.text })
+        parts.append(contentsOf: try taskProjectNames(task.id))
+        parts.append(contentsOf: try taskTagNames(task.id))
+        return (joined(parts), repo.calendar.workDate(of: task.createdAt))
     }
 
     private func reindexActivity(_ id: String) throws {
