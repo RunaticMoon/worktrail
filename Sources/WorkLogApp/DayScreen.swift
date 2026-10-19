@@ -45,7 +45,7 @@ import WorkLogCore
                         SegmentedFilterItem(value: "memos", label: "메모", systemImage: "text.alignleft",
                                             count: box.memos.count,
                                             accessibilityIdentifier: "day.region.memos", shortcutHint: "⌘⌥3")
-                    ])
+                    ], reservesShortcutHintSpace: false)
                     .accessibilityIdentifier("day.region.filter")
                     .worklogHelp("활동 기록 ⌘⌥1 · 업무 상태 ⌘⌥2 · 메모 ⌘⌥3 · 다음 영역 ⌃Tab")
                     switch selectedRegion {

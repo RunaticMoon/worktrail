@@ -103,6 +103,7 @@ import WorkLogCore
                             accessibilityIdentifier: "report-library-family-performance")
                     ])
                     .accessibilityLabel("리포트 계열")
+                    .accessibilityHint("좌우 화살표로 계열을 선택합니다")
                     .accessibilityIdentifier("report-library-family-filter")
                 }
             }
@@ -217,7 +218,8 @@ import WorkLogCore
             LibrarySubmissionPreview(text: content)
                 .id(item.latestVersion?.id)
         } else {
-            MarkdownDocumentView(markdown: content, accessibilityIdentifier: "report-library-body")
+            MarkdownDocumentView(markdown: content, accessibilityIdentifier: "report-library-body",
+                accessibilityLabel: "리포트 본문, 읽기 전용")
                 .id(item.latestVersion?.id)
         }
     }
@@ -273,7 +275,12 @@ import WorkLogCore
     private func copyContent() {
         guard let content = model.selectedContent, !content.isEmpty else { return }
         NSPasteboard.general.clearContents()
-        copyMessage = NSPasteboard.general.setString(content, forType: .string)
+        let copied = NSPasteboard.general.setString(content, forType: .string)
+        if copied, model.selectedItem?.report.family == .submission {
+            // HTML supplements the exact source, matching the weekly report editor.
+            _ = NSPasteboard.general.setString(SubmissionDocumentParser.html(content), forType: .html)
+        }
+        copyMessage = copied
             ? "본문을 복사했습니다. 리포트 상태는 바뀌지 않습니다."
             : "본문을 복사하지 못했습니다. 다시 시도하세요."
     }
@@ -298,14 +305,15 @@ import WorkLogCore
 /// Submission reports use a plain-text template rather than Markdown syntax.
 private struct LibrarySubmissionPreview: View {
     let text: String
-    @State private var mode: DisplayMode = .preview
-
-    private enum DisplayMode: Hashable { case preview, text }
+    @State private var mode: DocumentDisplayMode = .preview
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if mode == .preview {
                 SubmissionReportRichView(text: text)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("리포트 본문, 읽기 전용")
+                    .accessibilityValue(text)
             } else {
                 Text(text)
                     .font(.system(size: 14, design: .monospaced))
@@ -316,15 +324,8 @@ private struct LibrarySubmissionPreview: View {
                     .accessibilityValue(text)
                     .accessibilityIdentifier("report-library-submission-source")
             }
-            Divider()
-            Picker("본문 표시", selection: $mode) {
-                Text("미리보기").tag(DisplayMode.preview)
-                Text("텍스트").tag(DisplayMode.text)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 260)
-            .accessibilityIdentifier("report-library-submission-mode")
-            .help("미리보기는 주간보고 서식을 표시하고, 텍스트는 저장된 원문을 표시합니다.")
+            DocumentModeToggle(mode: $mode, accessibilityIdentifier: "report-library-submission-mode",
+                help: "미리보기는 주간보고 서식을 표시하고, 텍스트는 저장된 원문을 표시합니다.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("report-library-submission-body")

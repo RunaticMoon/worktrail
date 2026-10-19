@@ -27,14 +27,17 @@ struct SegmentedFilterBar<Value: Hashable>: View {
     @Binding var selection: Value
     let items: [SegmentedFilterItem<Value>]
     let showsShortcutHints: Bool
-    @FocusState private var focusedValue: Value?
+    let reservesShortcutHintSpace: Bool
+    // Indices distinguish an unfocused bar from a focused tab whose Value is itself nil.
+    @FocusState private var focusedIndex: Int?
 
     init(title: String? = nil, selection: Binding<Value>, items: [SegmentedFilterItem<Value>],
-         showsShortcutHints: Bool = false) {
+         showsShortcutHints: Bool = false, reservesShortcutHintSpace: Bool = true) {
         self.title = title
         self._selection = selection
         self.items = items
         self.showsShortcutHints = showsShortcutHints
+        self.reservesShortcutHintSpace = reservesShortcutHintSpace
     }
 
     var body: some View {
@@ -50,8 +53,8 @@ struct SegmentedFilterBar<Value: Hashable>: View {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal) { tabs }
                         .fixedSize(horizontal: false, vertical: true)
-                        .onChange(of: focusedValue) { _, value in
-                            if let value { proxy.scrollTo(value) }
+                        .onChange(of: focusedIndex) { _, index in
+                            if let index, items.indices.contains(index) { proxy.scrollTo(items[index].value) }
                         }
                         .onChange(of: selection) { _, value in proxy.scrollTo(value) }
                         .onAppear { proxy.scrollTo(selection) }
@@ -73,23 +76,23 @@ struct SegmentedFilterBar<Value: Hashable>: View {
 
     private var tabs: some View {
         HStack(spacing: 8) {
-            ForEach(items, id: \.value) { item in
-                identifiedButton(item).id(item.value)
+            ForEach(items.indices, id: \.self) { index in
+                identifiedButton(items[index], index: index).id(items[index].value)
             }
         }
-        // Reserve the overlay's overhang even while hints are hidden, including inside the scroll view.
-        .padding(.top, items.contains { $0.shortcutHint != nil } ? 8 : 0)
+        // Search reserves the overhang while modifiers are released; Day opts out entirely.
+        .padding(.top, reservesShortcutHintSpace && items.contains { $0.shortcutHint != nil } ? 8 : 0)
     }
 
-    @ViewBuilder private func identifiedButton(_ item: SegmentedFilterItem<Value>) -> some View {
+    @ViewBuilder private func identifiedButton(_ item: SegmentedFilterItem<Value>, index: Int) -> some View {
         if let identifier = item.accessibilityIdentifier {
-            tabButton(item).accessibilityIdentifier(identifier)
+            tabButton(item, index: index).accessibilityIdentifier(identifier)
         } else {
-            tabButton(item)
+            tabButton(item, index: index)
         }
     }
 
-    private func tabButton(_ item: SegmentedFilterItem<Value>) -> some View {
+    private func tabButton(_ item: SegmentedFilterItem<Value>, index: Int) -> some View {
         Button { selection = item.value } label: {
             HStack(spacing: 6) {
                 if let systemImage = item.systemImage {
@@ -111,7 +114,7 @@ struct SegmentedFilterBar<Value: Hashable>: View {
             .frame(minHeight: 36)
         }
         .buttonStyle(SegmentedFilterTabStyle(isSelected: selection == item.value,
-                                            isFocused: focusedValue == item.value))
+                                            isFocused: focusedIndex == index))
         .overlay(alignment: .topTrailing) {
             if showsShortcutHints, let shortcutHint = item.shortcutHint {
                 Keycap(shortcutHint)
@@ -122,8 +125,18 @@ struct SegmentedFilterBar<Value: Hashable>: View {
                     .accessibilityHidden(true)
             }
         }
-        .focused($focusedValue, equals: item.value)
+        .focusable()
+        .focused($focusedIndex, equals: index)
         .focusEffectDisabled()
+        .onKeyPress(keys: [.leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
+            guard focusedIndex == index, press.modifiers.isEmpty, !worklogHasMarkedText else { return .ignored }
+            let next = index + (press.key == .rightArrow ? 1 : -1)
+            if items.indices.contains(next) {
+                selection = items[next].value
+                focusedIndex = next
+            }
+            return .handled
+        }
         .accessibilityLabel(Text(accessibilityLabel(for: item)))
         .accessibilityAddTraits(selection == item.value ? .isSelected : [])
         .worklogHelp(item.label, keys: item.shortcutHint)

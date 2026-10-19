@@ -3,18 +3,21 @@ import SwiftUI
 import WorkLogCore
 
 /// Embed in the host's ScrollView so long documents share one scrolling surface.
-struct MarkdownDocumentView: View {
+@MainActor struct MarkdownDocumentView: View {
     let markdown: String
     private let identifier: String
-    private let blocks: [MarkdownDocumentBlock]
-    @State private var mode: DisplayMode = .preview
+    private let bodyLabel: String
+    @StateObject private var document: ParsedDocumentState<[MarkdownDocumentBlock]>
+    @State private var mode: DocumentDisplayMode = .preview
 
-    private enum DisplayMode: Hashable { case preview, text }
-
-    init(markdown: String, accessibilityIdentifier: String? = nil) {
+    init(markdown: String, accessibilityIdentifier: String? = nil,
+         accessibilityLabel: String = "Markdown 본문, 읽기 전용") {
         self.markdown = markdown
         self.identifier = accessibilityIdentifier ?? "markdown-document"
-        self.blocks = MarkdownDocumentParser.parse(markdown)
+        self.bodyLabel = accessibilityLabel
+        // StateObject's autoclosure parses only when this view identity is first installed.
+        self._document = StateObject(wrappedValue: ParsedDocumentState(
+            source: markdown, parse: MarkdownDocumentParser.parse))
     }
 
     var body: some View {
@@ -23,11 +26,14 @@ struct MarkdownDocumentView: View {
                 Text("본문이 비어 있습니다.").foregroundStyle(WorkLogTheme.muted)
             } else if mode == .preview {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(blocks.indices, id: \.self) { index in
-                        MarkdownBlockView(block: blocks[index])
+                    ForEach(document.value.indices, id: \.self) { index in
+                        MarkdownBlockView(block: document.value[index])
                     }
                 }
                 .textSelection(.enabled)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(bodyLabel)
+                .accessibilityValue(markdown)
                 .accessibilityIdentifier("\(identifier)-preview")
             } else {
                 Text(markdown)
@@ -35,26 +41,41 @@ struct MarkdownDocumentView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(bodyLabel)
+                    .accessibilityValue(markdown)
                     .accessibilityHint("Markdown 원문입니다. 텍스트를 선택하여 복사할 수 있습니다.")
                     .accessibilityIdentifier("\(identifier)-source")
             }
-            Divider()
-            Picker("본문 표시", selection: $mode) {
-                Text("미리보기").tag(DisplayMode.preview)
-                Text("텍스트").tag(DisplayMode.text)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 260)
-            .accessibilityIdentifier("\(identifier)-mode")
-            .help("미리보기는 서식을 표시하고, 텍스트는 Markdown 원문을 표시합니다.")
+            DocumentModeToggle(mode: $mode, accessibilityIdentifier: "\(identifier)-mode",
+                help: "미리보기는 서식을 표시하고, 텍스트는 Markdown 원문을 표시합니다.")
         }
         .font(.system(size: 14))
         .foregroundStyle(WorkLogTheme.text)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier(identifier)
+        .onChange(of: markdown, initial: true) { _, source in document.update(source) }
         .environment(\.openURL, OpenURLAction { url in
             ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
         })
+    }
+}
+
+/// Keeps one parsed input per view identity, without retaining other reports globally.
+@MainActor final class ParsedDocumentState<Value>: ObservableObject {
+    @Published private(set) var value: Value
+    private var source: String
+    private let parse: (String) -> Value
+
+    init(source: String, parse: @escaping (String) -> Value) {
+        self.source = source
+        self.parse = parse
+        self.value = parse(source)
+    }
+
+    func update(_ source: String) {
+        guard self.source != source else { return }
+        self.source = source
+        value = parse(source)
     }
 }
 
