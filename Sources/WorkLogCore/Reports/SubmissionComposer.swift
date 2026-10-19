@@ -188,6 +188,14 @@ public enum SubmissionComposer {
             groups.append(SubmissionGroup(heading: heading(for: key, facts: facts), items: items))
         }
 
+        if groups.isEmpty {
+            warnings.append("이 기간에는 주간보고에 넣을 완료·진행 업무나 확정 계획이 없습니다. 보고 주와 업무 상태, 이번 주 계획 확정 여부를 확인하세요.")
+            let linkedMemoIds = Set(facts.memoLinksAccepted.map { FactSource.memoId($0.memoId) })
+            if facts.sources.contains(where: { $0.kind == .memo && !linkedMemoIds.contains($0.id) }) {
+                warnings.append("업무에 연결되지 않은 메모는 제출용 업무로 자동 변환하지 않습니다. 메모 내용을 보고하려면 업무를 만들거나 연결하고 상태·계획을 확인하세요.")
+            }
+        }
+
         return SubmissionDraft(groups: groups, reviewNotes: reviewNotes, warnings: warnings)
     }
 

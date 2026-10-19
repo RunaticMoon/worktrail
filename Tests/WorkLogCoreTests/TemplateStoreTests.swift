@@ -245,6 +245,42 @@ final class TemplateStoreTests: XCTestCase {
             .contains("앱 필수 출력 JSON Schema:\n"), "출력 예시가 없는 사용자 템플릿에도 계약을 붙인다")
     }
 
+    func testSavedSubmissionTemplatesAlwaysReceiveTaskBindingRules() throws {
+        let store = try makeStore()
+        try store.seedDefaults()
+        let original = try XCTUnwrap(try store.activeVersion(templateId: submissionId))
+        let custom = try store.saveNewVersion(templateId: submissionId,
+            instructions: "메모를 정리하고 내용이 없는 배열은 []로 반환한다.",
+            outputExample: "기타\n완료 기록 없음", skillRef: nil)
+        let withoutExample = try store.saveNewVersion(templateId: submissionId,
+            instructions: custom.instructions, outputExample: "", skillRef: nil)
+        let versionsBefore = try store.versions(templateId: submissionId)
+
+        for version in [original, custom, withoutExample] {
+            let composed = try store.composeInstructions(versionId: version.id)
+            let runtime = try XCTUnwrap(composed.components(separatedBy: "앱 필수 주간보고 계약:\n").last)
+            XCTAssertTrue(runtime.contains("submissionDraft의 모든 항목을 한 번씩 유지한다"))
+            XCTAssertTrue(runtime.contains("itemId, category, taskIds, projectIds, planItemIds"))
+            XCTAssertTrue(runtime.contains("상태만 변경한 업무도 보고 대상"))
+            XCTAssertTrue(runtime.contains("evidenceIds가 []라고 항목을 삭제하지 않는다"))
+            XCTAssertTrue(runtime.contains("facts.memoLinksAccepted"))
+            XCTAssertTrue(runtime.contains("독립 메모, 기록 없음, 확정 계획 없음 같은 안내는 reviewNotes에만"))
+            XCTAssertTrue(runtime.contains("taskIds에는 반드시 실제 업무 ID가 하나 이상"))
+            XCTAssertTrue(runtime.contains("항목을 새로 만들거나 합치거나 나누거나 삭제하지 않는다"))
+            let schemaText = try XCTUnwrap(runtime.components(separatedBy: "앱 필수 출력 JSON Schema:\n").last)
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(schemaText.utf8))
+            let itemSchema = schema["properties"]?["groups"]?["items"]?["properties"]?["items"]?["items"]
+            XCTAssertEqual(itemSchema?["properties"]?["taskIds"]?["minItems"], .number(1))
+            XCTAssertEqual(try store.version(id: version.id), version)
+        }
+
+        XCTAssertEqual(try store.versions(templateId: submissionId), versionsBefore,
+                       "새 실행 계약을 적용해도 기존 사용자 템플릿은 변경하지 않는다")
+        let performance = try XCTUnwrap(try store.activeVersion(templateId: periodicId))
+        XCTAssertFalse(try store.composeInstructions(versionId: performance.id)
+            .contains("앱 필수 주간보고 계약:"), "성과자료에는 제출용 업무 필수 계약을 적용하지 않는다")
+    }
+
     // MARK: 10 — v3 트리거 (template_version 불변)
 
     func testTemplateVersionImmutableTriggers() throws {

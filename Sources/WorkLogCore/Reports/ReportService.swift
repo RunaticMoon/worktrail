@@ -161,8 +161,12 @@ public final class ReportService {
                                           usedFallback: false, aiSkippedUnchanged: true)
         }
 
-        // AI 미사용 → 결정적 초안 저장.
-        guard useAI, let runner else {
+        // 제출할 업무가 없으면 안내만 저장한다. 독립 메모나 빈 기간을 AI가 업무로
+        // 만들어 taskIds 없는 줄을 반환하게 하지 않는다.
+        let hasNoSubmissionItems = deterministic.submissionDraft?.groups.allSatisfy { $0.items.isEmpty } == true
+
+        // AI 미사용 또는 제출 대상 없음 → 결정적 초안 저장.
+        guard useAI, let runner, !hasNoSubmissionItems else {
             let outcome = try store.saveGenerated(reportId: report.id, facts: facts,
                                                   draft: deterministic.draft, mode: mode)
             return ReportGenerationResult(outcome: outcome, report: report, facts: facts,
@@ -195,7 +199,8 @@ public final class ReportService {
         payloadFacts.generatedAt = Date(timeIntervalSince1970: 0)
         payloadFacts.knownAt = Date(timeIntervalSince1970: 0)
         let payloadJSON = try StableJSON.string(
-            AIPayload(jobType: jobType.rawValue, facts: payloadFacts))
+            AIPayload(jobType: jobType.rawValue, facts: payloadFacts,
+                      submissionDraft: deterministic.submissionDraft))
         let request = AIJobRequest(
             jobType: jobType, periodStart: facts.range.start, periodEndExclusive: facts.range.endExclusive,
             instructions: instructions, payloadJSON: payloadJSON, templateVersionId: version.id,
@@ -218,7 +223,7 @@ public final class ReportService {
 
         // AI 성공 → 로컬 검증. 파싱 실패·검증 오류면 기록 기반 초안으로 대체(REP-T15).
         let rawJSON = output.rawJSON.trimmingCharacters(in: .whitespacesAndNewlines)
-        let aiDraft: StructuredDraft
+        var aiDraft: StructuredDraft
         do {
             aiDraft = try decodeStructured(rawJSON, family: facts.family)
         } catch {
@@ -234,7 +239,18 @@ public final class ReportService {
                                           usedFallback: true, aiSkippedUnchanged: false)
         }
 
-        let findings = validate(aiDraft, facts: facts)
+        // 보류·취소 등 앱이 계산한 검토 안내는 AI가 생략해도 유지한다.
+        if case .submission(var submission) = aiDraft, let seed = deterministic.submissionDraft {
+            var notes = seed.reviewNotes
+            for note in submission.reviewNotes where !notes.contains(note) { notes.append(note) }
+            submission.reviewNotes = notes
+            aiDraft = .submission(submission)
+        }
+
+        var findings = validate(aiDraft, facts: facts)
+        if case .submission(let submission) = aiDraft, let seed = deterministic.submissionDraft {
+            findings += SubmissionAIContract.validate(draft: submission, seed: seed, facts: facts)
+        }
         if hasErrors(findings) {
             let codes = findings.filter { $0.severity == .error }.map(\.code).joined(separator: ", ")
             let fallback = fallbackDraft(
@@ -266,7 +282,8 @@ public final class ReportService {
     // MARK: - 결정적 초안
 
     private func makeDeterministicDraft(_ facts: ReportFacts) throws -> (draft: GeneratedDraft,
-                                                                        findings: [ValidationFinding]) {
+                                                                        findings: [ValidationFinding],
+                                                                        submissionDraft: SubmissionDraft?) {
         switch facts.family {
         case .submission:
             let structured = SubmissionComposer.compose(facts)
@@ -275,7 +292,7 @@ public final class ReportService {
                 structuredJSON: try StableJSON.string(structured),
                 warnings: structured.warnings, generator: "deterministic",
                 evidence: evidence(.submission(structured)))
-            return (draft, SubmissionValidator.validate(structured, facts: facts))
+            return (draft, SubmissionValidator.validate(structured, facts: facts), structured)
         case .performance:
             let structured = PerformanceComposer.compose(facts)
             let draft = GeneratedDraft(
@@ -283,7 +300,7 @@ public final class ReportService {
                 structuredJSON: try StableJSON.string(structured),
                 warnings: structured.warnings, generator: "deterministic",
                 evidence: evidence(.performance(structured)))
-            return (draft, PerformanceValidator.validate(structured, facts: facts))
+            return (draft, PerformanceValidator.validate(structured, facts: facts), nil)
         }
     }
 
@@ -403,8 +420,10 @@ public final class ReportService {
     }
 }
 
-/// AI 입력 페이로드 계약(jobType + facts). Secret 자료형을 포함하지 않는다.
+/// 제출용은 앱이 분류한 실제 업무 줄을 함께 전달한다. 성과 리포트에는 이 필드가 없다.
+/// Secret 자료형을 포함하지 않는다.
 private struct AIPayload: Codable {
     var jobType: String
     var facts: ReportFacts
+    var submissionDraft: SubmissionDraft?
 }
