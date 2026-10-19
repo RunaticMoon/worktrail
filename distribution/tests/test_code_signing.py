@@ -269,7 +269,7 @@ class SigningTests(unittest.TestCase):
             if 'add-trusted-cert' in args:
                 self.assertEqual(args,
                                  ('/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
-                                  '-d', '-r', 'trustRoot', '-p', 'codeSign', '-k',
+                                  '-d', '-r', 'trustRoot', '-p', 'codeSign', '-p', 'basic', '-k',
                                   str(state['keychain']), str(self.certificate)))
                 state['trusted'] = True
             if args[0] == '/usr/bin/codesign':

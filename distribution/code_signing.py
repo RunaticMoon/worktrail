@@ -116,10 +116,10 @@ def sign(app, certificate=PUBLIC_FILE):
             command('/usr/bin/security', 'set-key-partition-list', '-S', 'apple-tool:,apple:',
                     '-s', '-k', password, keychain)
             # TN3161: codesign needs a trusted signing identity on the build Mac.
-            # Scope this to code signing on a disposable runner, not SSL or users'
-            # Macs. Admin trust with noninteractive sudo avoids GUI authorization.
+            # Identity lookup also uses Basic X.509 policy (SecItem _FilterWithTrust).
+            # Limit trust to these two policies on a disposable runner, never SSL.
             command('/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
-                    '-d', '-r', 'trustRoot', '-p', 'codeSign', '-k', keychain, str(certificate))
+                    '-d', '-r', 'trustRoot', '-p', 'codeSign', '-p', 'basic', '-k', keychain, str(certificate))
             trusted = True
             command('/usr/bin/codesign', '--force', '--sign', fingerprint,
                     '--keychain', keychain, '--timestamp=none',
