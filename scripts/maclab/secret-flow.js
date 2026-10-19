@@ -208,7 +208,7 @@ function run(args) {
             stage = 'open_secret_route';
             const routeButton = named('Secret', 'AXButton', false);
             if (routeButton) press(routeButton.node);
-            else key('6', ['command down']);
+            else key('7', ['command down']); // Main sidebar: Secret (6 is the report library).
             stage = 'unlock_mock_vault';
             const unlock = named('잠금 해제', 'AXButton', false);
             if (unlock) press(unlock.node);

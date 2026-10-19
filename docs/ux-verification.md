@@ -208,13 +208,13 @@ Core에서 결함이나 실패한 재현은 발견하지 않았다.
 | 요청 | 확인 방법·근거 | 결과 |
 |---|---|---|
 | 1. Task 등록 상태 키보드 선택 | **↑↓**: 02열이 펼침 없이 상태 5개를 항상 보여 주고 `actionKeys`에 `initial:<status>` 5개가 포함됨(`CapturePanel.swift:830`, 행 `:990-997`). `actionRow`의 `.onKeyPress` ↑↓ → `moveAction`(`:1031-1043`, `:1242-1246`). **Space/Return**: `captureFocus(action:)`(`:76-82`, 한글 조합 중·수정키 조합은 무시) → `chooseAction` → `model.initialStatus = status`(`:1229-1233`). **⌥1–5**: `KeyboardPanel.sendEvent`가 ⌥+키코드 18/19/20/21/23을 `TaskStatus.allCases[index]`로 전달(`:311-315`), 업무 탭에서만 연결(`statusHandler`, `:534-537`) → `selectStatus`(`:601-609`). **완료=완료일 작업일**: 새 업무는 `CaptureModel`이 `createTask(initialStatus:workDate:)`(`CaptureModel.swift:481`), 기존 업무는 `completeTask(workDate:)`(`:432`, `:560`). 테스트: TaskServiceTests.testCreateCompletedTaskHasNoStartedOnAndOneCompletionDate(완료일=workDate, 시작일 없음) · UXFlowVerificationTests.testYesterdayWorkEnteredTodayLinksToYesterdayAndNextEntryStartsToday(어제로 완료 등록) · CaptureUXTests.testRegistersAsCompletedSavesCompletedTask · PresentationTests.testTaskCreationDoesNotInventStartDate | 통과(Core: 완료일) · 통과(코드: 키 경로) · 실제 키 입력은 미검증 |
-| 2. Secret 기본 검색 포함·키보드 열기/복사 | **기본 포함**: 범위 기본값 `.all`(`SearchScreen.swift:12`), 결과 목록에 `scope != .records`이면 Secret 제목 포함(`:219-220`), 제목 검색은 `environment.vaultSession.searchTitles`(vault, `:233-244`). **키보드**: ↑↓가 기록·Secret 섹션을 넘어 선택(`:358-368`), Return → `requestSecret` → 필요 시 인증 → key 목록·첫 key 자동 선택(`:269-309`, 모든 종료 경로 `defer`로 진행 상태 해제 `:281`). key 목록에서 ↑↓는 선택만(`:342-350`), Return만 `copyRow`(`:351-355`), Esc/⌘←로 결과 복귀(`:339-341`). 패널 ⌘1/⌘2/⌘3 = 전체/기록/Secret(`:325-332`). **Secret 범위 AI 차단**: `askAI()` 가드 2곳(`:312`, `:317`), ⌘Return 가드(`:334`), AI 버튼은 `scope != .secret`일 때만 표시·Secret 선택 시 비활성(`:557-563`), 범위 전환 시 Secret 검색어 분리 보관(`:59-70`). 유출 금지는 §6.3 | 통과(코드·정적) · Core 경계 테스트 통과(§3 테스트 재통과) · 실제 키 입력·인증 프롬프트는 미검증 |
+| 2. Secret 기본 검색 포함·키보드 열기/복사 | **기본 포함**: 범위 기본값 `.all`(`SearchScreen.swift:12`), 결과 목록에 `scope != .records`이면 Secret 제목 포함(`:219-220`), 제목 검색은 `environment.vaultSession.searchTitles`(vault, `:233-244`). **키보드**: ↑↓가 기록·Secret 섹션을 넘어 선택(`:358-368`), Return → `requestSecret` → 필요 시 인증 → key 목록·첫 key 자동 선택(`:269-309`, 모든 종료 경로 `defer`로 진행 상태 해제 `:281`). key 목록에서 ↑↓는 선택만(`:342-350`), Return만 `copyRow`(`:351-355`), Esc/⌘←로 결과 복귀(`:339-341`). 현재 범위 단축키는 패널 ⌘1–⌘5 / 메인 검색 ⌃1–⌃5 = 전체/기록/업무/리포트/Secret이다(2026-10-19 배치 반영, 이 행의 나머지 줄 번호·검증 결과는 당시 기준). **Secret 범위 AI 차단**: `askAI()` 가드 2곳(`:312`, `:317`), ⌘Return 가드(`:334`), AI 버튼은 `scope != .secret`일 때만 표시·Secret 선택 시 비활성(`:557-563`), 범위 전환 시 Secret 검색어 분리 보관(`:59-70`). 유출 금지는 §6.3 | 통과(코드·정적) · Core 경계 테스트 통과(§3 테스트 재통과) · 실제 키 입력·인증 프롬프트는 미검증 |
 | 3. 검색 전역 핫키 | **등록**: `AppController` 시작 시 `GlobalHotkeys(handlers: [.capture: showCapture, .search: showSearch])` → `HotkeySettingsCoordinator.start(capture:search:)`(`AppController.swift:85-93`). `GlobalHotkeys.register` → `RegisterEventHotKey`(서명 'WLOG', `hotKeyID`), 실패 시 "등록 실패: 다른 앱이 사용 중일 수 있음 (OSStatus n)"(`GlobalHotkeys.swift:58-86`). **디스패치**: Carbon 핸들러 `kEventHotKeyPressed` → 서명 확인 → `dispatch(id)` → 최근 눌림 HH:mm:ss(주입 Clock·업무 시간대) 기록 후 핸들러 호출(`:114-148`). `showSearch` → `SearchPanelController.show()` → `activate` + `orderFrontRegardless` + `makeKeyAndOrderFront` + 검색 포커스(`AppController.swift:178-193`, `SearchPanel.swift:37-58`). **진단**: 메뉴바 "검색 열기 (현재 단축키)" + 등록 상태·최근 눌림(`WorkLogApp.swift:61-78`), 설정 화면 같은 정보(`SettingsScreen.swift:92-97`). 진단은 메모리 전용, 검색어·Secret 미포함. Core: HotkeyBindingTests(`ctrl+opt+d` 파싱 등 21개), HotkeySettingsCoordinatorTests(25개) | 통과(코드·Core) · **실제 핫키 수신은 미검증(Mac 필요)** |
 | 4. 선택 스타일(사이드바·업무 목록·프로젝트 목록) | 공용 `WorkLogSourceRowStyle`(`AppTheme.swift`): 선택은 `accentSoft` 채움, 포커스·대비 증가 때만 2pt 링, 호버는 약한 채움. 카드 테두리 없음. 사용처: 사이드바 `AppRootView.swift:209`(이전 행별 테두리 배경 제거), 업무 목록 `TaskListScreen.swift:32-34`, 프로젝트 목록 `ProjectsScreen.swift:73`, 프로젝트 업무 `:131`. 세 화면 모두 `List(selection:)`(전체 폭 파란 블록) 미사용(grep 0건). 상태 배지는 반투명 캡슐(`Components.swift` StatusBadge, 대비 증가 때만 테두리), 상태 심볼은 공용 `badgeSymbol`로 통일(예정=`circle.dashed`, 빠른 입력 `CapturePanel.swift:1197-1199`도 같은 값). 빠른 입력 02열 "등록 상태"는 펼침 목록이 아닌 항상 보이는 행으로 변경 | 통과(코드) · 실제 렌더링·대비는 미검증 |
 | 5. 재열기 시 기본 유형 | `CaptureSessionModel.beginSession()`이 열 때마다 `tab = settings.defaultCaptureKind`, 초안은 보존(`CaptureSessionModel.swift:63-77`), 앱은 패널 표시 때 호출(`CapturePanel.swift:156`). CaptureReopenTests 6개 통과: testReopenAfterEmptyTaskTabStartsAtDefaultMemo · testReopenWithTaskDraftStartsAtMemoAndKeepsDraft · testReopenAfterSaveResetsSession · testDefaultTaskSettingStartsAtTask · testChangingDefaultKindAppliesOnNextOpen · testHasDraftCriteria | 통과(Core) |
 
 발견한 결함: 없음(Core·정적 범위). 문서 차이 1건:
-- `docs/ux-flows.md` §1 표 ② 행은 "Secret은 ⌘2(Secret 범위)"라고 적혀 있으나 코드(`SearchScreen.swift:327-329`)와 같은 문서 §3.5는 ⌘3=Secret, ⌘2=기록이다. 문서 정정 필요(검증자 수정 범위 밖).
+- 검색 범위 문서 불일치는 현재 배치로 정정했다(2026-10-19): 패널 ⌘5 / 메인 검색 ⌃5 = Secret, 3 = 업무, 4 = 리포트. 빠른 입력의 ⌘3 = Secret 유형 전환은 유지한다. 단축키 설명 정정이며 당시 실기 검증 범위를 확장하지 않는다.
 
 ### 6.3 Secret 경계 정적 확인(request-2 범위)
 
@@ -235,7 +235,7 @@ Core에서 결함이나 실패한 재현은 발견하지 않았다.
 | M1 | 빠른 입력 전체 키보드 조작 | 마우스를 쓰지 않는다. ⌃⌥Space → 메모 탭에서 시작하는지 확인 → ⌘2 → 업무명 입력 → Return(02열) → ↓로 "등록 상태" 행 이동 → Space로 "완료" 선택 → → (03 본문) → 본문 입력 → ⌘← 로 02열 복귀 → ⌥2(진행) → ⌥4(완료) → Tab으로 @프로젝트 → ⌘⇧P 피커에서 ↑↓·Return → ⌘D로 날짜를 어제로 → ⌘Return | 모든 단계가 키보드만으로 가능. ⌥숫자가 본문에 문자를 넣지 않음. 저장 후 업무 상세의 완료일이 어제, 다음 열기는 오늘·메모 탭 | 미검증 |
 | M2 | Space/Return 이중 발화(검토 W C4) | 업무 03열 "관련 기록"·"프로젝트별 상태 관리" 펼침 헤더에 Tab으로 포커스 → Space 1회, Return 1회씩 누름. 02열 상태 행에서도 Space/Return 1회 | 헤더는 1회 누를 때마다 정확히 한 번 펼침↔접힘(두 번 토글되어 제자리로 돌아오면 결함). 상태 행은 한 번 선택되고 비프음 없음 | 미검증 |
 | M3 | 검색 ⌃⌥D 원인 구분 | ① 메뉴바 아이콘 → "검색 열기 (⌃⌥D)" 클릭 → 패널이 맨 앞에 뜨고 검색 필드에 커서가 있는지(패널 표시 경로 확인). ② 설정 > 단축키 및 메뉴바에서 검색 단축키 상태가 "등록됨"인지, "등록 실패 … (OSStatus n)"인지 확인. ③ 다른 앱(Safari)을 앞에 둔 채 ⌃⌥D → 설정/메뉴바의 "최근 눌림 HH:mm:ss"가 갱신되는지 확인 | ①만 실패 → 패널 표시 결함. ② 등록 실패 → 다른 앱이 같은 조합 점유(조합 변경). ②는 등록됨인데 ③에서 '최근 눌림'이 갱신되지 않음 → 키가 앱에 도달하지 않음(다른 앱·시스템 단축키·입력기 충돌 의심, 해당 앱 종료 또는 조합 변경 후 재확인). ③ 갱신되는데 패널이 안 뜸 → 디스패치 후 표시 경로 결함 | 미검증 |
-| M4 | 검색 전체 키보드 조작 | ⌃⌥D → "테스트" 입력 → ↓로 기록 결과에서 Secret 섹션까지 이동 → Return(인증 프롬프트 1회) → key 목록에서 ↑↓ → Return 복사 → Esc로 결과 복귀 → ⌘3(Secret 범위) → ⌘Return | ↑↓만으로 복사되지 않음, Return 때만 "복사했습니다…"(값 미표시). Esc 후 검색어·선택 유지. Secret 범위·Secret 선택에서 AI 버튼이 없거나 비활성, ⌘Return이 AI를 실행하지 않음 | 미검증 |
+| M4 | 검색 전체 키보드 조작 | ⌃⌥D → "테스트" 입력 → ↓로 기록 결과에서 Secret 섹션까지 이동 → Return(인증 프롬프트 1회) → key 목록에서 ↑↓ → Return 복사 → Esc로 결과 복귀 → ⌘5(Secret 범위) → ⌘Return | ↑↓만으로 복사되지 않음, Return 때만 "복사했습니다…"(값 미표시). Esc 후 검색어·선택 유지. Secret 범위·Secret 선택에서 AI 버튼이 없거나 비활성, ⌘Return이 AI를 실행하지 않음 | 미검증 |
 | M5 | VoiceOver 가린 값 | ⌘F5 → 검색 패널 Secret 결과 행과 key 목록을 VO+→로 읽음 | "Secret, 테스트 계정, …" / "user, 값 가려짐"만 읽히고 `fake-123`은 읽히지 않음 | 미검증 |
 | M6 | 840pt / 980pt | 메인 창 너비 840pt와 980pt에서 사이드바·업무 목록·프로젝트 목록 확인. 빠른 입력 패널 폭을 넓혔다 좁혀 업무 3열 ↔ 세로 스크롤 전환 확인(콘텐츠 880pt 기준) | 선택 행이 전체 폭 파란 블록이 아니라 옅은 채움, 포커스 때만 링. 사이드바 항목에 카드 테두리 없음. 상태 배지는 옅은 캡슐. 전환 중 선택 유지, 긴 한국어 업무명 줄바꿈 | 미검증 |
 | M7 | 재열기 기본 유형 | 업무 탭에 초안을 남기고 Esc → 다시 ⌃⌥Space | 메모 탭으로 열리고 업무 탭에 "초안 있음" 점 표시, ⌘2로 초안 이어 쓰기 가능 | 미검증(Core는 통과) |
@@ -244,3 +244,73 @@ Core에서 결함이나 실패한 재현은 발견하지 않았다.
 ### 6.5 미검증 목록
 - macOS 실제 앱 실행: 전역 핫키 실수신(⌃⌥Space·⌃⌥D), 패널 전면 표시·포커스, 키보드 전용 흐름, Space/Return 이중 발화, IME 조합 중 키 우선순위, 인증 프롬프트, 클립보드 복사, VoiceOver, 대비·다크, 840/980pt 렌더링. 위 M1~M8 절차로 확인한다.
 - macOS CI는 빌드·타입 검사·Core 테스트·DMG만 한다. UI 자동 조작은 포함하지 않는다.
+
+
+## WTRP-11FC / M — 보관함 예약 생성 갱신·Maclab 단축키 (2026-10-19 KST)
+
+목표 달성: 요청한 코드·문서 수정 완료. API 변경 없음. AppController의 시작 catch-up `do/catch` 뒤에서 `reportLibrary?.load()`를 호출하므로 성공·실패와 실패 전 부분 저장 모두 재조회한다. `dailyClose`, 주간·월간·분기 성과자료와 월요일 주간보고도 같은 catch-up 내부 경로다. App의 다른 예약 실행 호출은 없으며 fixture 리포트 생성은 환경 반환 전에 끝난다. Core와 AppRootView는 수정하지 않았다.
+
+변경 파일: `Sources/WorkLogApp/AppController.swift`, `scripts/maclab/{keyboard-empty,secret-flow,verify-ui}.js`, `scripts/maclab/README.md`, `docs/ux-flows.md`, 이 문서. K·L 소유 파일은 수정하지 않았다. git add/commit/stash/reset/checkout/restore는 실행하지 않았다.
+
+검증: Linux aarch64 / Swift 6.3.3에서 `swift build --build-tests` exit 0(캐시 디렉터리 접근 경고 있음). AppController.swift와 AppRootView.swift의 임시 복사본에서 첫 `#if os(macOS)`를 `#if true`로 치환한 `swiftc -parse` 2/2 통과, 임시 복사본 삭제(원본 변경 없음). 수정한 JavaScript 3개 각각 `node --check` 3/3 통과. `git diff --check` 통과. XCTest 실행은 요청 범위에 포함하지 않았다.
+
+실기 재현: 보관함을 연 채 가짜 환경의 시작 catch-up 완료를 기다려 목록·기간별 개수 반영을 확인한다. 성공·실패·일부 저장 후 실패를 각각 확인한다. Maclab에서는 `keyboard-empty.js --fixture empty`로 ⌘9 → ⌘0 → ↓ → 잠금 화면 및 가짜 잠금 해제·콘텐츠 포커스를, `secret-flow.js`의 Secret 진입과 `verify-ui.js --fixture many resize 960 640 7`을 확인한다. 기존 fixture·계정 격리 조건을 따른다.
+
+미검증·제약: 이 환경에는 macOS SDK·실제 Mac 앱이 없으므로 SwiftUI 타입 검사, 화면·키보드·VoiceOver 실기, 예약 생성 성공·실패·부분 저장 후 화면 갱신은 미실행이다. Linux 빌드·구문 통과로 이 항목들의 성공을 주장하지 않는다.
+
+### 숫자 단축키 전수 검색 결과
+
+요청한 명령의 출력 21건을 그대로 첨부한다. 줄 번호는 이번 M 수정 후 기준이다.
+
+```sh
+grep -rn "command down" scripts/maclab | grep -E "'[1-9]'|\b(18|19|20|21|22|23|25|26|28)\b"
+```
+
+```text
+scripts/maclab/keyboard-empty.js:248:        key(20, ['command down']);
+scripts/maclab/keyboard-empty.js:266:        key(25, ['command down']); // Physical 9 key: Graph, immediately before Trash.
+scripts/maclab/keyboard-safety.js:185:        key(19, ['command down']);
+scripts/maclab/keyboard-safety.js:283:        key(18, ['command down']);
+scripts/maclab/keyboard-safety.js:284:        key(18, ['command down', 'option down']);
+scripts/maclab/keyboard-safety.js:312:        key(19, ['command down']);
+scripts/maclab/keyboard-safety.js:381:        key(20, ['command down']);
+scripts/maclab/settings-task-review.js:202:            key(19, ['command down']); // Command-2: tasks.
+scripts/maclab/settings-task-review.js:232:            key(19, ['command down']); // Command-2: capture task tab.
+scripts/maclab/secret-flow.js:211:            else key('7', ['command down']); // Main sidebar: Secret (6 is the report library).
+scripts/maclab/keyboard-flow.js:262:            key(19, ['command down']); expectTab('업무', 'COMMAND_2_TASK_TAB_FAILED');
+scripts/maclab/keyboard-flow.js:266:            key(20, ['command down']); expectTab('Secret', 'COMMAND_3_SECRET_TAB_FAILED');
+scripts/maclab/keyboard-flow.js:268:            key(18, ['command down']); expectTab('메모', 'COMMAND_1_MEMO_TAB_FAILED');
+scripts/maclab/keyboard-flow.js:280:        key(18, ['command down']); expectTab('메모', 'RETURN_TO_MEMO_FAILED');
+scripts/maclab/keyboard-flow.js:299:        key(19, ['command down']);
+scripts/maclab/keyboard-flow.js:303:        key(20, ['command down']);
+scripts/maclab/keyboard-flow.js:305:        key(18, ['command down']);
+scripts/maclab/keyboard-flow.js:306:        key(18, ['command down', 'option down']);
+scripts/maclab/keyboard-flow.js:310:        key(19, ['command down']);
+scripts/maclab/keyboard-flow.js:336:        key(18, ['command down']);
+scripts/maclab/keyboard-flow.js:337:        key(18, ['command down', 'option down']);
+```
+
+| 사용처 (`scripts/maclab/` 기준) | 실제 의미 | 새 배치 대조 |
+| --- | --- | --- |
+| `keyboard-empty.js:248` | keycode 20 = ⌘3 프로젝트 | 일치 |
+| `keyboard-empty.js:266` | keycode 25 = ⌘9 관계 그래프 → ⌘0 → ↓ 휴지통 | 휴지통 번호 단축키 제거 반영 |
+| `keyboard-safety.js:185,312` | keycode 19 = ⌘2 업무 | 일치 |
+| `keyboard-safety.js:283–284` | keycode 18 = ⌘1 오늘, ⌥⌘1 타임라인 탭 | 기존 동작 유지 |
+| `keyboard-safety.js:381` | 빠른 입력 keycode 20 = ⌘3 Secret 유형 | 검색 범위와 별개, 유지 |
+| `settings-task-review.js:202` | ⌘2 업무 화면 | 일치 |
+| `settings-task-review.js:232` | 빠른 입력 ⌘2 업무 유형 | 별도 동선 유지 |
+| `secret-flow.js:211` | 문자열 7 = ⌘7 Secret 화면 | 옛 ⌘6 교체 |
+| `keyboard-flow.js:262,266,268,280` | 빠른 입력 ⌘2 업무 / ⌘3 Secret / ⌘1 메모 | 별도 동선 유지 |
+| `keyboard-flow.js:299,303,305,310,336` | 메인 ⌘2 업무 / ⌘3 프로젝트 / ⌘1 오늘 | 일치 |
+| `keyboard-flow.js:306,337` | ⌥⌘1 타임라인 탭 | 별도 동선 유지 |
+
+위 grep이 잡지 못하는 간접 호출·Control 조합도 전체 JavaScript에서 확인했다.
+
+| 추가 사용처 | 실제 의미·결과 |
+| --- | --- |
+| `verify-ui.js:144–145,165` | `route.key`는 1 오늘 / 2 업무 / 4 주간보고 / 5 성과자료 / 7 Secret. Secret의 옛 6을 교체하고 지원 인자 오류 안내도 정정 |
+| `task-flow.js:152–154,181` | `key('2')`가 Command 수정키를 적용하는 업무 화면 대체 진입. ⌘2 유지 |
+| `keyboard-flow.js:208–220,253,365` | 간접 `commandCode`는 45=N, 3=F. `globalCode`는 49=Space, 2=D의 ⌃⌥ 조합. 숫자 화면 이동·검색 범위 아님 |
+| `keyboard-flow.js:275–278,339–343` | ⌃Tab/⌃⇧Tab으로 빠른 입력 유형·오늘 탭 순환. 숫자 조합 없음 |
+| `capture-search-flow.js:244,271`, `search-roundtrip.js:142` | ⌃⌥Space / ⌃⌥D 전역 핫키. keycode 2는 문자 D이며 숫자 2는 keycode 19 |
+| 검색 범위 전환 | 전체 JavaScript에 ⌘3/⌃3로 Secret 범위를 고르는 호출 없음. `search-roundtrip.js`·`capture-search-flow.js`는 일반 메모 검색·원문 왕복만 수행하여 수정 불필요. 현재 범위는 패널 ⌘1–5 / 메인 ⌃1–5 = 전체/기록/업무/리포트/Secret으로 README와 이 문서의 옛 설명을 정정 |

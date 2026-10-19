@@ -263,7 +263,9 @@ function main(args) {
         waitFor(function () { return front() && mainWindow(); }, 'MAIN_WINDOW_NOT_REACTIVATED');
 
         stage = 'empty_trash_unlock_focus';
-        key(25, ['command down']); // Physical 9 key: Trash in the numbered sidebar.
+        key(25, ['command down']); // Physical 9 key: Graph, immediately before Trash.
+        focusSidebar('관계 그래프', 'graphSidebarFocused');
+        key(125); // Down: Trash has no numbered shortcut.
         waitFor(function () { return knownTitle(mainWindow(), '휴지통이 잠겨 있습니다'); }, 'FRESH_LOCKED_TRASH_REQUIRED');
         focusSidebar('휴지통', 'lockedTrashSidebarFocused');
         key(29, ['command down', 'shift down']);

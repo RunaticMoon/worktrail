@@ -84,6 +84,8 @@ import WorkLogCore
             if !failures.isEmpty { notice = failures.joined(separator: "\n") }
             do { try await env.runStartupCatchUp() }
             catch { notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다." }
+            // Scheduled reports bypass the editors, including any saved before a failure.
+            reportLibrary?.load()
         } catch {
             clearRegistrations()
             startupError = "WorkLog 저장소를 열지 못했습니다. 저장소 권한과 설정 파일을 확인하고 다시 시도하세요."
