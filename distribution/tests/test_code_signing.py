@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import os
 import plistlib
+import shlex
 import stat
 import subprocess
 import sys
@@ -362,28 +363,47 @@ class ProcessIsolationTests(unittest.TestCase):
                      'requires a disposable macOS GitHub-hosted runner')
 class MacOSSigningContinuityTests(unittest.TestCase):
     def setUp(self):
-        # Only this synthetic test exposes codesign diagnostics (public paths,
-        # certificate names and OS errors). Production signing stays redacted.
+        # Diagnostics here run ONLY on freshly generated fake identities.
         original_run = subprocess.run
 
         def run(*args, **kwargs):
-            result = original_run(*args, **kwargs)
-            if args and args[0][0] == '/usr/bin/codesign' and result.returncode:
-                sys.stderr.write('Synthetic codesign: ' + result.stderr.decode())
-                if '--keychain' in args[0]:
-                    keychain = args[0][args[0].index('--keychain') + 1]
-                    identities = original_run(
-                        ['/usr/bin/security', 'find-identity', '-p', 'codesigning', keychain],
-                        capture_output=True,
+            argv = args[0]
+            try:
+                result = original_run(*args, **kwargs)
+            except subprocess.TimeoutExpired:
+                if 'remove-trusted-cert' in argv:
+                    replacement = original_run(
+                        ['/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
+                         '-d', '-r', 'unspecified', '-p', 'codeSign', '-p', 'basic', argv[-1]],
+                        capture_output=True, timeout=10,
                     )
-                    # This path contains ONLY the fresh identity made by this test.
-                    sys.stderr.write('Synthetic identity status: ' + identities.stdout.decode())
-                    for selector in (args[0][args[0].index('--sign') + 1].upper(), provision.IDENTITY_NAME):
-                        attempt = list(args[0])
-                        attempt[attempt.index('--sign') + 1] = selector
-                        retry = original_run(attempt, capture_output=True, timeout=10)
-                        sys.stderr.write(f'Synthetic selector {selector}: exit={retry.returncode} '
-                                         + retry.stderr.decode())
+                    sys.stderr.write(f'Synthetic revoke trust: exit={replacement.returncode} '
+                                     + replacement.stderr.decode())
+                    for policy in ('basic', 'codeSign'):
+                        check = original_run(['/usr/bin/security', 'verify-cert', '-c', argv[-1],
+                                              '-p', policy], capture_output=True, timeout=10)
+                        sys.stderr.write(f'Synthetic trust after revoke {policy}: exit={check.returncode} '
+                                         + check.stderr.decode())
+                raise
+            if argv[0] == '/usr/bin/codesign' and result.returncode and '--keychain' in argv:
+                sys.stderr.write('Synthetic codesign: ' + result.stderr.decode())
+                keychain = argv[argv.index('--keychain') + 1]
+                for policy in ('basic', 'codesigning'):
+                    check = original_run(['/usr/bin/security', 'find-identity', '-p', policy, keychain],
+                                         capture_output=True, timeout=10)
+                    sys.stderr.write(f'Synthetic identity {policy}: ' + check.stdout.decode())
+                previous = original_run(['/usr/bin/security', 'list-keychains', '-d', 'user'],
+                                        capture_output=True, check=True, timeout=10)
+                paths = shlex.split(previous.stdout.decode())
+                try:
+                    original_run(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', keychain],
+                                 capture_output=True, check=True, timeout=10)
+                    retry = original_run(argv, capture_output=True, timeout=10)
+                    sys.stderr.write(f'Synthetic restricted search list: exit={retry.returncode} '
+                                     + retry.stderr.decode())
+                finally:
+                    original_run(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', *paths],
+                                 capture_output=True, check=True, timeout=10)
             return result
 
         patch = mock.patch.object(signing.subprocess, 'run', side_effect=run)
