@@ -16,8 +16,10 @@ import WorkLogCore
         self.environment = environment
         self.secrets = secrets
         self.onOpenSecrets = onOpenSecrets
+        // .nonactivatingPanel must be set at construction: a hotkey panel receives key
+        // input without activating WorkLog, so the main window never rises from behind.
         panel = SearchKeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 640),
-            styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+            styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self
         panel.title = "WorkLog 검색"
@@ -43,7 +45,8 @@ import WorkLogCore
             FloatingPanelPositioning.place(panel)
         }
         ensureHosting()
-        NSApp.activate(ignoringOtherApps: true)
+        // A non-activating panel takes key focus by itself. Activating NSApp here would
+        // raise the main window over the frontmost app, so order only the panel.
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         if let sheet = panel.attachedSheet {
@@ -79,9 +82,12 @@ import WorkLogCore
         // Leave an open source sheet to handle its own Escape / Close action.
         guard panel.attachedSheet == nil else { return }
         hidePanel()
-        if restorePreviousApp,
-           previousApp?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            previousApp?.activate(options: [])
+        // A non-activating panel never made WorkLog the active app, so the frontmost
+        // app usually still owns focus and needs no restore. Hand focus back only when
+        // WorkLog really became active (e.g. a sheet or the main window took over).
+        if restorePreviousApp, NSApp.isActive, let previousApp,
+           previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            _ = previousApp.activate(from: NSRunningApplication.current, options: [])
         }
         previousApp = nil
     }

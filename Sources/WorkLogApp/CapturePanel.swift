@@ -122,8 +122,10 @@ extension View {
         self.secrets = secrets
         self.calendar = calendar
         self.onSaved = onSaved
+        // .nonactivatingPanel must be set at construction: a hotkey panel receives key
+        // input without activating WorkLog, so the main window never rises from behind.
         panel = KeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 500),
-            styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+            styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self
         panel.title = "빠른 입력"
@@ -177,7 +179,9 @@ extension View {
             panel.contentView = hosting
             FloatingPanelPositioning.place(panel)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        // The non-activating panel becomes key on its own; activating NSApp would also
+        // raise the main window over the app the user was working in.
+        panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(panel)
         panel.requestDefaultFocus(for: session.tab)
@@ -250,9 +254,11 @@ extension View {
         panel.contentView = nil
         panel.initialFirstResponder = nil
         panel.orderOut(nil)
-        if restorePreviousApp,
-           previousApp?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            previousApp?.activate(options: [])
+        // The non-activating panel does not activate WorkLog, so the previous app is
+        // normally still in front. Restore it only if WorkLog actually became active.
+        if restorePreviousApp, NSApp.isActive, let previousApp,
+           previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            _ = previousApp.activate(from: NSRunningApplication.current, options: [])
         }
     }
 

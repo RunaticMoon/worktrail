@@ -237,6 +237,9 @@ import WorkLogCore
             searchPanel = SearchPanelController(model: search, environment: environment, secrets: secrets,
                 onOpenSecrets: { [weak self] in
                     self?.route = .secrets
+                    // The search panel is non-activating, so activate explicitly before
+                    // bringing the main window forward.
+                    NSApp.activate()
                     self?.openMainWindow?()
                 })
         }
