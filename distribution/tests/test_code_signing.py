@@ -331,8 +331,9 @@ class SigningTests(unittest.TestCase):
         def run(*args, **kwargs):
             if '--requirements' in args:
                 return designated.encode('utf-8')
-            if '--extract-certificates' in args:
-                prefix = args[args.index('--extract-certificates') + 1]
+            if any(arg.startswith('--extract-certificates=') for arg in args):
+                prefix = next(arg.split('=', 1)[1] for arg in args
+                              if arg.startswith('--extract-certificates='))
                 Path(prefix + '0').write_bytes(extracted)
             return b''
 
@@ -434,7 +435,7 @@ class MacOSSigningContinuityTests(unittest.TestCase):
         def run(*args, **kwargs):
             result = original_run(*args, **kwargs)
             argv = args[0]
-            if argv[0] == '/usr/bin/codesign' and '--keychain' in argv and result.returncode:
+            if argv[0] == '/usr/bin/codesign' and result.returncode:
                 sys.stderr.write('Synthetic codesign: ' + result.stderr.decode(errors='replace'))
             return result
 

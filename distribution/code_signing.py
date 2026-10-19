@@ -69,7 +69,7 @@ def verify(app, certificate=PUBLIC_FILE):
         raise RuntimeError('The app must retain the pinned, version-independent designated requirement')
     with tempfile.TemporaryDirectory(prefix='worklog-cert-check-') as temporary:
         prefix = str(Path(temporary) / 'signer-')
-        command('/usr/bin/codesign', '--display', '--extract-certificates', prefix, str(app))
+        command('/usr/bin/codesign', '--display', '--extract-certificates=' + prefix, str(app))
         if Path(prefix + '0').read_bytes() != certificate_der(certificate):
             raise RuntimeError('The app signer differs from the pinned certificate')
 
