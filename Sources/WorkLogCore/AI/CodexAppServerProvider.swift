@@ -194,6 +194,9 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         ]
         if let model { turnParams["model"] = .string(model) }
         if let effort = profile.effort { turnParams["effort"] = .string(effort) }
+        if input.jobType == .submissionWeekly {
+            turnParams["outputSchema"] = SubmissionOutputSchema.schema
+        }
 
         do {
             let turnResult = try await send(connection, "turn/start", .object(turnParams))
