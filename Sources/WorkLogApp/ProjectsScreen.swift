@@ -221,54 +221,13 @@ import WorkLogCore
                             return .handled
                         }
                 } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 2) {
-                                taskTableHeader
-                                ForEach(model.tasks) { row in
-                                    Button { taskSelection = row.id; tasksFocused = true } label: { projectTaskRow(row) }
-                                        .buttonStyle(WorkLogSourceRowStyle(isSelected: taskSelection == row.id,
-                                            isFocused: tasksFocused && taskSelection == row.id))
-                                        .focusable(false)
-                                        .id(row.id)
-                                        .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(row.id) })
-                                        .accessibilityAddTraits(taskSelection == row.id ? .isSelected : [])
-                                        .accessibilityLabel(Text(taskRowLabel(row)))
-                                        .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
-                                        .accessibilityAction(named: Text("업무 상세 열기")) {
-                                            taskSelection = row.id
-                                            onOpen(row.id)
-                                        }
-                                }
-                            }
-                            .padding(2)
-                        }
-                        .focusable()
-                        .focusEffectDisabled()
-                        .focused($tasksFocused)
-                        .accessibilityLabel("프로젝트 업무 목록")
-                        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .return], phases: [.down, .repeat]) { press in
-                            guard press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
-                            if press.key == .leftArrow {
-                                if press.phase == .down { focusProjectList() }
-                            } else if press.key == .return {
-                                if press.phase == .down, let taskSelection { onOpen(taskSelection) }
-                            } else { moveTaskSelection(press.key == .upArrow ? -1 : 1) }
-                            return .handled
-                        }
-                        .onChange(of: tasksFocused) { _, focused in
-                            if focused && taskSelection == nil { taskSelection = model.tasks.first?.id }
-                        }
-                        .onChange(of: taskSelection) { _, id in
-                            if let id { proxy.scrollTo(id) }
-                        }
-                        .onAppear { if let taskSelection { proxy.scrollTo(taskSelection) } }
-                        .onChange(of: detailDismissalRevision) { _, _ in
-                            if let taskSelection { proxy.scrollTo(taskSelection) }
-                        }
+                    GeometryReader { geometry in
+                        // Decide once for the whole list, regardless of individual title lengths.
+                        projectTaskList(compact: geometry.size.width < TaskColumns.tableMinimumWidth)
                     }
                     Button("선택한 업무 상세 열기") { if let taskSelection { onOpen(taskSelection) } }
                         .disabled(taskSelection == nil).worklogHelp("업무 상세 열기", keys: "Return")
+                        .accessibilityIdentifier("project-open-selected-task")
                 }
             }
         } else {
@@ -276,54 +235,118 @@ import WorkLogCore
         }
     }
 
-    private var taskTableHeader: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                Text("업무명").frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
-                Text("전체 상태").frame(width: 100, alignment: .leading)
-                Text("이 프로젝트 기준").frame(width: 130, alignment: .leading)
-                Text("마감").frame(width: 110, alignment: .leading)
+    private enum TaskColumns {
+        static let tableMinimumWidth: CGFloat = 680
+        static let spacing: CGFloat = 12
+        static let overallStatus: CGFloat = 88
+        static let projectStatus: CGFloat = 124
+        static let dueDate: CGFloat = 112
+    }
+
+    private func projectTaskList(compact: Bool) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    if !compact { taskTableHeader }
+                    ForEach(model.tasks) { row in
+                        VStack(spacing: 4) {
+                            Button { taskSelection = row.id; tasksFocused = true } label: {
+                                projectTaskRow(row, compact: compact)
+                            }
+                                .buttonStyle(WorkLogSourceRowStyle(isSelected: taskSelection == row.id,
+                                    isFocused: tasksFocused && taskSelection == row.id))
+                                .focusable(false)
+                                .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(row.id) })
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityIdentifier("project-task-row-\(row.id)")
+                                .accessibilityAddTraits(taskSelection == row.id ? .isSelected : [])
+                                .accessibilityLabel(Text(taskRowLabel(row)))
+                                .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
+                                .accessibilityAction(named: Text("업무 상세 열기")) {
+                                    taskSelection = row.id
+                                    onOpen(row.id)
+                                }
+                            Divider().padding(.horizontal, WorkLogTheme.cardInset)
+                        }
+                        .id(row.id)
+                    }
+                }
+                .padding(2)
             }
-            Text("업무 · 전체 상태 · 이 프로젝트 기준 · 마감")
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .focusable()
+            .focusEffectDisabled()
+            .focused($tasksFocused)
+            .accessibilityLabel("프로젝트 업무 목록")
+            .accessibilityIdentifier("project-task-list")
+            .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .return], phases: [.down, .repeat]) { press in
+                guard press.modifiers.isEmpty, !hasMarkedText else { return .ignored }
+                if press.key == .leftArrow {
+                    if press.phase == .down { focusProjectList() }
+                } else if press.key == .return {
+                    if press.phase == .down, let taskSelection { onOpen(taskSelection) }
+                } else { moveTaskSelection(press.key == .upArrow ? -1 : 1) }
+                return .handled
+            }
+            .onChange(of: tasksFocused) { _, focused in
+                if focused && taskSelection == nil { taskSelection = model.tasks.first?.id }
+            }
+            .onChange(of: taskSelection) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+            .onAppear { if let taskSelection { proxy.scrollTo(taskSelection) } }
+            .onChange(of: detailDismissalRevision) { _, _ in
+                if let taskSelection { proxy.scrollTo(taskSelection) }
+            }
+        }
+    }
+
+    private var taskTableHeader: some View {
+        HStack(spacing: TaskColumns.spacing) {
+            Text("업무명").frame(maxWidth: .infinity, alignment: .leading)
+            Text("전체 상태").frame(width: TaskColumns.overallStatus, alignment: .leading)
+            Text("이 프로젝트 기준").frame(width: TaskColumns.projectStatus, alignment: .leading)
+            Text("마감").frame(width: TaskColumns.dueDate, alignment: .leading)
         }
         .font(.caption).foregroundStyle(WorkLogTheme.muted)
-        .padding(.horizontal, 8).padding(.vertical, 4)
+        .padding(.horizontal, WorkLogTheme.cardInset).padding(.vertical, 4)
         .accessibilityAddTraits(.isHeader)
     }
 
-    private func projectTaskRow(_ row: ProjectTaskRow) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                projectTaskTitle(row).frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
-                overallStatus(row).frame(width: 100, alignment: .leading)
-                projectStatus(row).frame(width: 130, alignment: .leading)
-                dueDate(row).frame(width: 110, alignment: .leading)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                projectTaskTitle(row).frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
-                    Text("전체 상태").font(.caption).foregroundStyle(WorkLogTheme.muted)
-                    overallStatus(row)
+    private func projectTaskRow(_ row: ProjectTaskRow, compact: Bool) -> some View {
+        Group {
+            if compact {
+                VStack(alignment: .leading, spacing: 12) {
+                    projectTaskTitle(row).frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .top, spacing: TaskColumns.spacing) {
+                        taskField("전체 상태") { overallStatus(row) }
+                        taskField("이 프로젝트 기준") { projectStatus(row) }
+                        taskField("마감") { dueDate(row) }
+                    }
                 }
-                HStack(spacing: 8) {
-                    Text("이 프로젝트 기준").font(.caption).foregroundStyle(WorkLogTheme.muted)
-                    projectStatus(row)
+            } else {
+                HStack(spacing: TaskColumns.spacing) {
+                    projectTaskTitle(row).frame(maxWidth: .infinity, alignment: .leading)
+                    overallStatus(row).frame(width: TaskColumns.overallStatus, alignment: .leading)
+                    projectStatus(row).frame(width: TaskColumns.projectStatus, alignment: .leading)
+                    dueDate(row).frame(width: TaskColumns.dueDate, alignment: .leading)
                 }
-                Label(row.dueOn.map { KoreanDateLabel.monthDayWeekday($0, calendar: calendar) } ?? "마감 없음",
-                      systemImage: "calendar").font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .frame(minHeight: WorkLogTheme.rowHeight)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(taskRowLabel(row)))
-        .accessibilityHint("Return 또는 더블클릭으로 업무 상세 열기")
+        .padding(WorkLogTheme.cardInset)
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+    }
+
+    private func taskField<Value: View>(_ title: String, @ViewBuilder value: () -> Value) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(WorkLogTheme.muted)
+            value()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func projectTaskTitle(_ row: ProjectTaskRow) -> some View {
         Text(row.title).font(.body.weight(taskSelection == row.id ? .semibold : .regular))
-            .lineLimit(1).truncationMode(.tail).help(row.title)
+            .lineLimit(2, reservesSpace: true).truncationMode(.tail).help(row.title)
     }
 
     @ViewBuilder private func overallStatus(_ row: ProjectTaskRow) -> some View {
@@ -335,11 +358,15 @@ import WorkLogCore
         if row.tracksProjectStatus {
             if let status = row.projectStatus { TaskStatusBadge(status: status) }
             else { StatusBadge(label: "상태 없음", systemImage: "questionmark.circle", tone: .neutral) }
-        } else { Text("전체 상태 따름").font(.callout).foregroundStyle(WorkLogTheme.muted) }
+        } else {
+            Label("전체 상태 따름", systemImage: "equal")
+                .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                .help("프로젝트별 상태를 따로 관리하지 않고 전체 업무 상태를 따릅니다.")
+        }
     }
 
     private func dueDate(_ row: ProjectTaskRow) -> some View {
-        Text(row.dueOn.map { KoreanDateLabel.monthDayWeekday($0, calendar: calendar) } ?? "—")
+        Text(row.dueOn.map { KoreanDateLabel.monthDayWeekday($0, calendar: calendar) } ?? "마감 없음")
             .font(.callout).foregroundStyle(WorkLogTheme.muted)
     }
 
