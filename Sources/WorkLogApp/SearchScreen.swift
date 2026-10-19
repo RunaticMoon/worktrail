@@ -1057,7 +1057,7 @@ import WorkLogCore
     private func sourceIcon(_ type: SearchSourceType) -> String {
         switch type {
         case .memo: return "text.alignleft"
-        case .task: return "checkmark.circle"
+        case .task: return "checklist"
         case .activity: return "bolt"
         case .report: return "doc.text"
         }

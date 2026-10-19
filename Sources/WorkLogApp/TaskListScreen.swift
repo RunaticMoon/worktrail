@@ -124,6 +124,11 @@ import WorkLogCore
                 if contentAutofocus { focusContent() }
             }
         }
+        .onChange(of: projectNames) { _, names in
+            if case .project(let name) = projectFilter, !names.contains(name) {
+                projectFilter = .all
+            }
+        }
         .onChange(of: visibleRows.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = listFocused ? ids.first : nil }
             else if selection == nil && listFocused { selection = ids.first }

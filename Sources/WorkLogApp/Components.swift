@@ -394,7 +394,10 @@ private struct SectionDisclosureBody: View {
                     }
                 }
                 .onHover { isHovering = $0 }
-                .focusable().focused($headerFocused)
+                .focusable()
+                .focusEffectDisabled()
+                .focused($headerFocused)
+                // The shared handler consumes Space/Return and repeats, activating only on key down.
                 .worklogKeyboardActivation { configuration.isExpanded.toggle() }
                 .accessibilityLabel(Text(title))
                 .accessibilityValue(Text((configuration.isExpanded ? "펼쳐짐" : "접힘")

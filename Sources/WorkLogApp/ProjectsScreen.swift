@@ -266,7 +266,9 @@ import WorkLogCore
                                     taskSelection = row.id
                                     onOpen(row.id)
                                 }
-                            Divider().padding(.horizontal, WorkLogTheme.cardInset)
+                            if row.id != model.tasks.last?.id {
+                                Divider().padding(.horizontal, WorkLogTheme.cardInset)
+                            }
                         }
                         .id(row.id)
                     }
