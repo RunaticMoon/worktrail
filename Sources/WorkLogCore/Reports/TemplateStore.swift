@@ -202,10 +202,18 @@ public final class TemplateStore {
 
 
             앱 필수 주간보고 계약:
-            팀별 지침과 출력 예시는 groups의 heading과 items의 text에 문체를 적용하는 용도다.
+            팀별 지침과 출력 예시는 groups의 heading과 항목의 text를 다듬는 문체 참고다. 아래 앱 계약을 바꾸지 않는다.
             입력 업무와 지난주 종료 상태는 facts.tasks, 이번 주 확정 계획은 facts.confirmedPlans에 있다. 상태·날짜·계획은 입력 facts를 따른다.
+            submissionDraft는 앱이 실제 업무와 확정 계획으로 계산한 제출용 초안이다. 지침에서 말하는 reportableTasks는 이 초안의 항목을 뜻한다.
+            submissionDraft의 모든 항목을 한 번씩 유지한다. 항목을 새로 만들거나 합치거나 나누거나 삭제하지 않는다.
+            각 항목의 itemId, category, taskIds, projectIds, planItemIds를 submissionDraft와 동일하게 보존한다. 임의 ID나 예시 ID를 만들거나 다른 업무의 ID로 바꾸지 않는다.
+            항목의 text만 업무 제목과 관련 근거를 바탕으로 간결하게 다듬는다. 상태만 변경한 업무도 보고 대상이며, evidenceIds가 []라고 항목을 삭제하지 않는다. 근거가 없으면 수행 내용이나 결과를 덧붙이지 않는다.
+            evidenceIds에는 해당 업무의 facts.sources ID만 사용한다. 메모는 facts.memoLinksAccepted에서 해당 업무에 승인된 연결을 확인한 경우에만 항목 근거로 사용한다.
+            독립 메모, 기록 없음, 확정 계획 없음 같은 안내는 reviewNotes에만 작성한다. 이 내용을 완료·진행·예정 항목으로 만들거나 임의 업무에 연결하지 않는다.
+            submissionDraft의 reviewNotes도 보존한다. 제출할 항목이 없으면 groups를 []로 두고 이유를 reviewNotes에 적는다.
             category는 completed / in_progress / planned만 사용한다. 완료·진행·예정 표기는 앱이 렌더링한다.
-            아래 JSON Schema의 모든 필드를 포함한다. 내용이 없는 배열도 생략하거나 null로 바꾸지 않고 []로 반환한다.
+            각 항목의 taskIds에는 반드시 실제 업무 ID가 하나 이상 있어야 하며 [] 또는 null을 반환하지 않는다.
+            아래 JSON Schema의 모든 필드를 포함한다. taskIds 이외에 내용이 없는 배열은 생략하거나 null로 바꾸지 않고 []로 반환한다.
             최종 응답은 이 계약에 맞는 JSON 객체 하나만 반환한다.
             앱 필수 출력 JSON Schema:
             """
