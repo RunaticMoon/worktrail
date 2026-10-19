@@ -35,12 +35,19 @@ import WorkLogCore
                     Label("당시 상태 · \(KoreanDateLabel.monthDayWeekday(box.date, calendar: calendar)) 종료 기준", systemImage: "clock.arrow.circlepath")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
-                    Picker("표시 영역", selection: $selectedRegion) {
-                        Text("활동 기록 \(box.timeline.count)").tag("timeline")
-                        Text("업무 상태 \(box.tasks.count)").tag("tasks")
-                        Text("메모 \(box.memos.count)").tag("memos")
-                    }.pickerStyle(.segmented).frame(maxWidth: 480)
-                        .worklogHelp("활동 기록 ⌘⌥1 · 업무 상태 ⌘⌥2 · 메모 ⌘⌥3 · 다음 영역 ⌃Tab")
+                    SegmentedFilterBar(title: "표시 영역", selection: $selectedRegion, items: [
+                        SegmentedFilterItem(value: "timeline", label: "활동 기록", systemImage: "bolt",
+                                            count: box.timeline.count,
+                                            accessibilityIdentifier: "day.region.timeline", shortcutHint: "⌘⌥1"),
+                        SegmentedFilterItem(value: "tasks", label: "업무 상태", systemImage: "checklist",
+                                            count: box.tasks.count,
+                                            accessibilityIdentifier: "day.region.tasks", shortcutHint: "⌘⌥2"),
+                        SegmentedFilterItem(value: "memos", label: "메모", systemImage: "text.alignleft",
+                                            count: box.memos.count,
+                                            accessibilityIdentifier: "day.region.memos", shortcutHint: "⌘⌥3")
+                    ])
+                    .accessibilityIdentifier("day.region.filter")
+                    .worklogHelp("활동 기록 ⌘⌥1 · 업무 상태 ⌘⌥2 · 메모 ⌘⌥3 · 다음 영역 ⌃Tab")
                     switch selectedRegion {
                     case "tasks": taskColumn(box)
                     case "memos": memos(box)
