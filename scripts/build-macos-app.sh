@@ -6,7 +6,8 @@
 #
 # 버전: 저장소 루트 VERSION 파일(한 줄, 예: 0.1.0)이 표시 버전과 Sparkle 비교 버전.
 # macOS 26(arm64), Xcode 26 이상 SDK로 빌드한다.
-# 로컬 실행용 ad-hoc 서명만 한다. 배포용 Developer ID 서명·공증은 하지 않는다.
+# 조립 단계에서는 로컬 실행용 ad-hoc 서명. 릴리즈 workflow는 조립 후
+# distribution/code_signing.py로 고정 인증서 서명한다. Developer ID·공증은 하지 않는다.
 set -euo pipefail
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -100,7 +101,8 @@ plist.write_bytes(plistlib.dumps(data))
 PY
 fi
 
-# 로컬 실행용 ad-hoc 서명. Keychain 항목 접근 시 macOS가 허용 여부를 물을 수 있다.
+# 로컬 실행용 임시 서명. 이 상태로 배포하면 업데이트마다 Keychain 재승인이 필요하다.
+# 릴리즈에서는 별도 격리 step에서 고정 인증서 서명을 적용해야 한다.
 codesign --force --sign - "$APP"
 
 echo "$APP"

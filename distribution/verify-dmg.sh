@@ -1,5 +1,5 @@
 #!/bin/bash
-# macOS에서 버전별 DMG 내용을 검증한다 (ad-hoc 서명 무결성 검사, Developer ID·공증 아님).
+# macOS에서 버전별 DMG 내용을 검증한다 (서명 무결성 검사, Developer ID·공증 아님).
 #
 # 사용법: distribution/verify-dmg.sh <dmg> <version>
 # 검사: WorkLog.app 정확히 하나, Applications -> /Applications 심볼릭 링크,
@@ -81,6 +81,9 @@ if key_file.exists():
     assert data['SUPublicEDKey'] == key
 PY
 codesign --verify --deep --strict "$APP" || { echo "코드 서명 검증에 실패했습니다." >&2; exit 1; }
+if [[ "${WORKLOG_REQUIRE_STABLE_SIGNATURE:-0}" == "1" ]]; then
+    python3 "$ROOT/distribution/code_signing.py" verify "$APP"
+fi
 
 # Exercise the bundled executable/rpath on macOS without starting the app's storage,
 # AI, Secret or update network paths. The smoke entry point returns before App init.

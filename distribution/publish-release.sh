@@ -18,7 +18,7 @@ gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" | pyt
 
 gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft \
   --title "WorkLog $RELEASE_TAG" \
-  --notes "WorkLog $RELEASE_TAG, Apple Silicon(arm64) ad-hoc 서명 빌드 from $GITHUB_SHA. Developer ID 서명·Apple 공증이 없으므로 첫 실행 시 macOS 보안 설정에서 사용자 승인이 필요할 수 있습니다. DMG SHA-256은 release-manifest.json에 있습니다. 앱 안 업데이트 확인과 자동 다운로드를 지원하며 업데이트 DMG와 appcast는 Ed25519로 서명합니다. 기존 1.x 앱은 이 버전을 한 번 직접 설치하세요."
+  --notes "WorkLog $RELEASE_TAG, Apple Silicon(arm64) 고정 자체서명 인증서 빌드 from $GITHUB_SHA. Developer ID 서명·Apple 공증이 없으므로 첫 실행 시 macOS 보안 설정에서 사용자 승인이 필요할 수 있습니다. 이전 ad-hoc 버전에서 처음 업데이트할 때 Keychain의 항상 허용을 한 번 더 선택해야 할 수 있습니다. 이후 같은 인증서로 서명한 업데이트는 승인을 유지합니다. DMG SHA-256은 release-manifest.json에 있습니다. 앱 안 업데이트 확인과 자동 다운로드를 지원하며 업데이트 DMG와 appcast는 Ed25519로 서명합니다. 기존 1.x 앱은 이 버전을 한 번 직접 설치하세요."
 
 assets=(release/*.dmg release/release-manifest.json release/appcast.xml)
 gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
