@@ -160,20 +160,23 @@ class IdentityRoundTripTests(unittest.TestCase):
                       for line in dates.splitlines()]
         self.assertEqual((end - start).days, 36525)
 
-    def test_empty_password_pkcs12_round_trip_preserves_certificate_and_private_key(self):
-        extracted_certificate = provision.command('openssl', 'pkcs12', '-passin', 'pass:',
+    def test_transport_password_pkcs12_round_trip_preserves_certificate_and_private_key(self):
+        extracted_certificate = provision.command('openssl', 'pkcs12', '-passin',
+                                                   'pass:' + provision.PKCS12_PASSWORD,
                                                    '-nokeys', input=self.pkcs12)
         original_der = provision.command('openssl', 'x509', '-outform', 'DER', input=self.certificate)
         extracted_der = provision.command('openssl', 'x509', '-outform', 'DER', input=extracted_certificate)
         self.assertEqual(original_der, extracted_der)
-        extracted_private = provision.command('openssl', 'pkcs12', '-passin', 'pass:',
+        extracted_private = provision.command('openssl', 'pkcs12', '-passin',
+                                               'pass:' + provision.PKCS12_PASSWORD,
                                                '-nocerts', '-nodes', input=self.pkcs12)
         key_public = provision.command('openssl', 'pkey', '-pubout', input=extracted_private)
         cert_public = provision.command('openssl', 'x509', '-pubkey', '-noout', input=self.certificate)
         self.assertEqual(key_public, cert_public)
 
     def test_pkcs12_uses_macos_import_compatible_container(self):
-        result = subprocess.run(['openssl', 'pkcs12', '-passin', 'pass:', '-info', '-noout'],
+        result = subprocess.run(['openssl', 'pkcs12', '-passin',
+                                 'pass:' + provision.PKCS12_PASSWORD, '-info', '-noout'],
                                 input=self.pkcs12, capture_output=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn(b'MAC: sha1,', result.stderr)

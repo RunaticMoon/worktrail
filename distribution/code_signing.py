@@ -18,6 +18,9 @@ from pathlib import Path
 BUNDLE_ID = 'dev.worklog.WorkLog'
 SECRET_NAME = 'WORKLOG_CODESIGN_P12'
 PUBLIC_FILE = Path(__file__).resolve().with_name('code-signing-cert.pem')
+# Public transport value, not a credential. macOS and OpenSSL disagree on an
+# empty PKCS#12 password. Confidentiality comes from GitHub Secrets, not this.
+PKCS12_PASSWORD = 'worklog-ci-container'
 
 
 def command(*args, input=None, include_stderr=False):
@@ -80,7 +83,7 @@ def sign(app, certificate=PUBLIC_FILE):
     except ValueError:
         raise RuntimeError('The dedicated code signing identity is missing or invalid') from None
     # Reject malformed/mismatched input before creating even the temporary keychain.
-    public_pem = command('openssl', 'pkcs12', '-passin', 'pass:', '-clcerts', '-nokeys',
+    public_pem = command('openssl', 'pkcs12', '-passin', 'pass:' + PKCS12_PASSWORD, '-clcerts', '-nokeys',
                          input=identity)
     embedded = command('openssl', 'x509', '-outform', 'DER', input=public_pem)
     if embedded != certificate_der(certificate):
@@ -100,7 +103,7 @@ def sign(app, certificate=PUBLIC_FILE):
             command('/usr/bin/security', 'set-keychain-settings', '-lut', '3600', keychain)
             command('/usr/bin/security', 'unlock-keychain', '-p', password, keychain)
             command('/usr/bin/security', 'import', str(p12), '-k', keychain,
-                    '-P', '', '-T', '/usr/bin/codesign')
+                    '-P', PKCS12_PASSWORD, '-T', '/usr/bin/codesign')
             p12.unlink()
             command('/usr/bin/security', 'set-key-partition-list', '-S', 'apple-tool:,apple:',
                     '-s', '-k', password, keychain)

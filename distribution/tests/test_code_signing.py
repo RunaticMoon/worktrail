@@ -31,6 +31,77 @@ signing = load_script('worklog_code_signing', 'code_signing.py')
 provision = load_script('worklog_code_signing_provision_fixture', 'provision-code-signing-key.py')
 
 
+# File-based Keychain routing follows Apple's TN3137: additions explicitly name
+# kSecUseKeychain, and queries are limited to kSecMatchSearchList. Neither API
+# below can fall back to the login/default keychain.
+# https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains
+KEYCHAIN_FIXTURE_SOURCE = r'''
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+
+static volatile const int fixture_version = FIXTURE_VERSION;
+static const unsigned char fake_value[] = "WorkLog fake integration fixture";
+
+static int access_fixture(const char *operation, const char *keychain_path) {
+    SecKeychainRef keychain = NULL;
+    OSStatus status = SecKeychainOpen(keychain_path, &keychain);
+    if (status != errSecSuccess) {
+        fprintf(stderr, "Keychain fixture open status=%d\n", (int)status);
+        return 10;
+    }
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(
+        NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
+    CFDictionarySetValue(query, kSecAttrService, CFSTR("dev.worklog.test.signing-continuity"));
+    CFDictionarySetValue(query, kSecAttrAccount, CFSTR("fake-test-account"));
+    CFDataRef expected = CFDataCreate(NULL, fake_value, sizeof(fake_value) - 1);
+    int result = 0;
+    if (strcmp(operation, "create") == 0) {
+        CFDictionarySetValue(query, kSecUseKeychain, keychain);
+        CFDictionarySetValue(query, kSecValueData, expected);
+        status = SecItemAdd(query, NULL);
+        if (status != errSecSuccess) result = 11;
+    } else {
+        const void *keychains[] = { keychain };
+        CFArrayRef search_list = CFArrayCreate(NULL, keychains, 1, &kCFTypeArrayCallBacks);
+        CFDictionarySetValue(query, kSecMatchSearchList, search_list);
+        CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
+        CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
+        CFTypeRef stored = NULL;
+        status = SecItemCopyMatching(query, &stored);
+        if (status != errSecSuccess) {
+            result = 12;
+        } else if (!stored || CFGetTypeID(stored) != CFDataGetTypeID() || !CFEqual(stored, expected)) {
+            result = 13;
+        }
+        if (stored) CFRelease(stored);
+        CFRelease(search_list);
+    }
+    // Only status codes are printed, never Keychain data.
+    if (result) fprintf(stderr, "Keychain fixture %s status=%d\n", operation, (int)status);
+    CFRelease(expected);
+    CFRelease(query);
+    CFRelease(keychain);
+    return result;
+}
+
+int main(int argc, const char *argv[]) {
+    if (argc != 3 || fixture_version < 1 ||
+        (strcmp(argv[1], "create") != 0 && strcmp(argv[1], "read") != 0)) return 2;
+    Boolean previously_allowed = true;
+    if (SecKeychainGetUserInteractionAllowed(&previously_allowed) != errSecSuccess) return 3;
+    // An ACL prompt is a test failure, not a modal dialog that can hang CI.
+    if (SecKeychainSetUserInteractionAllowed(false) != errSecSuccess) return 4;
+    int result = access_fixture(argv[1], argv[2]);
+    if (SecKeychainSetUserInteractionAllowed(previously_allowed) != errSecSuccess && result == 0) return 5;
+    return result;
+}
+'''
+
+
 def make_app(root, name='WorkLog', bundle_id=signing.BUNDLE_ID, version=1):
     app = Path(root) / (name + '.app')
     contents = app / 'Contents'
@@ -222,9 +293,11 @@ class MacOSSigningContinuityTests(unittest.TestCase):
             second = make_app(root, name='Second', version=2)
             impostor = make_app(root, name='Impostor', version=3)
             for marker, app in enumerate((first, second, impostor), start=1):
-                signing.command('/usr/bin/xcrun', 'clang', '-x', 'c', '-o',
+                signing.command('/usr/bin/xcrun', 'clang', '-x', 'c', '-Wno-deprecated-declarations',
+                                f'-DFIXTURE_VERSION={marker}', '-framework', 'Security',
+                                '-framework', 'CoreFoundation', '-o',
                                 str(app / 'Contents/MacOS/WorkLog'), '-',
-                                input=f'int main(void) {{ return {marker}; }}\n'.encode())
+                                input=KEYCHAIN_FIXTURE_SOURCE.encode())
             self.assertNotEqual((first / 'Contents/MacOS/WorkLog').read_bytes(),
                                 (second / 'Contents/MacOS/WorkLog').read_bytes())
 
@@ -249,6 +322,64 @@ class MacOSSigningContinuityTests(unittest.TestCase):
                 signing.command('/usr/bin/codesign', '--verify', '--strict', '-R', first_requirement, str(impostor))
             with self.assertRaises(RuntimeError):
                 signing.verify(impostor, public)
+
+            # The item's ACL belongs to the first signed fixture. A subsequent
+            # binary with the same identity must read it with UI disabled, while
+            # a different signer must be refused. All item data is fixed and fake.
+            keychain = root / 'fake-items.keychain-db'
+            fixture_password = 'fake-test-keychain-password'
+            signing.command('/usr/bin/security', 'create-keychain', '-p', fixture_password, str(keychain))
+            try:
+                signing.command('/usr/bin/security', 'set-keychain-settings', '-lut', '3600', str(keychain))
+                signing.command('/usr/bin/security', 'unlock-keychain', '-p', fixture_password, str(keychain))
+
+                def run_fixture(app, operation):
+                    return subprocess.run(
+                        [str(app / 'Contents/MacOS/WorkLog'), operation, str(keychain)],
+                        capture_output=True, timeout=30,
+                        env={key: value for key, value in os.environ.items() if key != signing.SECRET_NAME},
+                    )
+
+                for app, operation in ((first, 'create'), (first, 'read'), (second, 'read')):
+                    result = run_fixture(app, operation)
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                refused = run_fixture(impostor, 'read')
+                self.assertEqual(refused.returncode, 12, refused.stderr.decode())
+                self.assertIn(b'Keychain fixture read status=', refused.stderr)
+                # A refused signer must not change the item or its authorized ACL.
+                result = run_fixture(second, 'read')
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+            finally:
+                signing.command('/usr/bin/security', 'delete-keychain', str(keychain))
+
+
+@unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('WORKLOG_SIGNING_SMOKE_APP'),
+                     'requires macOS and WORKLOG_SIGNING_SMOKE_APP pointing to a packaged app')
+class MacOSPackagedAppSigningTests(unittest.TestCase):
+    def test_packaged_app_loads_sparkle_after_persistent_identity_signing(self):
+        source = Path(os.environ['WORKLOG_SIGNING_SMOKE_APP']).resolve()
+        self.assertTrue((source / 'Contents/Frameworks/Sparkle.framework').is_dir())
+        with tempfile.TemporaryDirectory(prefix='worklog-signed-package-test-') as temporary:
+            root = Path(temporary)
+            app = root / 'WorkLog.app'
+            # ditto preserves the versioned framework's nested symlinks/signatures.
+            signing.command('/usr/bin/ditto', str(source), str(app))
+            certificate, identity = provision.generate_identity()
+            public = root / 'public.pem'
+            public.write_bytes(certificate)
+            with mock.patch.dict(os.environ, {signing.SECRET_NAME: base64.b64encode(identity).decode()}):
+                signing.sign(app, public)
+            signing.verify(app, public)
+            with (app / 'Contents/Info.plist').open('rb') as stream:
+                executable = plistlib.load(stream)['CFBundleExecutable']
+            self.assertEqual(Path(executable).name, executable)
+            result = subprocess.run(
+                [str(app / 'Contents/MacOS' / executable), '--updater-smoke-test'],
+                capture_output=True, timeout=30,
+                env={key: value for key, value in os.environ.items() if key != signing.SECRET_NAME},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertIn(b'WorkLog Sparkle loader smoke test passed', result.stdout)
 
 
 if __name__ == '__main__':

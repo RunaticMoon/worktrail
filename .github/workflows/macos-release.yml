@@ -76,6 +76,7 @@ jobs:
           test "${sdk_version%%.*}" -ge 26
           swift build --build-tests
       - name: Test release tooling
+        timeout-minutes: 5
         run: |
           export PATH="$(brew --prefix openssl@3)/bin:$PATH"
           python3 -m unittest discover -s distribution/tests -v

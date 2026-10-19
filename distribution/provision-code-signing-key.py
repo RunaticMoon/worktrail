@@ -5,7 +5,9 @@ Requires an authenticated gh CLI and OpenSSL 3. No existing private keys or
 Keychain items are read. Newly generated private material stays in memory and
 subprocess stdin; only the public certificate is saved to disk and committed.
 
-The empty-password PKCS#12 is encrypted at rest by GitHub Actions Secrets.
+The PKCS#12 is encrypted at rest by GitHub Actions Secrets. Its fixed public
+transport password avoids macOS/OpenSSL empty-password interoperability issues;
+the password itself does not provide confidentiality.
 Its 3DES/SHA-1 container encoding supports macOS security import; the RSA 3072
 certificate itself is signed with SHA-256. This self-signed identity supplies
 continuity across updates, not Apple Developer ID or notarization.
@@ -21,6 +23,7 @@ REPOSITORY = 'RunaticMoon/worktrail'
 SECRET_NAME = 'WORKLOG_CODESIGN_P12'
 PUBLIC_FILE = Path(__file__).resolve().with_name('code-signing-cert.pem')
 IDENTITY_NAME = 'WorkLog Persistent Code Signing'
+PKCS12_PASSWORD = 'worklog-ci-container'
 
 
 def command(*args, input=None):
@@ -53,7 +56,8 @@ def generate_identity():
         public_path.write_bytes(certificate)
         pkcs12 = command(
             'openssl', 'pkcs12', '-export', '-inkey', '/dev/stdin',
-            '-in', str(public_path), '-name', IDENTITY_NAME, '-passout', 'pass:',
+            '-in', str(public_path), '-name', IDENTITY_NAME,
+            '-passout', 'pass:' + PKCS12_PASSWORD,
             '-certpbe', 'PBE-SHA1-3DES', '-keypbe', 'PBE-SHA1-3DES',
             '-macalg', 'sha1', input=private_key,
         )

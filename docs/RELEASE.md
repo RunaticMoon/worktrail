@@ -31,7 +31,7 @@ Apple Developer ID/공증과 Sparkle의 Ed25519 업데이트 서명은 별개다
 python3 distribution/provision-code-signing-key.py
 ```
 
-이 명령은 새 전용 RSA 3072 코드 서명 키·인증서를 만들고 PKCS#12를 GitHub Actions secret **`WORKLOG_CODESIGN_P12`**에 등록한다. 공개 인증서 **`distribution/code-signing-cert.pem`**만 저장소에 커밋한다. 기존 인증서·같은 이름의 secret이 있으면 덮어쓰지 않으며, 기존 Keychain·회사 자격증명·Codex 토큰을 읽지 않는다. 개인키는 메모리와 표준입력에서만 다룬다. 빈 암호 PKCS#12는 GitHub Secret 암호화로 보호되므로 파일·로그·artifact에 보관하지 않는다.
+이 명령은 새 전용 RSA 3072 코드 서명 키·인증서를 만들고 PKCS#12를 GitHub Actions secret **`WORKLOG_CODESIGN_P12`**에 등록한다. 공개 인증서 **`distribution/code-signing-cert.pem`**만 저장소에 커밋한다. 기존 인증서·같은 이름의 secret이 있으면 덮어쓰지 않으며, 기존 Keychain·회사 자격증명·Codex 토큰을 읽지 않는다. 개인키는 메모리와 표준입력에서만 다룬다. PKCS#12는 macOS/OpenSSL의 빈 암호 호환성 문제를 피하기 위한 공개 고정 문자열을 암호로 사용한다. 비밀성은 GitHub Secret 암호화로 보호하므로 PKCS#12를 파일·로그·artifact에 보관하지 않는다.
 
 릴리즈 서명 step은 PKCS#12의 공개 인증서를 먼저 대조한 뒤, 전용 임시 keychain으로만 가져와 앱을 서명하고 임시 파일·keychain을 삭제한다. 사용자 login keychain이나 신뢰 설정은 변경하지 않는다. DR은 `dev.worklog.WorkLog`와 공개 인증서의 정확한 hash에 묶으며, bundle ID나 인증서 이름만 일치하는 다른 앱에는 접근을 허용하지 않는다. 누락·잘못된 secret·다른 인증서·ad-hoc 서명은 패키징/DMG 검증에서 실패하고 자동으로 대체하지 않는다.
 
