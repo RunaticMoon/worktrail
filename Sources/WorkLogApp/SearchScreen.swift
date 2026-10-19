@@ -432,7 +432,7 @@ import WorkLogCore
             secretSelection.openedId = id
             secretSelection.selectedRowId = secrets.rows.first?.id
             focused = false
-            NSApp.activate(ignoringOtherApps: true)
+            if !isPanel { NSApp.activate(ignoringOtherApps: true) }
             requestWindow?.makeKeyAndOrderFront(nil)
         }
     }
