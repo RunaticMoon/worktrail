@@ -281,6 +281,21 @@ class ProcessIsolationTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'darwin', 'requires macOS codesign and disposable keychains')
 class MacOSSigningContinuityTests(unittest.TestCase):
+    def setUp(self):
+        # Only this synthetic test exposes codesign diagnostics (public paths,
+        # certificate names and OS errors). Production signing stays redacted.
+        original_run = subprocess.run
+
+        def run(*args, **kwargs):
+            result = original_run(*args, **kwargs)
+            if args and args[0][0] == '/usr/bin/codesign' and result.returncode:
+                sys.stderr.write('Synthetic codesign: ' + result.stderr.decode())
+            return result
+
+        patch = mock.patch.object(signing.subprocess, 'run', side_effect=run)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_updated_binary_satisfies_previous_release_requirement_but_another_signer_does_not(self):
         # No existing identity, certificate, private key, or login Keychain is read.
         # Use the same fresh-generation helper as provisioning, never provision().
