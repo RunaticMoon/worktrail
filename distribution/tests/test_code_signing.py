@@ -1,7 +1,7 @@
 """Persistent release identity checks; all key material is newly generated or fake.
 
-Linux runs the isolated orchestration tests. macOS additionally signs distinct
-executables using disposable keychains, without reading the login Keychain.
+Linux runs the isolated orchestration tests. Disposable macOS GitHub runners
+also sign distinct executables, without reading the login Keychain.
 """
 import base64
 import hashlib
@@ -130,7 +130,7 @@ class SigningTests(unittest.TestCase):
         self.platform = mock.patch.object(signing.sys, 'platform', 'darwin')
         self.platform.start()
         self.addCleanup(self.platform.stop)
-        runner = mock.patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'github-hosted'})
+        runner = mock.patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'github-hosted', 'GITHUB_ACTIONS': 'true'})
         runner.start()
         self.addCleanup(runner.stop)
         self.cert_patch = mock.patch.object(signing, 'certificate_der', return_value=self.der)
@@ -161,11 +161,15 @@ class SigningTests(unittest.TestCase):
             command.assert_not_called()
 
     def test_signing_refuses_to_modify_trust_outside_disposable_runners(self):
-        with mock.patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'self-hosted'}):
-            with mock.patch.object(signing, 'command') as command:
-                with self.assertRaisesRegex(RuntimeError, 'disposable GitHub-hosted runner'):
-                    signing.sign(self.app, self.certificate)
-            command.assert_not_called()
+        for runner, github_actions in (('self-hosted', 'true'), ('', 'true'),
+                                       ('github-hosted', 'false'), ('github-hosted', '')):
+            with self.subTest(runner=runner, github_actions=github_actions):
+                with mock.patch.dict(os.environ, {'RUNNER_ENVIRONMENT': runner,
+                                                  'GITHUB_ACTIONS': github_actions}):
+                    with mock.patch.object(signing, 'command') as command:
+                        with self.assertRaisesRegex(RuntimeError, 'disposable GitHub-hosted runner'):
+                            signing.sign(self.app, self.certificate)
+                    command.assert_not_called()
 
     def test_malformed_pkcs12_stops_before_any_keychain_operation(self):
         # Real OpenSSL parses fake bytes; no macOS command may be reached.
@@ -220,9 +224,73 @@ class SigningTests(unittest.TestCase):
                             signing.sign(self.app, self.certificate)
                 self.assertEqual(command.call_args.args,
                                  ('/usr/bin/security', 'delete-keychain', str(keychains[0])))
+                trust_removals = [call for call in command.call_args_list if 'remove-trusted-cert' in call.args]
+                if failure == 'codesign':
+                    self.assertEqual(len(trust_removals), 1)
+                    self.assertEqual(command.call_args_list[-2].args,
+                                     ('/usr/bin/sudo', '-n', '/usr/bin/security', 'remove-trusted-cert',
+                                      '-d', str(self.certificate)))
+                else:
+                    self.assertEqual(trust_removals, [])
                 self.assertFalse(keychains[0].parent.exists())
                 self.assertTrue(private_files)
                 self.assertFalse(private_files[0].exists())
+
+    def test_trust_removal_failure_still_deletes_temporary_keychain_and_skips_verification(self):
+        keychains = []
+
+        def run(*args, **kwargs):
+            if args[:2] == ('openssl', 'x509'):
+                return self.der
+            if args[:2] == ('/usr/bin/security', 'create-keychain'):
+                keychains.append(Path(args[-1]))
+            if 'remove-trusted-cert' in args:
+                raise RuntimeError('simulated trust removal failure')
+            return b''
+
+        with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
+            with mock.patch.object(signing, 'command', side_effect=run) as command:
+                with mock.patch.object(signing, 'verify') as verify:
+                    with self.assertRaisesRegex(RuntimeError, 'simulated trust removal failure'):
+                        signing.sign(self.app, self.certificate)
+        verify.assert_not_called()
+        self.assertEqual(command.call_args.args,
+                         ('/usr/bin/security', 'delete-keychain', str(keychains[0])))
+        self.assertFalse(keychains[0].parent.exists())
+
+    def test_verification_runs_only_after_signer_trust_and_temporary_keychain_are_removed(self):
+        state = {'trusted': False, 'deleted': False, 'keychain': None}
+
+        def run(*args, **kwargs):
+            if args[:2] == ('openssl', 'x509'):
+                return self.der
+            if args[:2] == ('/usr/bin/security', 'create-keychain'):
+                state['keychain'] = Path(args[-1])
+            if 'add-trusted-cert' in args:
+                self.assertEqual(args,
+                                 ('/usr/bin/sudo', '-n', '/usr/bin/security', 'add-trusted-cert',
+                                  '-d', '-r', 'trustRoot', '-p', 'codeSign', '-k',
+                                  str(state['keychain']), str(self.certificate)))
+                state['trusted'] = True
+            if args[0] == '/usr/bin/codesign':
+                self.assertTrue(state['trusted'])
+            if 'remove-trusted-cert' in args:
+                state['trusted'] = False
+            if args[:2] == ('/usr/bin/security', 'delete-keychain'):
+                self.assertFalse(state['trusted'])
+                state['deleted'] = True
+            return b''
+
+        def verify(app, certificate):
+            self.assertFalse(state['trusted'])
+            self.assertTrue(state['deleted'])
+            self.assertFalse(state['keychain'].parent.exists())
+
+        with mock.patch.dict(os.environ, {signing.SECRET_NAME: self.encoded}):
+            with mock.patch.object(signing, 'command', side_effect=run):
+                with mock.patch.object(signing, 'verify', side_effect=verify) as verification:
+                    signing.sign(self.app, self.certificate)
+        verification.assert_called_once_with(self.app.resolve(), self.certificate)
 
     def verify_with(self, designated, extracted):
         def run(*args, **kwargs):
@@ -289,7 +357,8 @@ class ProcessIsolationTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted',
+@unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                     and os.environ.get('GITHUB_ACTIONS') == 'true',
                      'requires a disposable macOS GitHub-hosted runner')
 class MacOSSigningContinuityTests(unittest.TestCase):
     def setUp(self):
@@ -309,6 +378,12 @@ class MacOSSigningContinuityTests(unittest.TestCase):
                     )
                     # This path contains ONLY the fresh identity made by this test.
                     sys.stderr.write('Synthetic identity status: ' + identities.stdout.decode())
+                    for selector in (args[0][args[0].index('--sign') + 1].upper(), provision.IDENTITY_NAME):
+                        attempt = list(args[0])
+                        attempt[attempt.index('--sign') + 1] = selector
+                        retry = original_run(attempt, capture_output=True, timeout=10)
+                        sys.stderr.write(f'Synthetic selector {selector}: exit={retry.returncode} '
+                                         + retry.stderr.decode())
             return result
 
         patch = mock.patch.object(signing.subprocess, 'run', side_effect=run)
@@ -388,6 +463,7 @@ class MacOSSigningContinuityTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                     and os.environ.get('GITHUB_ACTIONS') == 'true'
                      and os.environ.get('WORKLOG_SIGNING_SMOKE_APP'),
                      'requires a disposable macOS runner and WORKLOG_SIGNING_SMOKE_APP')
 class MacOSPackagedAppSigningTests(unittest.TestCase):

@@ -28,7 +28,10 @@ PKCS12_PASSWORD = 'worklog-ci-container'
 def command(*args, input=None, include_stderr=False):
     # Do not pass the signing secret to subprocesses or print their diagnostics.
     env = {key: value for key, value in os.environ.items() if key != SECRET_NAME}
-    result = subprocess.run(args, input=input, capture_output=True, env=env)
+    try:
+        result = subprocess.run(args, input=input, capture_output=True, env=env, timeout=30)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('Code signing command timed out: ' + Path(args[0]).name) from None
     if result.returncode:
         raise RuntimeError('Code signing command failed: ' + Path(args[0]).name)
     return result.stdout + (result.stderr if include_stderr else b'')
@@ -72,7 +75,7 @@ def verify(app, certificate=PUBLIC_FILE):
 def sign(app, certificate=PUBLIC_FILE):
     if sys.platform != 'darwin':
         raise RuntimeError('App code signing requires macOS')
-    if os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
+    if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise RuntimeError('Signing requires a disposable GitHub-hosted runner; local trust is not modified')
     app = Path(app).resolve()
     with (app / 'Contents/Info.plist').open('rb') as stream:
