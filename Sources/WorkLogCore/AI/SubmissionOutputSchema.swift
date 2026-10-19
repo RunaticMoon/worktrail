@@ -13,7 +13,7 @@ enum SubmissionOutputSchema {
                     "enum": .array(SubmissionCategory.allCases.map { .string($0.rawValue) }),
                 ]),
                 "text": string,
-                "taskIds": array(of: string),
+                "taskIds": array(of: string, minimumCount: 1),
                 "projectIds": array(of: string),
                 "planItemIds": array(of: string),
                 "evidenceIds": array(of: string),
@@ -25,8 +25,12 @@ enum SubmissionOutputSchema {
 
     private static let string: JSONValue = .object(["type": .string("string")])
 
-    private static func array(of item: JSONValue) -> JSONValue {
-        .object(["type": .string("array"), "items": item])
+    private static func array(of item: JSONValue, minimumCount: Int? = nil) -> JSONValue {
+        var schema: [String: JSONValue] = ["type": .string("array"), "items": item]
+        if let minimumCount {
+            schema["minItems"] = .number(Double(minimumCount))
+        }
+        return .object(schema)
     }
 
     private static func object(_ properties: [String: JSONValue]) -> JSONValue {

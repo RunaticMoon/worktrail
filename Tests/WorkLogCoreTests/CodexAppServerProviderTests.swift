@@ -401,6 +401,13 @@ final class CodexAppServerProviderTests: XCTestCase {
             XCTAssertEqual(itemSchema["properties"]?[field]?["type"]?.stringValue, "array")
             XCTAssertEqual(itemSchema["properties"]?[field]?["items"]?["type"]?.stringValue, "string")
         }
+        XCTAssertEqual(itemSchema["properties"]?["taskIds"]?["minItems"], .number(1),
+                       "제출용 항목은 실제 업무 ID를 하나 이상 지정해야 한다")
+        for field in ["projectIds", "planItemIds", "evidenceIds"] {
+            XCTAssertNil(itemSchema["properties"]?[field]?["minItems"],
+                         "프로젝트·계획·활동 근거가 없는 실제 업무도 보고할 수 있다")
+        }
+        try assertSchema(schema, matches: JSONValue.from(SubmissionDraft(groups: [])))
     }
 
     func testOtherJobTypesDoNotUseSubmissionOutputSchema() async throws {
@@ -435,6 +442,9 @@ final class CodexAppServerProviderTests: XCTestCase {
             }
         case .array(let elements):
             XCTAssertEqual(schema["type"]?.stringValue, "array", file: file, line: line)
+            if let minimumCount = schema["minItems"]?.intValue {
+                XCTAssertGreaterThanOrEqual(elements.count, minimumCount, file: file, line: line)
+            }
             let itemSchema = try XCTUnwrap(schema["items"], file: file, line: line)
             for element in elements {
                 try assertSchema(itemSchema, matches: element, file: file, line: line)

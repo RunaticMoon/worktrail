@@ -15,12 +15,17 @@ final class SubmissionGenerationRegressionTests: XCTestCase {
     }
 
     private func makeHarness(
+        seed: ((WorkRepository) throws -> Void)? = nil,
         output: ((SubmissionDraft) throws -> String)? = nil
     ) throws -> Harness {
         let fixture = try FixtureLoader.load()
         let now = try XCTUnwrap(fixture.clock?.now.flatMap(FixtureLoader.date))
         let repo = try WorkRepository.inMemory(clock: FixedClock(now), ids: SequentialIDGenerator())
-        try FixtureSeeder.seed(repo, fixture: fixture)
+        if let seed {
+            try seed(repo)
+        } else {
+            try FixtureSeeder.seed(repo, fixture: fixture)
+        }
         let periods = Periods()
         let builder = ReportFactsBuilder(repo: repo, periods: periods,
                                         planService: WeekPlanService(repo: repo, periods: periods))
@@ -90,6 +95,239 @@ final class SubmissionGenerationRegressionTests: XCTestCase {
             throw WorkLogError.storage("report not created")
         }
         return version
+    }
+
+    private struct SubmissionRequestPayload: Decodable {
+        let jobType: String
+        let facts: ReportFacts
+        let submissionDraft: SubmissionDraft
+    }
+
+    private func requestedPayload(_ h: Harness) throws -> SubmissionRequestPayload {
+        let turn = try XCTUnwrap(h.server.messages(withMethod: "turn/start").first)
+        let text = try XCTUnwrap(turn["params"]?["input"]?.arrayValue?.first?["text"]?.stringValue)
+        return try StableJSON.decode(SubmissionRequestPayload.self, from: text)
+    }
+
+    func testStatusChangesWithoutActivityProduceTaskBackedRequestSeed() async throws {
+        let workDate = WorkDate("2026-09-30")!
+        var completedId = ""
+        var inProgressId = ""
+        let h = try makeHarness(seed: { repo in
+            let tasks = TaskService(repo: repo)
+            let completed = try tasks.createTask(title: "배포 점검", workDate: workDate)
+            completedId = completed.id
+            _ = try tasks.completeTask(taskId: completed.id, workDate: workDate, confirmRemaining: true)
+            let inProgress = try tasks.createTask(title: "운영 문서 정리", workDate: workDate)
+            inProgressId = inProgress.id
+            try tasks.changeTaskStatus(taskId: inProgress.id, kind: .started, workDate: workDate)
+        })
+
+        let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
+                                                            useAI: true)
+
+        let payload = try requestedPayload(h)
+        XCTAssertEqual(payload.jobType, "submission_weekly")
+        XCTAssertTrue(payload.facts.sources.isEmpty)
+        XCTAssertEqual(Set(payload.facts.tasks.map(\.id)), Set([completedId, inProgressId]))
+        XCTAssertTrue(payload.facts.tasks.allSatisfy { !$0.eventsInRange.isEmpty })
+        XCTAssertTrue(payload.facts.tasks.allSatisfy { $0.activitySourceIds.isEmpty })
+        let items = payload.submissionDraft.groups.flatMap(\.items)
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items.first { $0.taskIds == [completedId] }?.category, .completed)
+        XCTAssertEqual(items.first { $0.taskIds == [inProgressId] }?.category, .inProgress)
+        XCTAssertTrue(items.allSatisfy { $0.evidenceIds.isEmpty })
+        XCTAssertFalse(result.usedFallback)
+        XCTAssertEqual(try created(result).generator, "codex")
+        XCTAssertEqual(h.server.messages(withMethod: "turn/start").count, 1)
+    }
+
+    func testStandaloneMemoRemainsContextWithoutCreatingSubmissionSeedItem() async throws {
+        let workDate = WorkDate("2026-09-30")!
+        let memoBody = "독립 메모: 다음 회의에서 배포 일정 논의"
+        var taskId = ""
+        var memoId = ""
+        let h = try makeHarness(seed: { repo in
+            let tasks = TaskService(repo: repo)
+            let task = try tasks.createTask(title: "실제 진행 업무", workDate: workDate)
+            taskId = task.id
+            try tasks.changeTaskStatus(taskId: task.id, kind: .started, workDate: workDate)
+            memoId = try tasks.captureMemo(body: memoBody, workDate: workDate).id
+        })
+
+        let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
+                                                            useAI: true)
+
+        let payload = try requestedPayload(h)
+        let memo = try XCTUnwrap(payload.facts.sources.first { $0.id == FactSource.memoId(memoId) })
+        XCTAssertEqual(memo.text, memoBody)
+        XCTAssertNil(memo.taskId)
+        let items = payload.submissionDraft.groups.flatMap(\.items)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.taskIds, [taskId])
+        XCTAssertEqual(items.first?.category, .inProgress)
+        XCTAssertEqual(items.first?.evidenceIds, [])
+        XCTAssertFalse(items.contains { $0.text.contains(memoBody) })
+        XCTAssertFalse(result.usedFallback)
+        XCTAssertFalse(try created(result).content.contains(memoBody))
+    }
+
+    func testNoEligibleTasksSkipsAIAndStoresExplicitNotice() async throws {
+        let workDate = WorkDate("2026-09-30")!
+        let scenarios = ["memo", "onHoldAndCancelled", "unconfirmedPlan"]
+        for scenario in scenarios {
+            let h = try makeHarness(seed: { repo in
+                let tasks = TaskService(repo: repo)
+                switch scenario {
+                case "memo":
+                    _ = try tasks.captureMemo(body: "업무와 연결하지 않은 일반 메모", workDate: workDate)
+                case "onHoldAndCancelled":
+                    let held = try tasks.createTask(title: "보류된 업무", workDate: workDate)
+                    try tasks.changeTaskStatus(taskId: held.id, kind: .started, workDate: workDate)
+                    try tasks.changeTaskStatus(taskId: held.id, kind: .paused, workDate: workDate)
+                    let cancelled = try tasks.createTask(title: "취소된 업무", workDate: workDate)
+                    try tasks.changeTaskStatus(taskId: cancelled.id, kind: .cancelled, workDate: workDate)
+                default:
+                    let task = try tasks.createTask(title: "미확정 계획 업무", workDate: workDate)
+                    let plans = WeekPlanService(repo: repo, periods: Periods())
+                    let candidate = try plans.addItem(weekStart: self.reportDate, taskId: task.id,
+                                                       scopeType: .wholeTask, scopeId: nil,
+                                                       label: "확정하지 않은 예정")
+                    XCTAssertEqual(candidate.state, .candidate)
+                }
+            })
+
+            let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
+                                                                useAI: true)
+
+            XCTAssertTrue(h.server.messages.isEmpty, scenario)
+            XCTAssertEqual(try h.repo.db.scalarInt("SELECT COUNT(*) FROM ai_job"), 0, scenario)
+            XCTAssertNil(result.aiJobStatus, scenario)
+            XCTAssertFalse(result.usedFallback, scenario)
+            XCTAssertFalse(result.findings.contains { $0.severity == .error }, scenario)
+            let version = try created(result)
+            XCTAssertEqual(version.generator, "deterministic", scenario)
+            XCTAssertTrue(version.content.isEmpty, scenario)
+            XCTAssertTrue(version.warnings.contains {
+                $0.contains("완료·진행 업무나 확정 계획이 없습니다")
+            }, scenario)
+            let draft = try StableJSON.decode(SubmissionDraft.self, from: XCTUnwrap(version.structuredJSON))
+            XCTAssertTrue(draft.groups.isEmpty, scenario)
+            XCTAssertEqual(version.warnings, draft.warnings, scenario)
+            if scenario == "memo" {
+                XCTAssertTrue(version.warnings.contains {
+                    $0.contains("메모는 제출용 업무로 자동 변환하지 않습니다")
+                })
+            }
+            if scenario == "onHoldAndCancelled" {
+                XCTAssertEqual(Set(draft.reviewNotes), Set(["보류: 보류된 업무", "취소: 취소된 업무"]))
+            }
+            XCTAssertEqual(try h.repo.reportVersion(id: version.id), version, scenario)
+        }
+    }
+
+    func testEmptyTaskIdentityAndNoticePlaceholderAreStillRejected() async throws {
+        for placeholder in [false, true] {
+            let h = try makeHarness(output: { validDraft in
+                var forged = validDraft
+                forged.groups[0].items[0].taskIds = []
+                if placeholder {
+                    forged.groups[0].items[0].text = "해당 기간에 보고할 업무가 없습니다."
+                }
+                return try StableJSON.string(forged)
+            })
+
+            let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
+                                                                useAI: true)
+
+            XCTAssertTrue(result.usedFallback)
+            XCTAssertEqual(result.aiJobStatus, .succeeded)
+            XCTAssertTrue(result.findings.contains { $0.code == "missing_task" && $0.severity == .error })
+            XCTAssertFalse(result.findings.contains { $0.code == "ai_output_invalid" })
+            let version = try created(result)
+            XCTAssertEqual(version.generator, "deterministic")
+            XCTAssertEqual(version.content, SubmissionComposer.render(h.validDraft))
+            XCTAssertFalse(version.content.contains("해당 기간에 보고할 업무가 없습니다."))
+        }
+    }
+
+    func testChangedTaskBindingAndUnrelatedMemoEvidenceFallBack() async throws {
+        let workDate = WorkDate("2026-09-30")!
+        for expectedCode in ["ai_submission_binding_mismatch", "ai_submission_unrelated_evidence"] {
+            var taskIds: [String] = []
+            var memoSourceId = ""
+            let h = try makeHarness(seed: { repo in
+                let tasks = TaskService(repo: repo)
+                for title in ["배포 점검", "운영 문서 정리"] {
+                    let task = try tasks.createTask(title: title, workDate: workDate)
+                    try tasks.changeTaskStatus(taskId: task.id, kind: .started, workDate: workDate)
+                    taskIds.append(task.id)
+                }
+                let memo = try tasks.captureMemo(body: "업무와 연결하지 않은 회의 메모", workDate: workDate)
+                memoSourceId = FactSource.memoId(memo.id)
+            }, output: { validDraft in
+                var forged = validDraft
+                if expectedCode == "ai_submission_binding_mismatch" {
+                    let otherTask = try XCTUnwrap(taskIds.first {
+                        !forged.groups[0].items[0].taskIds.contains($0)
+                    })
+                    forged.groups[0].items[0].taskIds = [otherTask]
+                } else {
+                    forged.groups[0].items[0].evidenceIds = [memoSourceId]
+                }
+                return try StableJSON.string(forged)
+            })
+
+            let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
+                                                                useAI: true)
+
+            XCTAssertTrue(result.usedFallback, expectedCode)
+            XCTAssertEqual(result.aiJobStatus, .succeeded)
+            XCTAssertTrue(result.findings.contains { $0.code == expectedCode && $0.severity == .error })
+            XCTAssertFalse(result.findings.contains { $0.code == "unknown_task" || $0.code == "unknown_evidence" },
+                           "존재하는 ID라도 원래 업무와 연결되지 않으면 거부해야 합니다")
+            let version = try created(result)
+            XCTAssertEqual(version.generator, "deterministic")
+            XCTAssertEqual(version.content, SubmissionComposer.render(h.validDraft))
+            let stored = try StableJSON.decode(SubmissionDraft.self, from: XCTUnwrap(version.structuredJSON))
+            XCTAssertEqual(stored, h.validDraft)
+        }
+    }
+
+    func testCodexReviewNotesPreserveHeldAndCancelledTasksWithoutDuplicates() async throws {
+        let workDate = WorkDate("2026-09-30")!
+        let heldNote = "보류: 보류된 업무"
+        let cancelledNote = "취소: 취소된 업무"
+        let additionalNote = "추가 확인: 배포 공지 대상"
+        let h = try makeHarness(seed: { repo in
+            let tasks = TaskService(repo: repo)
+            let ongoing = try tasks.createTask(title: "진행 중인 업무", workDate: workDate)
+            try tasks.changeTaskStatus(taskId: ongoing.id, kind: .started, workDate: workDate)
+            let held = try tasks.createTask(title: "보류된 업무", workDate: workDate)
+            try tasks.changeTaskStatus(taskId: held.id, kind: .started, workDate: workDate)
+            try tasks.changeTaskStatus(taskId: held.id, kind: .paused, workDate: workDate)
+            let cancelled = try tasks.createTask(title: "취소된 업무", workDate: workDate)
+            try tasks.changeTaskStatus(taskId: cancelled.id, kind: .cancelled, workDate: workDate)
+        }, output: { validDraft in
+            var rewritten = validDraft
+            rewritten.reviewNotes = [heldNote, heldNote, additionalNote, additionalNote]
+            return try StableJSON.string(rewritten)
+        })
+
+        let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
+                                                            useAI: true)
+
+        XCTAssertFalse(result.usedFallback)
+        XCTAssertEqual(result.aiJobStatus, .succeeded)
+        let payload = try requestedPayload(h)
+        XCTAssertEqual(Set(payload.submissionDraft.reviewNotes), Set([heldNote, cancelledNote]))
+        let version = try created(result)
+        XCTAssertEqual(version.generator, "codex")
+        let saved = try XCTUnwrap(try h.repo.reportVersion(id: version.id))
+        let draft = try StableJSON.decode(SubmissionDraft.self, from: XCTUnwrap(saved.structuredJSON))
+        XCTAssertEqual(draft.reviewNotes.count, 3)
+        XCTAssertEqual(Set(draft.reviewNotes), Set([heldNote, cancelledNote, additionalNote]))
+        XCTAssertEqual(draft.groups, payload.submissionDraft.groups)
     }
 
     func testSavedPlainTextExampleUsesStructuredCodexOutputAndPersistsReport() async throws {
@@ -182,7 +420,7 @@ final class SubmissionGenerationRegressionTests: XCTestCase {
 
     func testStructuredOutputStillRejectsInventedCompletionAndEvidence() async throws {
         for expectedCode in ["category_mismatch", "unknown_evidence"] {
-            let h = try makeHarness { validDraft in
+            let h = try makeHarness(output: { validDraft in
                 var forged = validDraft
                 let groupIndex = try XCTUnwrap(forged.groups.firstIndex {
                     $0.items.contains { $0.category == .inProgress }
@@ -196,7 +434,7 @@ final class SubmissionGenerationRegressionTests: XCTestCase {
                     forged.groups[groupIndex].items[itemIndex].evidenceIds = ["activity:unknown-source"]
                 }
                 return try StableJSON.string(forged)
-            }
+            })
             let result = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested,
                                                                 useAI: true)
 
