@@ -4,7 +4,7 @@ import AppKit
 import WorkLogCore
 
 // App-only identities: Secret metadata and rows never enter SearchModel or its snapshot.
-enum SearchScope: Hashable { case all, records, secret }
+enum SearchScope: Hashable, CaseIterable { case all, records, tasks, reports, secret }
 enum SearchResultSelection: Hashable {
     case record(SearchHitKey)
     case secret(String)

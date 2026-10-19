@@ -38,6 +38,8 @@ import WorkLogCore
     @State private var useDates = false
     @State private var filterError: String?
     @State private var filtersExpanded = false
+    @State private var typeFilter: SearchSourceType?
+    @State private var reportExcludedFilters: (projectIds: [String], tagIds: [String])?
     @State private var aiExpanded = false
     @State private var sourceOpenedFromQuery = false
 
@@ -65,12 +67,14 @@ import WorkLogCore
         Picker("검색 범위", selection: $scope) {
             Text("전체 (\(scopeModifier)1)").tag(SearchScope.all)
             Text("기록 (\(scopeModifier)2)").tag(SearchScope.records)
-            Text("Secret (\(scopeModifier)3)").tag(SearchScope.secret)
+            Text("업무 (\(scopeModifier)3)").tag(SearchScope.tasks)
+            Text("리포트 (\(scopeModifier)4)").tag(SearchScope.reports)
+            Text("Secret (\(scopeModifier)5)").tag(SearchScope.secret)
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(maxWidth: 360)
-        .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 Secret · ⌃Tab 다음 범위")
+        .frame(maxWidth: 600)
+        .worklogHelp("검색 범위 · \(scopeModifier)1 전체 · \(scopeModifier)2 기록 · \(scopeModifier)3 업무 · \(scopeModifier)4 리포트 · \(scopeModifier)5 Secret · ⌃Tab 다음 범위")
     }
 
     @ViewBuilder private var searchResults: some View {
@@ -155,6 +159,18 @@ import WorkLogCore
             recordQuery = query
             query = secretQuery
         }
+        // A manual type from another scope must never hide this scope's results.
+        typeFilter = nil
+        if current == .reports {
+            // SearchIndex's relationship filters exclude reports. Suspend them only here.
+            reportExcludedFilters = (model.projectIds, model.tagIds)
+            model.projectIds = []
+            model.tagIds = []
+        } else if previous == .reports, let excluded = reportExcludedFilters {
+            model.projectIds = excluded.projectIds
+            model.tagIds = excluded.tagIds
+            reportExcludedFilters = nil
+        }
         updateSearch()
         validateSelection()
         focusQuery()
@@ -162,9 +178,30 @@ import WorkLogCore
 
     private var scopeModifier: String { isPanel ? "⌘" : "⌃" }
 
+    private var includesSecrets: Bool { scope == .all || scope == .secret }
+
+    private var availableTypes: [SearchSourceType] {
+        scope == .records ? [.memo, .activity] : SearchSourceType.allCases
+    }
+
+    private var scopedTypes: Set<SearchSourceType>? {
+        switch scope {
+        case .all: return typeFilter.map { Set([$0]) }
+        case .records: return typeFilter.map { Set([$0]) } ?? Set([.memo, .activity])
+        case .tasks: return [.task]
+        case .reports: return [.report]
+        case .secret: return nil
+        }
+    }
+
+    /// The scope itself is navigation, not a user-applied filter.
+    private var activeFilterCount: Int {
+        (typeFilter == nil ? 0 : 1) + model.projectIds.count + model.tagIds.count + (model.range == nil ? 0 : 1)
+    }
+
     private var keyboardHints: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("\(scopeModifier)1–3 범위 · ⌃Tab 다음 범위 · ⌃⇧Tab 이전 범위 · ⌘F 검색어")
+            Text("\(scopeModifier)1–5 범위 · ⌃Tab 다음 범위 · ⌃⇧Tab 이전 범위 · ⌘F 검색어")
             if !showsSecretKeys {
                 Text("↑↓ 선택 · Tab 결과로 · ⇧Tab 검색어로 · Return 원문 · ⌘E 메모·업무 편집 · ⌘⌥F 필터")
             }
@@ -189,8 +226,8 @@ import WorkLogCore
                                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
-                            if model.activeFilterCount > 0 {
-                                Text("필터는 기록에만 적용됩니다. Secret은 제목·그룹명으로 검색합니다.")
+                            if scope == .all, activeFilterCount > 0 {
+                                Text("필터는 일반 검색 결과에만 적용됩니다. Secret은 제목·그룹명으로 검색합니다.")
                                     .font(.caption).foregroundStyle(WorkLogTheme.muted)
                             }
                             if model.isSearching { ProgressView("원문 검색 중…") }
@@ -204,7 +241,7 @@ import WorkLogCore
                                 }
                             }
                         }
-                        if scope != .records, let secrets {
+                        if includesSecrets, let secrets {
                             if !secretTitles.isEmpty {
                                 if scope == .all {
                                     Label("Secret", systemImage: "lock.fill").font(.caption.weight(.semibold))
@@ -220,7 +257,7 @@ import WorkLogCore
                                 Label(message, systemImage: "info.circle")
                                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                             }
-                        } else if scope != .records, secrets == nil {
+                        } else if includesSecrets, secrets == nil {
                             InlineNotice(message: "Secret 검색을 연결하지 못했습니다. 기록 검색은 사용할 수 있습니다.")
                         }
                         if resultIDs.isEmpty && (scope == .secret || !model.isSearching)
@@ -253,6 +290,7 @@ import WorkLogCore
         hasInitialized = true
         query = model.text
         recordQuery = query
+        typeFilter = model.types?.count == 1 ? model.types?.first : nil
         if let key = model.selectedKey { selectedResult = .record(key) }
         let today = environment.calendar.workDate(of: environment.options.clock.now())
         filterStart = model.range?.start ?? today
@@ -282,7 +320,7 @@ import WorkLogCore
     private var resultIDs: [SearchResultSelection] {
         var ids: [SearchResultSelection] = []
         if scope != .secret { ids += model.hits.map { SearchResultSelection.record($0.key) } }
-        if scope != .records, secrets != nil { ids += secretTitles.map { SearchResultSelection.secret($0.id) } }
+        if includesSecrets, secrets != nil { ids += secretTitles.map { SearchResultSelection.secret($0.id) } }
         return ids
     }
 
@@ -290,6 +328,7 @@ import WorkLogCore
         // Only the user-authored query is copied. Never assign a Secret title/key/value to SearchModel.
         if scope != .secret {
             if model.text != query { model.text = query }
+            if model.types != scopedTypes { model.types = scopedTypes }
             model.search()
         }
         refreshSecretTitles()
@@ -297,7 +336,8 @@ import WorkLogCore
     }
 
     private func refreshSecretTitles() {
-        guard isActive, scope != .records else { return }
+        guard isActive else { return }
+        guard includesSecrets else { secretTitles = []; secretSearchError = nil; return }
         guard secrets != nil else { secretTitles = []; secretSearchError = nil; return }
         // App-owned metadata results: leave the shared Secret screen's query and titles untouched.
         do {
@@ -348,7 +388,7 @@ import WorkLogCore
     }
 
     private func cycleScope(backwards: Bool) {
-        let scopes: [SearchScope] = [.all, .records, .secret]
+        let scopes = SearchScope.allCases
         guard let current = scopes.firstIndex(of: scope) else { return }
         changeScope(to: scopes[(current + (backwards ? scopes.count - 1 : 1)) % scopes.count])
     }
@@ -424,7 +464,9 @@ import WorkLogCore
             switch event.keyCode {
             case 18: changeScope(to: .all); return true
             case 19: changeScope(to: .records); return true
-            case 20: changeScope(to: .secret); return true
+            case 20: changeScope(to: .tasks); return true
+            case 21: changeScope(to: .reports); return true
+            case 23: changeScope(to: .secret); return true
             default: break
             }
         }
@@ -551,9 +593,11 @@ import WorkLogCore
                 .foregroundStyle(focused ? WorkLogTheme.accent : WorkLogTheme.muted)
             SearchQueryField(text: $query, isFocused: $focused, allowsAIQuestion: scope != .secret)
                 .frame(minHeight: 22)
-                .accessibilityLabel(scope == .secret ? "Secret 제목 검색" : "원문 검색")
-                .accessibilityHint("↑↓로 기록과 Secret 선택, Tab으로 결과 이동, Return 열기. Secret은 AI로 보내지 않습니다")
-                .worklogHelp("원문 검색", keys: "↑↓ 선택 · Tab 결과로 · ⌥Space 미리보기 · Return 원문")
+                .accessibilityLabel(queryLabel)
+                .accessibilityHint(includesSecrets
+                    ? "↑↓로 결과 선택, Tab으로 결과 이동, Return 열기. Secret은 AI로 보내지 않습니다"
+                    : "↑↓로 결과 선택, Tab으로 결과 이동, Return 원문 열기")
+                .worklogHelp(queryLabel, keys: "↑↓ 선택 · Tab 결과로 · ⌥Space 미리보기 · Return 원문")
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -579,18 +623,28 @@ import WorkLogCore
         }
     }
 
+    private var queryLabel: String {
+        switch scope {
+        case .all: return "원문·Secret 제목 검색"
+        case .records: return "메모·진행 기록 검색"
+        case .tasks: return "업무 검색"
+        case .reports: return "리포트 검색"
+        case .secret: return "Secret 제목 검색"
+        }
+    }
+
     private var filterControls: some View {
         HStack(spacing: 12) {
             Text("결과 \(resultIDs.count)건").font(.callout).foregroundStyle(WorkLogTheme.muted)
             if scope != .secret {
             Button { filtersExpanded.toggle() } label: {
-                Label(model.activeFilterCount == 0 ? "필터" : "필터 \(model.activeFilterCount)",
+                Label(activeFilterCount == 0 ? "필터" : "필터 \(activeFilterCount)",
                       systemImage: "line.3.horizontal.decrease")
             }
             .popover(isPresented: $filtersExpanded, arrowEdge: .bottom) { filterPopover }
-            .accessibilityValue("\(model.activeFilterCount)개 적용 중")
+            .accessibilityValue("\(activeFilterCount)개 적용 중")
             .worklogHelp("유형 · 프로젝트 · 태그 · 기간 필터", keys: "⌘⌥F")
-            if model.activeFilterCount > 0 {
+            if activeFilterCount > 0 {
                 Button("초기화", action: resetFilters).font(.caption)
             }
             }
@@ -618,12 +672,14 @@ import WorkLogCore
                 Spacer()
                 Button("완료") { filtersExpanded = false }.keyboardShortcut(.cancelAction)
             }
-            Picker("유형", selection: Binding(get: { model.types?.first?.rawValue ?? "all" }, set: {
-                model.types = SearchSourceType(rawValue: $0).map { Set([$0]) }
-                model.search()
-            })) {
-                Text("전체").tag("all")
-                ForEach(SearchSourceType.allCases, id: \.self) { Text(sourceLabel($0)).tag($0.rawValue) }
+            if scope == .all || scope == .records {
+                Picker("유형", selection: Binding(get: { typeFilter?.rawValue ?? "all" }, set: {
+                    typeFilter = SearchSourceType(rawValue: $0)
+                    updateSearch()
+                })) {
+                    Text("전체").tag("all")
+                    ForEach(availableTypes, id: \.self) { Text(sourceLabel($0)).tag($0.rawValue) }
+                }
             }
             Picker("프로젝트", selection: Binding(get: { model.projectIds.first ?? "" }, set: {
                 model.projectIds = $0.isEmpty ? [] : [$0]
@@ -632,12 +688,19 @@ import WorkLogCore
                 Text("전체").tag("")
                 ForEach(projects) { Text($0.name).tag($0.id) }
             }
+            .disabled(scope == .reports)
             Picker("태그", selection: Binding(get: { model.tagIds.first ?? "" }, set: {
                 model.tagIds = $0.isEmpty ? [] : [$0]
                 model.search()
             })) {
                 Text("전체").tag("")
                 ForEach(tags) { Text($0.name).tag($0.id) }
+            }
+            .disabled(scope == .reports)
+            if scope == .reports {
+                Text("리포트에는 프로젝트·태그 필터가 적용되지 않습니다. 다른 범위로 돌아가면 기존 필터를 복원합니다.")
+                    .font(.caption).foregroundStyle(WorkLogTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Toggle("기간 지정", isOn: $useDates)
                 .onChange(of: useDates) { _, _ in applyDates() }
@@ -648,7 +711,7 @@ import WorkLogCore
             if !model.tagIds.isEmpty {
                 Text("태그 필터는 로컬 원문 검색에 적용됩니다.").font(.caption).foregroundStyle(WorkLogTheme.muted)
             }
-            if model.activeFilterCount > 0 { Button("필터 초기화", action: resetFilters) }
+            if activeFilterCount > 0 { Button("필터 초기화", action: resetFilters) }
         }
         .controlSize(.small)
         .padding(16).frame(width: 360)
@@ -666,7 +729,7 @@ import WorkLogCore
     private var emptyResults: some View {
         let action: (() -> Void)?
         let actionTitle: String?
-        if scope != .secret && model.activeFilterCount > 0 {
+        if scope != .secret && activeFilterCount > 0 {
             action = { resetFilters() }
             actionTitle = "필터 초기화"
         } else {
@@ -674,9 +737,28 @@ import WorkLogCore
             actionTitle = nil
         }
         return StateView(kind: query.isEmpty ? StateView.Kind.empty : StateView.Kind.noResults,
-            title: query.isEmpty ? "찾을 기록이나 Secret 제목을 입력하세요" : "일치하는 검색 결과가 없습니다",
-            detail: "철자를 확인하거나 검색 범위·기록 필터를 넓혀보세요. Secret은 잠금 중에도 제목을 검색합니다.",
+            title: emptyTitle, detail: emptyDetail,
             actionTitle: actionTitle, action: action)
+    }
+
+    private var emptyTitle: String {
+        switch scope {
+        case .all: return query.isEmpty ? "찾을 기록이나 Secret 제목을 입력하세요" : "일치하는 검색 결과가 없습니다"
+        case .records: return query.isEmpty ? "찾을 메모나 진행 기록을 입력하세요" : "일치하는 기록이 없습니다"
+        case .tasks: return query.isEmpty ? "찾을 업무를 입력하세요" : "일치하는 업무가 없습니다"
+        case .reports: return query.isEmpty ? "찾을 리포트를 입력하세요" : "일치하는 리포트가 없습니다"
+        case .secret: return query.isEmpty ? "찾을 Secret 제목을 입력하세요" : "일치하는 Secret 제목이 없습니다"
+        }
+    }
+
+    private var emptyDetail: String {
+        switch scope {
+        case .all: return "철자를 확인하거나 검색 범위·필터를 넓혀보세요. Secret은 잠금 중에도 제목을 검색합니다."
+        case .records: return "메모와 진행 기록에서 검색합니다. 철자를 확인하거나 필터를 넓혀보세요."
+        case .tasks: return "업무에서 검색합니다. 철자를 확인하거나 필터를 넓혀보세요."
+        case .reports: return "리포트 본문에서 검색합니다. 철자를 확인하거나 기간 필터를 넓혀보세요."
+        case .secret: return "Secret 제목·그룹명에서 검색합니다. 잠금 중에도 제목을 검색할 수 있습니다."
+        }
     }
 
     private func resultRow(_ hit: SearchHit) -> some View {
@@ -790,7 +872,11 @@ import WorkLogCore
     private func resetFilters() {
         useDates = false
         filterError = nil
-        model.clearFilters()
+        typeFilter = nil
+        model.projectIds = []
+        model.tagIds = []
+        model.range = nil
+        updateSearch()
     }
 
     private func applyDates() {
