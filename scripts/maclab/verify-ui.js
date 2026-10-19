@@ -142,10 +142,10 @@ function run(args) {
         requestedSizes = [[width, height]];
     }
     let routes = [{ key: '1', name: 'day' }, { key: '2', name: 'tasks' },
-        { key: '4', name: 'submission' }, { key: '5', name: 'performance' }, { key: '6', name: 'secrets' }];
+        { key: '4', name: 'submission' }, { key: '5', name: 'performance' }, { key: '7', name: 'secrets' }];
     if (resizeIndex >= 0) {
         routes = routes.filter(function (route) { return route.key === args[resizeIndex + 3]; });
-        if (!routes.length) throw new Error('Supported route shortcuts: 1, 2, 4, 5, 6.');
+        if (!routes.length) throw new Error('Supported route shortcuts: 1, 2, 4, 5, 7.');
     }
     const screen = visibleScreen();
     const output = { phase: option(args, '--phase', null), fixtureDeclaration: fixture,

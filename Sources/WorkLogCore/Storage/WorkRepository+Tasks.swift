@@ -76,10 +76,12 @@ extension WorkRepository {
     // MARK: TaskProject
 
     /// 이미 활성 연결이면 기존 행을 반환한다. 해제된 연결은 되살린다(행이 유일하기 때문).
+    /// 프로젝트 이름이 업무 색인에 들어가므로 행이 실제로 바뀐 경우에만 재색인 신호를 보낸다.
     @discardableResult
     public func linkProject(taskId: String, projectId: String, trackingEnabled: Bool,
                             linkedOn: WorkDate) throws -> TaskProject {
-        try db.transaction {
+        var changed = false
+        let link: TaskProject = try db.transaction {
             if let row = try db.queryOneV("SELECT * FROM task_project WHERE task_id = ? AND project_id = ?",
                                          taskId, projectId) {
                 if row.string("removed_on") == nil {
@@ -92,6 +94,7 @@ extension WorkRepository {
                     UPDATE task_project SET tracking_enabled = ?, linked_on = ?, removed_on = NULL
                     WHERE id = ?
                     """, trackingEnabled, linkedOn, existingId)
+                changed = true
                 return TaskProject(id: existingId, taskId: taskId, projectId: projectId,
                                    trackingEnabled: trackingEnabled, linkedOn: linkedOn)
             }
@@ -100,9 +103,12 @@ extension WorkRepository {
                 INSERT INTO task_project (id, task_id, project_id, tracking_enabled, linked_on, removed_on)
                 VALUES (?, ?, ?, ?, ?, NULL)
                 """, id, taskId, projectId, trackingEnabled, linkedOn)
+            changed = true
             return TaskProject(id: id, taskId: taskId, projectId: projectId,
                                trackingEnabled: trackingEnabled, linkedOn: linkedOn)
         }
+        if changed { onSourceChanged?("task", taskId) }
+        return link
     }
 
     /// 연결 해제. 행을 지우지 않고 removed_on을 설정한다.
@@ -112,6 +118,7 @@ extension WorkRepository {
             WHERE task_id = ? AND project_id = ? AND removed_on IS NULL
             """, removedOn, taskId, projectId)
         if n == 0 { throw WorkLogError.notFound("active link task=\(taskId) project=\(projectId)") }
+        onSourceChanged?("task", taskId)
     }
 
     public func taskProjects(taskId: String, includeRemoved: Bool = false) throws -> [TaskProject] {
@@ -142,11 +149,13 @@ extension WorkRepository {
                            item.id, projectId)
             }
         }
+        onSourceChanged?("task", item.taskId)
     }
 
     public func updateChecklistText(id: String, text: String) throws {
         let n = try db.runV("UPDATE checklist_item SET text = ? WHERE id = ?", text, id)
         if n == 0 { throw WorkLogError.notFound("checklist_item \(id)") }
+        if let taskId = try checklistTaskId(id) { onSourceChanged?("task", taskId) }
     }
 
     public func checklistItems(taskId: String, includeDeleted: Bool = false) throws -> [ChecklistItem] {
@@ -164,6 +173,12 @@ extension WorkRepository {
         let n = try db.runV("UPDATE checklist_item SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
                            clock.now(), id)
         if n == 0 { throw WorkLogError.notFound("checklist_item \(id)") }
+        if let taskId = try checklistTaskId(id) { onSourceChanged?("task", taskId) }
+    }
+
+    /// 체크리스트 항목이 속한 task id. 삭제 여부와 무관하게 조회한다.
+    private func checklistTaskId(_ itemId: String) throws -> String? {
+        try db.queryOneV("SELECT task_id FROM checklist_item WHERE id = ?", itemId)?.string("task_id")
     }
 
     // MARK: Activity

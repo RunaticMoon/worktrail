@@ -195,14 +195,18 @@ public final class AppEnvironment {
 
     // MARK: - 시작 회복
 
-    /// 앱 시작 시: 기본 템플릿 시드, 중단된 AI 작업 회복, 상태 캐시 재계산, 일일 백업, 보관 기간 정리.
-    /// 백업 실패는 throw하지 않고 결과에 기록한다.
+    /// 앱 시작 시: 기본 템플릿 시드, 중단된 AI 작업 회복, 상태 캐시 재계산, 원문 검색 색인 재구성,
+    /// 일일 백업, 보관 기간 정리. 백업 실패는 throw하지 않고 결과에 기록한다.
     public func onLaunch() -> LaunchReport {
         var report = LaunchReport()
 
         report.seededTemplates = (try? templates.seedDefaults()) ?? 0
         report.recoveredAIJobs = aiRunner.map { (try? $0.recoverInterrupted()) ?? 0 } ?? 0
         try? tasks.rebuildCachedStatuses()
+        // 이전 버전에서 제목만 색인된 업무 등 오래된 색인 문서만 복구한다.
+        // 색인이 최신이면 쓰기가 없으므로 일일 백업 판정(work.sqlite 해시)을 흔들지 않는다.
+        // 실패해도 앱 시작을 막지 않는다(다음 시작에서 다시 시도).
+        _ = try? search.repairStaleTaskDocs()
 
         do {
             let info = try backup.createDailyBackupIfChanged(calendar: calendar)

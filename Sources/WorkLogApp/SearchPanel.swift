@@ -6,6 +6,7 @@ import WorkLogCore
 @MainActor final class SearchPanelController: NSObject, NSWindowDelegate {
     private let panel: SearchKeyboardPanel
     private var model: SearchModel?
+    private var surface: SearchSurfaceState? = SearchSurfaceState()
     private var environment: AppEnvironment?
     private var secrets: SecretsModel?
     private var onOpenSecrets: (() -> Void)?
@@ -16,8 +17,10 @@ import WorkLogCore
         self.environment = environment
         self.secrets = secrets
         self.onOpenSecrets = onOpenSecrets
+        // .nonactivatingPanel must be set at construction: a hotkey panel receives key
+        // input without activating WorkLog, so the main window never rises from behind.
         panel = SearchKeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 640),
-            styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+            styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self
         panel.title = "WorkLog 검색"
@@ -43,7 +46,8 @@ import WorkLogCore
             FloatingPanelPositioning.place(panel)
         }
         ensureHosting()
-        NSApp.activate(ignoringOtherApps: true)
+        // A non-activating panel takes key focus by itself. Activating NSApp here would
+        // raise the main window over the frontmost app, so order only the panel.
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         if let sheet = panel.attachedSheet {
@@ -65,9 +69,9 @@ import WorkLogCore
     }
 
     private func installHosting() {
-        guard let model, let environment else { return }
+        guard let model, let surface, let environment else { return }
         let hosting = NSHostingView(rootView: AnyView(SearchPanelContent(
-            model: model, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
+            model: model, surface: surface, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
                 self?.dismiss(restorePreviousApp: false)
                 self?.onOpenSecrets?()
             }, onClose: { [weak self] in self?.dismiss() })))
@@ -79,9 +83,12 @@ import WorkLogCore
         // Leave an open source sheet to handle its own Escape / Close action.
         guard panel.attachedSheet == nil else { return }
         hidePanel()
-        if restorePreviousApp,
-           previousApp?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            previousApp?.activate(options: [])
+        // A non-activating panel never made WorkLog the active app, so the frontmost
+        // app usually still owns focus and needs no restore. Hand focus back only when
+        // WorkLog really became active (e.g. a sheet or the main window took over).
+        if restorePreviousApp, NSApp.isActive, let previousApp,
+           previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            _ = previousApp.activate(from: NSRunningApplication.current, options: [])
         }
         previousApp = nil
     }
@@ -94,11 +101,10 @@ import WorkLogCore
         panel.searchKeyHandler = nil
         panel.delegate = nil
         model = nil
+        surface = nil
         environment = nil
         secrets = nil
         onOpenSecrets = nil
-        if let hosting = panel.contentView as? NSHostingView<AnyView> { hosting.rootView = AnyView(EmptyView()) }
-        panel.contentView = nil
         previousApp = nil
     }
 
@@ -106,6 +112,9 @@ import WorkLogCore
         panel.makeFirstResponder(nil)
         panel.initialFirstResponder = nil
         panel.orderOut(nil)
+        // Retain ordinary search context in surface, but release all view-local Secret data.
+        if let hosting = panel.contentView as? NSHostingView<AnyView> { hosting.rootView = AnyView(EmptyView()) }
+        panel.contentView = nil
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { dismiss(); return false }
@@ -114,6 +123,7 @@ import WorkLogCore
 @MainActor private struct SearchPanelContent: View {
     @Environment(\.colorSchemeContrast) private var contrast
     let model: SearchModel
+    let surface: SearchSurfaceState
     let environment: AppEnvironment
     let secrets: SecretsModel?
     let onOpenSecrets: () -> Void
@@ -146,7 +156,7 @@ import WorkLogCore
             .padding(.vertical, 8)
             .glassEffect(.regular, in: .rect(cornerRadius: 16))
             .padding(12)
-            SearchScreen(model: model, environment: environment, secrets: secrets,
+            SearchScreen(model: model, surface: surface, environment: environment, secrets: secrets,
                 onOpenSecrets: onOpenSecrets, isPanel: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(WorkLogTheme.canvas)

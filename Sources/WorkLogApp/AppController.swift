@@ -12,11 +12,13 @@ import WorkLogCore
     private(set) var prompts: PromptSettingsModel?
     private(set) var day: DayViewModel?
     private(set) var search: SearchModel?
+    private(set) var searchSurface: SearchSurfaceState?
     private(set) var taskDetail: TaskDetailModel?
     private(set) var memoDetail: MemoDetailModel?
     /// Submission and performance screens retain independent selection and editing state.
     private(set) var reportModel: ReportsModel?
     private(set) var performanceReports: ReportsModel?
+    private(set) var reportLibrary: ReportLibraryModel?
     private(set) var plan: PlanModel?
     private(set) var quiz: QuizModel?
     private(set) var secrets: SecretsModel?
@@ -55,12 +57,14 @@ import WorkLogCore
             day = DayViewModel(environment: env)
             taskList = TaskListModel(environment: env)
             projects = ProjectsModel(environment: env)
+            searchSurface = SearchSurfaceState()
             search = SearchModel(environment: env); taskDetail = TaskDetailModel(environment: env)
             memoDetail = MemoDetailModel(environment: env)
             reportModel = ReportsModel(environment: env)
             reportModel?.family = .submission
             performanceReports = ReportsModel(environment: env)
             performanceReports?.family = .performance
+            reportLibrary = ReportLibraryModel(environment: env)
             plan = PlanModel(environment: env)
             quiz = QuizModel(environment: env)
             secrets = SecretsModel(environment: env)
@@ -82,6 +86,8 @@ import WorkLogCore
             if !failures.isEmpty { notice = failures.joined(separator: "\n") }
             do { try await env.runStartupCatchUp() }
             catch { notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다." }
+            // Scheduled reports bypass the editors, including any saved before a failure.
+            reportLibrary?.load()
         } catch {
             clearRegistrations()
             startupError = "WorkLog 저장소를 열지 못했습니다. 저장소 권한과 설정 파일을 확인하고 다시 시도하세요."
@@ -144,6 +150,7 @@ import WorkLogCore
         day?.load()
         taskList?.load()
         projects?.load()
+        reportLibrary?.load()
         if let selectedTaskId { taskDetail?.load(taskId: selectedTaskId, asOf: taskDetail?.asOf) }
         search?.search()
         if let graph, graph.phase != .idle { graph.reload() }
@@ -164,26 +171,62 @@ import WorkLogCore
                 if let activity = try environment?.repo.activity(id: node.id.id) { openTask(activity.taskId) }
             } catch { notice = "진행기록의 업무를 불러오지 못했습니다. 다시 시도하세요." }
         case .reportVersion:
-            let destination: SidebarRoute
-            let destinationModel: ReportsModel?
-            if node.reportFamily == ReportFamily.performance.rawValue {
-                destination = .performance
-                destinationModel = performanceReports
-            } else {
-                destination = .weekly
-                destinationModel = reportModel
-            }
-            guard let reports = destinationModel else { return }
-            guard !reports.isGenerating, !reports.hasChanges else {
-                notice = "리포트 작업을 마치거나 본문 변경을 저장한 뒤 다른 버전을 여세요."
-                return
-            }
-            reports.requestVersionSelection(node.id.id)
-            route = destination
+            openReportVersion(node.id.id,
+                family: node.reportFamily == ReportFamily.performance.rawValue ? .performance : .submission)
         case .project, .tag, .supplement, .historicalSource:
             break
         }
     }
+    /// Graph and library navigation share the same draft/generation protection.
+    func openReportVersion(_ id: String, family: ReportFamily) {
+        guard let reports = reportEditor(for: family) else { return }
+        reports.requestVersionSelection(id)
+        route = family == .performance ? .performance : .weekly
+    }
+
+    func openLibraryReport(_ id: String) {
+        guard let library = reportLibrary else { return }
+        // Resolve again at activation so a newly saved version is the one opened.
+        library.load()
+        guard library.errorMessage == nil else { return }
+        library.select(id)
+        guard let item = library.selectedItem, let version = item.latestVersion else {
+            notice = "리포트 본문을 찾을 수 없습니다. 보관함을 새로고침하세요."
+            return
+        }
+        openReportVersion(version.id, family: item.report.family)
+    }
+
+    func openReportCreation(family: ReportFamily, periodType: PeriodType) {
+        guard let reports = reportEditor(for: family) else { return }
+        if family == .performance {
+            if periodType == .yearly {
+                do {
+                    reports.evaluationPeriodId = try environment?.repo.evaluationPeriods().first?.id
+                    if reports.evaluationPeriodId == nil {
+                        notice = "성과자료의 ‘평가 기간 만들기’에서 기간을 저장한 뒤 리포트를 만드세요."
+                    }
+                } catch {
+                    notice = "평가 기간을 불러오지 못했습니다. 다시 시도하세요."
+                    return
+                }
+            } else {
+                reports.evaluationPeriodId = nil
+                reports.periodType = periodType
+            }
+        }
+        route = family == .performance ? .performance : .weekly
+    }
+
+    private func reportEditor(for family: ReportFamily) -> ReportsModel? {
+        guard let reports = family == .performance ? performanceReports : reportModel else { return nil }
+        guard !reports.isGenerating, !reports.hasChanges else {
+            notice = "리포트 작업을 마치거나 본문 변경을 저장한 뒤 다른 버전을 여세요."
+            return nil
+        }
+        return reports
+    }
+
     func showCapture() {
         guard let captureSession, let secrets, let environment else { return }
         if capturePanel == nil {
@@ -237,6 +280,9 @@ import WorkLogCore
             searchPanel = SearchPanelController(model: search, environment: environment, secrets: secrets,
                 onOpenSecrets: { [weak self] in
                     self?.route = .secrets
+                    // The search panel is non-activating, so activate explicitly before
+                    // bringing the main window forward.
+                    NSApp.activate()
                     self?.openMainWindow?()
                 })
         }
@@ -282,6 +328,7 @@ import WorkLogCore
         weak var previousMemo = memoDetail
         weak var previousReports = reportModel
         weak var previousPerformanceReports = performanceReports
+        weak var previousReportLibrary = reportLibrary
         weak var previousPlan = plan
         weak var previousQuiz = quiz
         selectedTaskId = nil; selectedMemoId = nil
@@ -294,15 +341,16 @@ import WorkLogCore
         // These read models own an immutable environment and expose no detach API.
         // Release them and check their weak lifetimes before replacing the stores.
         taskList = nil; projects = nil
+        searchSurface = nil
         day = nil; search = nil; taskDetail = nil; memoDetail = nil
-        reportModel = nil; performanceReports = nil; plan = nil; quiz = nil
+        reportModel = nil; performanceReports = nil; reportLibrary = nil; plan = nil; quiz = nil
         secrets = nil; settingsModel = nil; backups = nil; environment = nil
         startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
         for _ in 0..<30 {
-            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousPlan == nil && previousQuiz == nil { break }
+            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousReportLibrary == nil && previousPlan == nil && previousQuiz == nil { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousPlan == nil && previousQuiz == nil else {
+        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousReportLibrary == nil && previousPlan == nil && previousQuiz == nil else {
             startupError = "저장소 연결을 안전하게 닫지 못해 복원을 중단했습니다. 앱을 다시 열고 시도하세요."
             isRestoring = false
             return

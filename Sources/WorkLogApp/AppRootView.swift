@@ -4,9 +4,9 @@ import WorkLogCore
 
 /// Destinations and their menu order are shared by the sidebar and View menu.
 enum SidebarRoute: String, CaseIterable, Identifiable {
-    case day, tasks, projects, weekly, performance, secrets
+    case day, tasks, projects, weekly, performance, reportLibrary, secrets
     case search, graph, trash, backups, settings
-    static let primary: [SidebarRoute] = [.day, .tasks, .projects, .weekly, .performance, .secrets]
+    static let primary: [SidebarRoute] = [.day, .tasks, .projects, .weekly, .performance, .reportLibrary, .secrets]
     static let secondary: [SidebarRoute] = [.search, .graph, .trash, .backups, .settings]
     static let numbered = Array((primary + secondary).prefix(9))
     var id: String { rawValue }
@@ -17,6 +17,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         case .projects: return "프로젝트"
         case .weekly: return "주간보고"
         case .performance: return "성과자료"
+        case .reportLibrary: return "리포트"
         case .secrets: return "Secret"
         case .search: return "검색"
         case .graph: return "관계 그래프"
@@ -29,6 +30,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         switch self {
         case .weekly: return "팀 제출용"
         case .performance: return "성과평가용 상세 기록"
+        case .reportLibrary: return "기간별 보관함"
         default: return nil
         }
     }
@@ -39,6 +41,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         case .projects: return "folder"
         case .weekly: return "doc.text"
         case .performance: return "doc.text.magnifyingglass"
+        case .reportLibrary: return "books.vertical"
         case .secrets: return "lock"
         case .search: return "magnifyingglass"
         case .graph: return "point.3.connected.trianglepath.dotted"
@@ -116,6 +119,8 @@ struct AppRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .onChange(of: controller.reportModel?.versions) { _, _ in controller.reportLibrary?.load() }
+        .onChange(of: controller.performanceReports?.versions) { _, _ in controller.reportLibrary?.load() }
         .tint(WorkLogTheme.accent)
         .focusedSceneValue(\.worklogFocusSidebar, focusSidebar)
         .onAppear {
@@ -232,8 +237,8 @@ struct AppRootView: View {
                     detailDismissalRevision: detailDismissalRevision)
             }
         case .search:
-            if let search = controller.search {
-                SearchScreen(model: search, environment: environment, secrets: controller.secrets,
+            if let search = controller.search, let surface = controller.searchSurface {
+                SearchScreen(model: search, surface: surface, environment: environment, secrets: controller.secrets,
                     onOpenSecrets: { controller.route = .secrets })
             }
         case .graph:
@@ -247,6 +252,12 @@ struct AppRootView: View {
             if let reports = controller.performanceReports {
                 PerformanceReportScreen(model: reports, calendar: environment.calendar,
                     onManageTemplates: { controller.route = .settings })
+            }
+        case .reportLibrary:
+            if let library = controller.reportLibrary {
+                ReportLibraryScreen(model: library,
+                    onOpen: { controller.openLibraryReport($0) },
+                    onCreate: { controller.openReportCreation(family: $0, periodType: library.periodType) })
             }
         case .secrets:
             if let secrets = controller.secrets { SecretsScreen(model: secrets, calendar: environment.calendar) }
