@@ -7,27 +7,21 @@ import WorkLogCore
     @Environment(\.worklogContentAutofocus) private var contentAutofocus
     @Environment(\.colorSchemeContrast) private var contrast
     @Bindable var model: SearchModel
+    @Bindable var surface: SearchSurfaceState
     let environment: AppEnvironment
     var secrets: SecretsModel? = nil
     var onOpenSecrets: (() -> Void)? = nil
     var isPanel: Bool = false
-    @State private var scope: SearchScope = .all
-    @State private var query = ""
-    @State private var recordQuery = ""
     @State private var secretQuery = ""
     @State private var completedQuery = ""
     @State private var secretTitles: [SecretMetadata] = []
     @State private var secretSearchError: String?
-    @State private var selectedResult: SearchResultSelection?
+    @State private var selectedSecretId: String?
     @State private var openingId: String?
     @State private var isActive = false
     @State private var isWindowActive = false
     @State private var hasAppeared = false
     @State private var hasInitialized = false
-    // The model is shared with the other search window; presentation belongs to this screen.
-    @State private var recordResults: [SearchHit] = []
-    @State private var recordSearchError: String?
-    @State private var previewVisible = false
     @State private var secretNotice: String?
     @State private var secretSelection = SearchSecretSelection()
     @FocusState private var focusedResult: SearchResultSelection?
@@ -39,17 +33,32 @@ import WorkLogCore
     @State private var sourceTaskDetail: TaskDetailModel?
     @State private var projects: [Project] = []
     @State private var tags: [Tag] = []
-    @State private var filterStart: WorkDate?
-    @State private var filterEnd: WorkDate?
-    @State private var useDates = false
-    @State private var filterError: String?
     @State private var filtersExpanded = false
-    @State private var typeFilter: SearchSourceType?
-    @State private var projectFilterIds: [String] = []
-    @State private var tagFilterIds: [String] = []
-    @State private var filterRange: DateRange?
     @State private var aiExpanded = false
     @State private var sourceOpenedFromQuery = false
+
+    // Secret-only input and selection never enter the controller-owned surface or SearchModel.
+    private var query: String {
+        get { surface.scope == .secret ? secretQuery : surface.recordQuery }
+        nonmutating set {
+            if surface.scope == .secret { secretQuery = newValue }
+            else { surface.recordQuery = newValue }
+        }
+    }
+
+    private var selectedResult: SearchResultSelection? {
+        get {
+            if let selectedSecretId { return .secret(selectedSecretId) }
+            return surface.selectedKey.map { .record($0) }
+        }
+        nonmutating set {
+            switch newValue {
+            case .record(let key): surface.selectedKey = key; selectedSecretId = nil
+            case .secret(let id): surface.selectedKey = nil; selectedSecretId = id
+            case nil: surface.selectedKey = nil; selectedSecretId = nil
+            }
+        }
+    }
 
     var body: some View {
         searchLifecycle
@@ -73,7 +82,7 @@ import WorkLogCore
     }
 
     private var scopePicker: some View {
-        Picker("검색 범위", selection: $scope) {
+        Picker("검색 범위", selection: $surface.scope) {
             Text("전체 (\(scopeModifier)1)").tag(SearchScope.all)
             Text("기록 (\(scopeModifier)2)").tag(SearchScope.records)
             Text("업무 (\(scopeModifier)3)").tag(SearchScope.tasks)
@@ -120,7 +129,7 @@ import WorkLogCore
 
     private var searchWithQueryObservers: some View {
         searchWithSecretObservers
-        .onChange(of: scope) { previous, current in scopeDidChange(from: previous, to: current) }
+        .onChange(of: surface.scope) { previous, current in scopeDidChange(from: previous, to: current) }
         .onChange(of: query) { _, _ in
             cancelSecretOpening()
             secretSelection.openedId = nil
@@ -146,6 +155,9 @@ import WorkLogCore
         .onDisappear {
             hasAppeared = false; isActive = false; isWindowActive = false
             cancelSecretOpening()
+            secretQuery = ""; completedQuery = ""
+            selectedSecretId = nil; secretTitles = []
+            secretSelection = SearchSecretSelection()
         }
         .task(id: openingId) { await openSecretSelection() }
     }
@@ -161,20 +173,13 @@ import WorkLogCore
         else { focusResults() }
     }
 
-    private func scopeDidChange(from previous: SearchScope, to current: SearchScope) {
+    private func scopeDidChange(from _: SearchScope, to _: SearchScope) {
         cancelSecretOpening()
         secretSelection.openedId = nil
         secretSelection.selectedRowId = nil
-        // Secret-only input must never become an ordinary AI question on a scope change.
-        if previous == .secret {
-            secretQuery = query
-            query = recordQuery
-        } else if current == .secret {
-            recordQuery = query
-            query = secretQuery
-        }
+        // The query accessor keeps Secret-only input separate from the retained record query.
         // A manual type from another scope must never hide this scope's results.
-        typeFilter = nil
+        surface.typeFilter = nil
         // Relationship filters stay local, and are suspended only while searching reports.
         updateSearch()
         validateSelection()
@@ -183,16 +188,16 @@ import WorkLogCore
 
     private var scopeModifier: String { isPanel ? "⌘" : "⌃" }
 
-    private var includesSecrets: Bool { scope == .all || scope == .secret }
+    private var includesSecrets: Bool { surface.scope == .all || surface.scope == .secret }
 
     private var availableTypes: [SearchSourceType] {
-        scope == .records ? [.memo, .activity] : SearchSourceType.allCases
+        surface.scope == .records ? [.memo, .activity] : SearchSourceType.allCases
     }
 
     private var scopedTypes: Set<SearchSourceType>? {
-        switch scope {
-        case .all: return typeFilter.map { Set([$0]) }
-        case .records: return typeFilter.map { Set([$0]) } ?? Set([.memo, .activity])
+        switch surface.scope {
+        case .all: return surface.typeFilter.map { Set([$0]) }
+        case .records: return surface.typeFilter.map { Set([$0]) } ?? Set([.memo, .activity])
         case .tasks: return [.task]
         case .reports: return [.report]
         case .secret: return nil
@@ -201,8 +206,8 @@ import WorkLogCore
 
     /// The scope itself is navigation, not a user-applied filter.
     private var activeFilterCount: Int {
-        (typeFilter == nil ? 0 : 1) + (scope == .reports ? 0 : projectFilterIds.count + tagFilterIds.count)
-            + (filterRange == nil ? 0 : 1)
+        (surface.typeFilter == nil ? 0 : 1) + (surface.scope == .reports ? 0 : surface.projectFilterIds.count + surface.tagFilterIds.count)
+            + (surface.filterRange == nil ? 0 : 1)
     }
 
     private var keyboardHints: some View {
@@ -222,8 +227,8 @@ import WorkLogCore
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if scope != .secret {
-                            if recordSearchError != nil {
+                        if surface.scope != .secret {
+                            if surface.recordSearchError != nil {
                                 RecoveryNotice(failed: "검색하지 못했습니다", preserved: "입력과 필터는 그대로입니다",
                                     retryTitle: "다시 검색", retry: { updateSearch() })
                             }
@@ -232,13 +237,13 @@ import WorkLogCore
                                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
-                            if scope == .all, activeFilterCount > 0 {
+                            if surface.scope == .all, activeFilterCount > 0 {
                                 Text("필터는 일반 검색 결과에만 적용됩니다. Secret은 제목·그룹명으로 검색합니다.")
                                     .font(.caption).foregroundStyle(WorkLogTheme.muted)
                             }
                             if isActive, model.isSearching { ProgressView("원문 검색 중…") }
                             if !recordHits.isEmpty {
-                                if scope == .all && !secretTitles.isEmpty {
+                                if surface.scope == .all && !secretTitles.isEmpty {
                                     Text("기록").font(.caption.weight(.semibold)).foregroundStyle(WorkLogTheme.muted)
                                         .padding(.vertical, 8).accessibilityAddTraits(.isHeader)
                                 }
@@ -249,7 +254,7 @@ import WorkLogCore
                         }
                         if includesSecrets, let secrets {
                             if !secretTitles.isEmpty {
-                                if scope == .all {
+                                if surface.scope == .all {
                                     Label("Secret", systemImage: "lock.fill").font(.caption.weight(.semibold))
                                         .foregroundStyle(WorkLogTheme.muted).padding(.vertical, 8)
                                         .accessibilityAddTraits(.isHeader)
@@ -266,10 +271,10 @@ import WorkLogCore
                         } else if includesSecrets, secrets == nil {
                             InlineNotice(message: "Secret 검색을 연결하지 못했습니다. 기록 검색은 사용할 수 있습니다.")
                         }
-                        if resultIDs.isEmpty && (scope == .secret || !isActive || !model.isSearching)
-                            && (scope == .secret || recordSearchError == nil)
-                            && !(scope == .secret && (secrets == nil || secretSearchError != nil)) { emptyResults }
-                        if isActive, scope != .secret, !secretSelected, aiExpanded {
+                        if resultIDs.isEmpty && (surface.scope == .secret || !isActive || !model.isSearching)
+                            && (surface.scope == .secret || surface.recordSearchError == nil)
+                            && !(surface.scope == .secret && (secrets == nil || secretSearchError != nil)) { emptyResults }
+                        if isActive, surface.scope != .secret, !secretSelected, aiExpanded {
                             if model.isAskingAI { ProgressView("답변 생성 중…").controlSize(.small) }
                             if let answer = model.answer { answerView(answer) }
                         }
@@ -283,7 +288,7 @@ import WorkLogCore
                 }
                 .onAppear { if let key = selectedResult { proxy.scrollTo(key) } }
             }
-            if scope != .secret, previewVisible, let hit = selectedRecordHit {
+            if surface.scope != .secret, surface.previewVisible, let hit = selectedRecordHit {
                 ScrollView { preview(hit) }.frame(maxHeight: 160)
             }
         }
@@ -295,14 +300,15 @@ import WorkLogCore
         focused = contentAutofocus
         guard !hasInitialized else { updateSearch(); validateSelection(); return }
         hasInitialized = true
-        query = model.text
-        recordQuery = query
-        // A new screen starts at All, without inheriting the other screen's scope or filters.
-        let today = environment.calendar.workDate(of: environment.options.clock.now())
-        filterStart = today
-        filterEnd = today
+        if !surface.hasInitialized {
+            surface.hasInitialized = true
+            surface.recordQuery = model.text
+            let today = environment.calendar.workDate(of: environment.options.clock.now())
+            surface.filterStart = today
+            surface.filterEnd = today
+        }
         do { projects = try environment.repo.projects(); tags = try environment.repo.tags() }
-        catch { filterError = "필터 후보를 불러오지 못했습니다." }
+        catch { surface.filterError = "필터 후보를 불러오지 못했습니다." }
         updateSearch()
     }
 
@@ -310,7 +316,7 @@ import WorkLogCore
         isWindowActive = active
         isActive = active && hasAppeared
         guard isActive, hasInitialized else { return }
-        // Panels retain their hosting view when hidden, so onAppear alone cannot restore scope.
+        // Switching key windows must reapply this surface before using the shared model.
         updateSearch()
         validateSelection()
     }
@@ -332,9 +338,9 @@ import WorkLogCore
     }
 
     private var recordHits: [SearchHit] {
-        guard scope != .secret else { return [] }
-        guard let scopedTypes else { return recordResults }
-        return recordResults.filter { scopedTypes.contains($0.sourceType) }
+        guard surface.scope != .secret else { return [] }
+        guard let scopedTypes else { return surface.recordResults }
+        return surface.recordResults.filter { scopedTypes.contains($0.sourceType) }
     }
 
     private var secretSelected: Bool {
@@ -344,7 +350,7 @@ import WorkLogCore
 
     private var resultIDs: [SearchResultSelection] {
         var ids: [SearchResultSelection] = []
-        if scope != .secret { ids += recordHits.map { SearchResultSelection.record($0.key) } }
+        if surface.scope != .secret { ids += recordHits.map { SearchResultSelection.record($0.key) } }
         if includesSecrets, secrets != nil { ids += secretTitles.map { SearchResultSelection.secret($0.id) } }
         return ids
     }
@@ -352,19 +358,19 @@ import WorkLogCore
     private func updateSearch() {
         guard isActive, hasInitialized else { return }
         // Only the user-authored query is copied. Never assign a Secret title/key/value to SearchModel.
-        if scope != .secret {
+        if surface.scope != .secret {
             if model.text != query { model.text = query }
             if model.types != scopedTypes { model.types = scopedTypes }
-            let projectIds = scope == .reports ? [] : projectFilterIds
-            let tagIds = scope == .reports ? [] : tagFilterIds
+            let projectIds = surface.scope == .reports ? [] : surface.projectFilterIds
+            let tagIds = surface.scope == .reports ? [] : surface.tagFilterIds
             if model.projectIds != projectIds { model.projectIds = projectIds }
             if model.tagIds != tagIds { model.tagIds = tagIds }
-            if model.range != filterRange { model.range = filterRange }
+            if model.range != surface.filterRange { model.range = surface.filterRange }
             model.search()
-            recordResults = model.hits
-            recordSearchError = model.errorMessage
+            surface.recordResults = model.hits
+            surface.recordSearchError = model.errorMessage
             if let hit = selectedRecordHit { model.select(hit) }
-            model.isPreviewVisible = previewVisible
+            model.isPreviewVisible = surface.previewVisible
         }
         refreshSecretTitles()
         completedQuery = query
@@ -372,11 +378,11 @@ import WorkLogCore
 
     private func refreshRecordResults() {
         // AppController can refresh the shared model after a source edit.
-        guard isActive, scope != .secret, model.text == query, model.types == scopedTypes,
-              model.projectIds == (scope == .reports ? [] : projectFilterIds),
-              model.tagIds == (scope == .reports ? [] : tagFilterIds), model.range == filterRange else { return }
-        recordResults = model.hits
-        recordSearchError = model.errorMessage
+        guard isActive, surface.scope != .secret, model.text == query, model.types == scopedTypes,
+              model.projectIds == (surface.scope == .reports ? [] : surface.projectFilterIds),
+              model.tagIds == (surface.scope == .reports ? [] : surface.tagFilterIds), model.range == surface.filterRange else { return }
+        surface.recordResults = model.hits
+        surface.recordSearchError = model.errorMessage
     }
 
     private func refreshSecretTitles() {
@@ -427,13 +433,13 @@ import WorkLogCore
     }
 
     private func changeScope(to next: SearchScope) {
-        if scope == next { returnToResults() }
-        else { scope = next }
+        if surface.scope == next { returnToResults() }
+        else { surface.scope = next }
     }
 
     private func cycleScope(backwards: Bool) {
         let scopes = SearchScope.allCases
-        guard let current = scopes.firstIndex(of: scope) else { return }
+        guard let current = scopes.firstIndex(of: surface.scope) else { return }
         changeScope(to: scopes[(current + (backwards ? scopes.count - 1 : 1)) % scopes.count])
     }
 
@@ -483,13 +489,13 @@ import WorkLogCore
     }
 
     private func askAI() {
-        guard isActive, scope != .secret, !secretSelected else { return }
+        guard isActive, surface.scope != .secret, !secretSelected else { return }
         // Explicit invocation passes only the typed question. GroundedAnswerService uses ordinary records.
         updateSearch()
         guard model.canAskAI else { return }
         aiExpanded = true
         Task {
-            guard isActive, scope != .secret, !secretSelected else { return }
+            guard isActive, surface.scope != .secret, !secretSelected else { return }
             updateSearch()
             await model.askAI()
         }
@@ -519,13 +525,13 @@ import WorkLogCore
         if event.keyCode == 48, modifiers == .control || modifiers == [.control, .shift] {
             cycleScope(backwards: modifiers.contains(.shift)); return true
         }
-        if modifiers == [.command, .option], event.keyCode == 3, scope != .secret, !showsSecretKeys {
+        if modifiers == [.command, .option], event.keyCode == 3, surface.scope != .secret, !showsSecretKeys {
             focused = false; focusedResult = nil
             filtersExpanded = true
             return true
         }
         if modifiers == .command, event.keyCode == 36 || event.keyCode == 76 {
-            guard scope != .secret, !secretSelected else { return false }
+            guard surface.scope != .secret, !secretSelected else { return false }
             if !event.isARepeat { askAI() }
             return true
         }
@@ -637,7 +643,7 @@ import WorkLogCore
             Image(systemName: "magnifyingglass")
                 .font(.title3)
                 .foregroundStyle(focused ? WorkLogTheme.accent : WorkLogTheme.muted)
-            SearchQueryField(text: $query, isFocused: $focused, allowsAIQuestion: scope != .secret)
+            SearchQueryField(text: Binding(get: { query }, set: { query = $0 }), isFocused: $focused, allowsAIQuestion: surface.scope != .secret)
                 .frame(minHeight: 22)
                 .accessibilityLabel(queryLabel)
                 .accessibilityHint(includesSecrets
@@ -670,7 +676,7 @@ import WorkLogCore
     }
 
     private var queryLabel: String {
-        switch scope {
+        switch surface.scope {
         case .all: return "원문·Secret 제목 검색"
         case .records: return "메모·진행 기록 검색"
         case .tasks: return "업무 검색"
@@ -682,7 +688,7 @@ import WorkLogCore
     private var filterControls: some View {
         HStack(spacing: 12) {
             Text("결과 \(resultIDs.count)건").font(.callout).foregroundStyle(WorkLogTheme.muted)
-            if scope != .secret {
+            if surface.scope != .secret {
             Button { filtersExpanded.toggle() } label: {
                 Label(activeFilterCount == 0 ? "필터" : "필터 \(activeFilterCount)",
                       systemImage: "line.3.horizontal.decrease")
@@ -695,16 +701,16 @@ import WorkLogCore
             }
             }
             Spacer(minLength: 0)
-            if scope != .secret, selectedRecordHit != nil {
+            if surface.scope != .secret, selectedRecordHit != nil {
                 Button(action: togglePreview) {
-                    Label(previewVisible ? "미리보기 닫기" : "미리보기", systemImage: "doc.text.viewfinder")
+                    Label(surface.previewVisible ? "미리보기 닫기" : "미리보기", systemImage: "doc.text.viewfinder")
                 }
                 .worklogHelp("미리보기", keys: "⌥Space · 결과 행 Space")
             }
-            if scope != .secret, !secretSelected, model.isAIAvailable {
+            if surface.scope != .secret, !secretSelected, model.isAIAvailable {
                 Button(action: askAI) { Label("AI 질문", systemImage: "sparkles") }
                     .disabled(!model.canAskAI)
-                    .worklogHelp(scope == .reports || tagFilterIds.isEmpty ? "입력한 질문에 기록을 근거로 답변" : "AI 질문은 태그 필터를 해제한 뒤 실행", keys: "⌘Return")
+                    .worklogHelp(surface.scope == .reports || surface.tagFilterIds.isEmpty ? "입력한 질문에 기록을 근거로 답변" : "AI 질문은 태그 필터를 해제한 뒤 실행", keys: "⌘Return")
             }
         }
         .controlSize(.small)
@@ -718,43 +724,43 @@ import WorkLogCore
                 Spacer()
                 Button("완료") { filtersExpanded = false }.keyboardShortcut(.cancelAction)
             }
-            if scope == .all || scope == .records {
-                Picker("유형", selection: Binding(get: { typeFilter?.rawValue ?? "all" }, set: {
-                    typeFilter = SearchSourceType(rawValue: $0)
+            if surface.scope == .all || surface.scope == .records {
+                Picker("유형", selection: Binding(get: { surface.typeFilter?.rawValue ?? "all" }, set: {
+                    surface.typeFilter = SearchSourceType(rawValue: $0)
                     updateSearch()
                 })) {
                     Text("전체").tag("all")
                     ForEach(availableTypes, id: \.self) { Text(sourceLabel($0)).tag($0.rawValue) }
                 }
             }
-            Picker("프로젝트", selection: Binding(get: { projectFilterIds.first ?? "" }, set: {
-                projectFilterIds = $0.isEmpty ? [] : [$0]
+            Picker("프로젝트", selection: Binding(get: { surface.projectFilterIds.first ?? "" }, set: {
+                surface.projectFilterIds = $0.isEmpty ? [] : [$0]
                 updateSearch()
             })) {
                 Text("전체").tag("")
                 ForEach(projects) { Text($0.name).tag($0.id) }
             }
-            .disabled(scope == .reports)
-            Picker("태그", selection: Binding(get: { tagFilterIds.first ?? "" }, set: {
-                tagFilterIds = $0.isEmpty ? [] : [$0]
+            .disabled(surface.scope == .reports)
+            Picker("태그", selection: Binding(get: { surface.tagFilterIds.first ?? "" }, set: {
+                surface.tagFilterIds = $0.isEmpty ? [] : [$0]
                 updateSearch()
             })) {
                 Text("전체").tag("")
                 ForEach(tags) { Text($0.name).tag($0.id) }
             }
-            .disabled(scope == .reports)
-            if scope == .reports {
+            .disabled(surface.scope == .reports)
+            if surface.scope == .reports {
                 Text("리포트에는 프로젝트·태그 필터가 적용되지 않습니다. 다른 범위로 돌아가면 기존 필터를 복원합니다.")
                     .font(.caption).foregroundStyle(WorkLogTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Toggle("기간 지정", isOn: $useDates)
-                .onChange(of: useDates) { _, _ in applyDates() }
-            if useDates, let start = filterStart, let end = filterEnd {
+            Toggle("기간 지정", isOn: $surface.useDates)
+                .onChange(of: surface.useDates) { _, _ in applyDates() }
+            if surface.useDates, let start = surface.filterStart, let end = surface.filterEnd {
                 dateFilters(start: start, end: end)
             }
-            if let filterError { InlineNotice(message: filterError) }
-            if scope != .reports, !tagFilterIds.isEmpty {
+            if let filterError = surface.filterError { InlineNotice(message: filterError) }
+            if surface.scope != .reports, !surface.tagFilterIds.isEmpty {
                 Text("태그 필터는 로컬 원문 검색에 적용됩니다.").font(.caption).foregroundStyle(WorkLogTheme.muted)
             }
             if activeFilterCount > 0 { Button("필터 초기화", action: resetFilters) }
@@ -764,18 +770,18 @@ import WorkLogCore
     }
 
     @ViewBuilder private func dateFilters(start: WorkDate, end: WorkDate) -> some View {
-        WorkDatePicker(title: "시작일", value: Binding(get: { filterStart ?? start }, set: {
-            filterStart = $0; applyDates()
+        WorkDatePicker(title: "시작일", value: Binding(get: { surface.filterStart ?? start }, set: {
+            surface.filterStart = $0; applyDates()
         }), calendar: environment.calendar)
-        WorkDatePicker(title: "종료일 포함", value: Binding(get: { filterEnd ?? end }, set: {
-            filterEnd = $0; applyDates()
+        WorkDatePicker(title: "종료일 포함", value: Binding(get: { surface.filterEnd ?? end }, set: {
+            surface.filterEnd = $0; applyDates()
         }), calendar: environment.calendar)
     }
 
     private var emptyResults: some View {
         let action: (() -> Void)?
         let actionTitle: String?
-        if scope != .secret && activeFilterCount > 0 {
+        if surface.scope != .secret && activeFilterCount > 0 {
             action = { resetFilters() }
             actionTitle = "필터 초기화"
         } else {
@@ -788,7 +794,7 @@ import WorkLogCore
     }
 
     private var emptyTitle: String {
-        switch scope {
+        switch surface.scope {
         case .all: return query.isEmpty ? "찾을 기록이나 Secret 제목을 입력하세요" : "일치하는 검색 결과가 없습니다"
         case .records: return query.isEmpty ? "찾을 메모나 진행 기록을 입력하세요" : "일치하는 기록이 없습니다"
         case .tasks: return query.isEmpty ? "찾을 업무를 입력하세요" : "일치하는 업무가 없습니다"
@@ -798,7 +804,7 @@ import WorkLogCore
     }
 
     private var emptyDetail: String {
-        switch scope {
+        switch surface.scope {
         case .all: return "철자를 확인하거나 검색 범위·필터를 넓혀보세요. Secret은 잠금 중에도 제목을 검색합니다."
         case .records: return "메모와 진행 기록에서 검색합니다. 철자를 확인하거나 필터를 넓혀보세요."
         case .tasks: return "업무에서 검색합니다. 철자를 확인하거나 필터를 넓혀보세요."
@@ -916,28 +922,28 @@ import WorkLogCore
     }
 
     private func resetFilters() {
-        useDates = false
-        filterError = nil
-        typeFilter = nil
-        if scope != .reports { projectFilterIds = []; tagFilterIds = [] }
-        filterRange = nil
+        surface.useDates = false
+        surface.filterError = nil
+        surface.typeFilter = nil
+        if surface.scope != .reports { surface.projectFilterIds = []; surface.tagFilterIds = [] }
+        surface.filterRange = nil
         updateSearch()
     }
 
     private func applyDates() {
-        filterError = nil
-        if !useDates { filterRange = nil; updateSearch(); return }
-        guard let start = filterStart, let end = filterEnd, start <= end else {
-            filterError = "종료일은 시작일보다 빠를 수 없습니다."; return
+        surface.filterError = nil
+        if !surface.useDates { surface.filterRange = nil; updateSearch(); return }
+        guard let start = surface.filterStart, let end = surface.filterEnd, start <= end else {
+            surface.filterError = "종료일은 시작일보다 빠를 수 없습니다."; return
         }
-        filterRange = DateRange(start: start, endExclusive: environment.calendar.adding(days: 1, to: end))
+        surface.filterRange = DateRange(start: start, endExclusive: environment.calendar.adding(days: 1, to: end))
         updateSearch()
     }
 
     private func togglePreview() {
         guard isActive, selectedRecordHit != nil else { return }
-        previewVisible.toggle()
-        model.isPreviewVisible = previewVisible
+        surface.previewVisible.toggle()
+        model.isPreviewVisible = surface.previewVisible
     }
 
     @ViewBuilder private var sourceSheet: some View {

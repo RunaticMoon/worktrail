@@ -237,8 +237,8 @@ struct AppRootView: View {
                     detailDismissalRevision: detailDismissalRevision)
             }
         case .search:
-            if let search = controller.search {
-                SearchScreen(model: search, environment: environment, secrets: controller.secrets,
+            if let search = controller.search, let surface = controller.searchSurface {
+                SearchScreen(model: search, surface: surface, environment: environment, secrets: controller.secrets,
                     onOpenSecrets: { controller.route = .secrets })
             }
         case .graph:

@@ -12,6 +12,7 @@ import WorkLogCore
     private(set) var prompts: PromptSettingsModel?
     private(set) var day: DayViewModel?
     private(set) var search: SearchModel?
+    private(set) var searchSurface: SearchSurfaceState?
     private(set) var taskDetail: TaskDetailModel?
     private(set) var memoDetail: MemoDetailModel?
     /// Submission and performance screens retain independent selection and editing state.
@@ -56,6 +57,7 @@ import WorkLogCore
             day = DayViewModel(environment: env)
             taskList = TaskListModel(environment: env)
             projects = ProjectsModel(environment: env)
+            searchSurface = SearchSurfaceState()
             search = SearchModel(environment: env); taskDetail = TaskDetailModel(environment: env)
             memoDetail = MemoDetailModel(environment: env)
             reportModel = ReportsModel(environment: env)
@@ -339,6 +341,7 @@ import WorkLogCore
         // These read models own an immutable environment and expose no detach API.
         // Release them and check their weak lifetimes before replacing the stores.
         taskList = nil; projects = nil
+        searchSurface = nil
         day = nil; search = nil; taskDetail = nil; memoDetail = nil
         reportModel = nil; performanceReports = nil; reportLibrary = nil; plan = nil; quiz = nil
         secrets = nil; settingsModel = nil; backups = nil; environment = nil
