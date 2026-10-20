@@ -47,7 +47,7 @@ open -n After.app --args --ui-test-fixture many
 
 현재 메인 창의 화면 이동은 ⌘1 오늘, ⌘2 업무, ⌘3 프로젝트, ⌘4 주간보고, ⌘5 성과자료, ⌘6 리포트 보관함, ⌘7 Secret, ⌘8 검색, ⌘9 관계 그래프다. 휴지통에는 번호가 없다. `keyboard-empty.js`는 ⌘9 → ⌘0(사이드바 포커스) → ↓로 휴지통에 이동한 뒤 잠금 화면·콘텐츠 포커스를 확인한다. `secret-flow.js`의 대체 진입은 ⌘7이며, `verify-ui.js`의 Secret 캡처와 `resize` 인자도 `7`을 사용한다(지원 인자: `1`, `2`, `4`, `5`, `7`).
 
-검색 범위는 패널 ⌘1–⌘5 / 메인 검색 ⌃1–⌃5 = 전체 / 기록 / 업무 / 리포트 / Secret이다. 빠른 입력의 ⌘1–⌘3 = 메모 / 업무 / Secret은 별도 동선이다. `search-roundtrip.js`와 `capture-search-flow.js`는 현재 숫자로 Secret 범위를 고르는 동작 없이 일반 메모 검색·원문 왕복만 검사한다.
+검색 범위는 패널 ⌘1–⌘5 / 메인 검색 ⌃1–⌃5 = 전체 / 기록 / 업무 / Secret / 리포트(1 전체 · 2 기록 · 3 업무 · 4 Secret · 5 리포트)이다. 범위 탭의 단축키 키캡은 메인 검색 Control·패널 Command를 누르는 동안에만 표시된다. 빠른 입력의 ⌘1–⌘3 = 메모 / 업무 / Secret은 별도 동선이다. `search-roundtrip.js`와 `capture-search-flow.js`는 현재 숫자로 Secret 범위를 고르는 동작 없이 일반 메모 검색·원문 왕복만 검사한다.
 
 `keyboard-ux`는 `scripts/maclab/keyboard-flow.js --fixture many --entry global`, 같은 helper의 `--action capture --entry command`, `keyboard-safety.js --fixture many`를 순서대로 실행한다. 이어서 해당 가짜 프로세스만 종료하고 새로운 `empty` fixture에서 `keyboard-empty.js --fixture empty`를 실행한다. 전역 진입은 TextEdit의 실제 전면 상태를 확인한 뒤 ⌃⌥Space/⌃⌥D를 누른다. 필요하면 `--action capture|main|search`, `--entry command|global`로 동선을 나눠 실행한다. AX는 상태 확인에만 사용하고 조작은 실제 키 이벤트로 수행한다. 검색 테스트는 고정된 가짜 메모 하나를 수정하므로 반드시 새로운 `many` fixture에서 시작한다. 실제 실행 결과는 run별로 확인하며 스크립트 구문 검사만으로 통과했다고 판단하지 않는다.
 

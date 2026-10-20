@@ -4,7 +4,22 @@ import AppKit
 import WorkLogCore
 
 // App-only identities: Secret metadata and rows never enter SearchModel or its snapshot.
-enum SearchScope: Hashable, CaseIterable { case all, records, tasks, reports, secret }
+enum SearchScope: Hashable, CaseIterable {
+    // Display order also defines number shortcuts and Control-Tab navigation.
+    case all, records, tasks, secret, reports
+
+    var title: String {
+        switch self {
+        case .all: return "전체"
+        case .records: return "기록"
+        case .tasks: return "업무"
+        case .secret: return "Secret"
+        case .reports: return "리포트"
+        }
+    }
+
+    var shortcutNumber: Int { (Self.allCases.firstIndex(of: self) ?? 0) + 1 }
+}
 enum SearchResultSelection: Hashable {
     case record(SearchHitKey)
     case secret(String)

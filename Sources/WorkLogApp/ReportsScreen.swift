@@ -70,6 +70,8 @@ private struct ReportWorkspace: View {
     @State private var planExpanded = false
     @State private var quizExpanded = false
     @State private var writingOptionsExpanded = false
+    @State private var inclusionExpanded = false
+    @State private var isEditing = false
     @FocusState private var editorFocused: Bool
     @FocusState private var generateFocused: Bool
     @Environment(\.colorSchemeContrast) private var contrast
@@ -163,40 +165,46 @@ private struct ReportWorkspace: View {
         .onChange(of: model.periodType) { _, _ in if !isWeekly { loadSelection() } }
         .onChange(of: model.evaluationPeriodId) { _, _ in if !isWeekly { loadSelection() } }
         .onChange(of: model.reportDate) { _, _ in if isWeekly { quiz?.reset() } }
-        .onChange(of: model.version?.id) { _, _ in copyFailed = false }
+        .onChange(of: model.version?.id) { _, _ in
+            copyFailed = false
+            // New drafts open as documents; saving an edited version keeps the editor open.
+            if model.version?.state == .draft { isEditing = false }
+        }
+        .onChange(of: model.report?.id) { _, _ in isEditing = false }
+        .onChange(of: model.canEdit) { _, canEdit in
+            if !canEdit && !model.isGenerating { isEditing = false }
+        }
+        .onChange(of: isEditing) { _, editing in editorFocused = editing }
         .onChange(of: model.pendingRegeneration?.id) { _, _ in comparisonExpanded = false }
         .onChange(of: plan?.items) { _, _ in model.checkStale() }
         .onChange(of: quiz?.recorded) { _, _ in model.checkStale() }
     }
 
     private func focusContent() {
-        if model.canEdit, model.version != nil { editorFocused = true }
+        if model.canEdit, model.version != nil {
+            isEditing = true
+            editorFocused = true
+        }
         else { generateFocused = true }
     }
 
     @ViewBuilder private var weeklySupport: some View {
         if isWeekly, let plan, let quiz {
             Divider()
-            DisclosureGroup(isExpanded: $planExpanded) {
+            SectionDisclosure(title: "이번 주 계획 검토",
+                              summary: "확정 \(plan.confirmed.count) · 후보 \(plan.candidates.count)",
+                              isExpanded: $planExpanded) {
                 PlanScreen(model: plan, calendar: calendar, embedded: true)
                     .padding(.top, 12)
-            } label: {
-                HStack(spacing: 8) {
-                    Text("이번 주 계획 검토").font(.body.weight(.medium))
-                    Text("확정 \(plan.confirmed.count) · 후보 \(plan.candidates.count)")
-                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                }
             }
-            DisclosureGroup(isExpanded: $quizExpanded) {
+            .accessibilityIdentifier("reports-plan-disclosure")
+            SectionDisclosure(title: "성과 보충 질문",
+                              summary: quiz.remainingCount > 0 ? "선택 사항 · \(quiz.remainingCount)개 남음" : "선택 사항",
+                              isExpanded: $quizExpanded) {
                 QuizCard(model: quiz, reportDate: model.reportDate)
                     .padding(.top, 12)
-            } label: {
-                HStack(spacing: 8) {
-                    Text("성과 보충 질문").font(.body.weight(.medium))
-                    Text(quiz.remainingCount > 0 ? "선택 사항 · \(quiz.remainingCount)개 남음" : "선택 사항")
-                        .font(.callout).foregroundStyle(WorkLogTheme.muted)
-                }
             }
+            .accessibilityIdentifier("reports-quiz-disclosure")
         }
     }
 
@@ -233,7 +241,8 @@ private struct ReportWorkspace: View {
     }
 
     private var templateControls: some View {
-        DisclosureGroup(isExpanded: $writingOptionsExpanded) {
+        SectionDisclosure(title: "양식·작성 옵션", summary: model.templateLabel ?? "활성 양식 없음",
+                          isExpanded: $writingOptionsExpanded) {
             VStack(alignment: .leading, spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) { templateActions }
@@ -252,9 +261,8 @@ private struct ReportWorkspace: View {
                 }
                 if let status = model.aiJobStatus { Text("AI 상태: \(status.rawValue)").font(.caption) }
             }.padding(.top, 8)
-        } label: {
-            Text("양식·작성 옵션").font(.callout)
         }
+        .accessibilityIdentifier("reports-writing-options-disclosure")
     }
 
     @ViewBuilder private var templateActions: some View {
@@ -273,7 +281,7 @@ private struct ReportWorkspace: View {
                     Label("저장하지 않은 변경 · 저장 후 확정할 수 있습니다", systemImage: "pencil.circle")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
-                if model.canEdit {
+                if model.canEdit && isEditing {
                     TextEditor(text: $model.content)
                         .focused($editorFocused)
                         .font(.system(size: 14))
@@ -287,10 +295,9 @@ private struct ReportWorkspace: View {
                             .allowsHitTesting(false))
                         .accessibilityLabel("\(title) 본문 편집")
                         .accessibilityHint("문장을 수정한 뒤 Command S로 저장하세요.")
+                        .accessibilityIdentifier("reports-body-editor")
                 } else {
-                    Text(model.content.isEmpty ? "본문이 비어 있습니다." : model.content)
-                        .font(.system(size: 14)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    reportPreview
                         .padding(.vertical, 8)
                 }
                 if let reason = model.readOnlyReason {
@@ -319,8 +326,24 @@ private struct ReportWorkspace: View {
         }
     }
 
+    @ViewBuilder private var reportPreview: some View {
+        if model.content.isEmpty {
+            Text("본문이 비어 있습니다.")
+                .font(.system(size: 14)).foregroundStyle(WorkLogTheme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if isWeekly {
+            SubmissionReportRichView(text: model.content)
+        } else {
+            MarkdownDocumentView(markdown: model.content, accessibilityIdentifier: "performance-report-body")
+                .id(model.version?.id)
+        }
+    }
+
     @ViewBuilder private func versionControls(_ version: ReportVersion) -> some View {
-        Picker("버전", selection: Binding(get: { version.id }, set: { model.selectVersion($0) })) {
+        Picker("버전", selection: Binding(get: { version.id }, set: {
+            isEditing = false
+            model.selectVersion($0)
+        })) {
             ForEach(model.versions) { row in Text("v\(row.version) · \(stateTitle(row.state))").tag(row.id) }
         }.frame(width: 150).disabled(selectionLocked)
     }
@@ -341,6 +364,16 @@ private struct ReportWorkspace: View {
             .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
         Button("편집 ⌘E", action: focusContent)
             .focusable().worklogKeyboardActivation(focusContent).disabled(!model.canEdit)
+            .accessibilityIdentifier("reports-edit")
+        if isEditing && model.canEdit {
+            Button("미리보기") {
+                guard !worklogHasMarkedText else { return }
+                editorFocused = false
+                isEditing = false
+            }
+            .accessibilityIdentifier("reports-preview")
+            .worklogHelp("현재 본문을 서식 있는 문서로 보기 · 저장하지 않은 변경은 유지됩니다")
+        }
     }
 
     @ViewBuilder private var saveActions: some View {
@@ -405,7 +438,9 @@ private struct ReportWorkspace: View {
         if isWeekly, let draft = model.submissionDraft {
             ForEach(Array(draft.reviewNotes.enumerated()), id: \.offset) { _, note in InlineNotice(message: note) }
             if model.canEdit && version.state == .draft {
-                DisclosureGroup("보고 항목 포함·제외") {
+                SectionDisclosure(title: "보고 항목 포함·제외",
+                                  summary: "포함 \(model.includedSubmissionIds.count)개 · 전체 \(draft.groups.reduce(0) { $0 + $1.items.count })개",
+                                  isExpanded: $inclusionExpanded) {
                     ForEach(Array(draft.groups.enumerated()), id: \.offset) { _, group in
                         Text(group.heading).font(.headline)
                         ForEach(group.items, id: \.itemId) { item in
@@ -418,7 +453,9 @@ private struct ReportWorkspace: View {
                     }
                     Button("선택 항목을 본문에 반영") { model.applySubmissionSelection() }
                         .worklogHelp("선택 항목으로 본문 구성 · 변경 후 저장 필요")
-                }.disabled(model.hasChanges)
+                }
+                .disabled(model.hasChanges)
+                .accessibilityIdentifier("reports-inclusion-disclosure")
             }
         }
     }
@@ -580,7 +617,13 @@ private struct ReportWorkspace: View {
         guard model.version != nil else { return }
         NSPasteboard.general.clearContents()
         copyFailed = !NSPasteboard.general.setString(model.content, forType: .string)
-        if !copyFailed { model.markCopied() }
+        if !copyFailed {
+            if isWeekly {
+                // Supplemental HTML must never replace the exact plain-text representation.
+                _ = NSPasteboard.general.setString(SubmissionDocumentParser.html(model.content), forType: .html)
+            }
+            model.markCopied()
+        }
     }
     private var retryTitle: String {
         switch retryAction {
