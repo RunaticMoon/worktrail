@@ -31,7 +31,6 @@ struct MeetingsScreen: View {
         .toolbar {
             ToolbarItem {
                 Button("새 회의", systemImage: "plus") { model.create() }
-                    .disabled(model.isBusy || model.recorder.recordingURL != nil)
             }
         }
         .sheet(isPresented: $showingMemoPicker) { memoPicker }
@@ -41,7 +40,10 @@ struct MeetingsScreen: View {
         .confirmationDialog("전사 전 녹음 파일을 삭제할까요?", isPresented: $confirmingDiscardAudio) {
             Button("녹음 파일 삭제", role: .destructive) { model.discardAudio() }
         } message: { Text("필요한 음성은 먼저 내보내세요. 저장된 회의록 원문은 유지됩니다.") }
-        .task { await model.speech.refreshAvailability() }
+        .task { await model.audio.models.refreshAvailability(); model.refreshAudio() }
+        .onChange(of: model.audio.contentRevision) { _, _ in model.refreshAudio() }
+        .environment(\.calendar, model.calendar.calendar)
+        .environment(\.timeZone, model.calendar.timeZone)
         .onChange(of: model.title) { _, _ in model.scheduleAutosave() }
         .onChange(of: model.workDate) { _, _ in model.scheduleAutosave() }
         .onChange(of: model.transcript) { _, _ in model.scheduleAutosave() }
@@ -76,6 +78,8 @@ struct MeetingsScreen: View {
             Button("회의록 복원") { model.restoreSelected() }
             Text(meeting.transcript).textSelection(.enabled)
             Text(meeting.notes).textSelection(.enabled)
+            MeetingRecordingLibraryView(model: model)
+            MeetingTranscriptVersionsView(model: model)
             if let url = model.recorder.recordingURL {
                 Button("녹음 내보내기…") { exportAudio(url) }
                 Button("녹음 삭제", role: .destructive) { confirmingDiscardAudio = true }
@@ -85,19 +89,25 @@ struct MeetingsScreen: View {
                 TextField("회의 제목", text: $model.title).font(.title2).textFieldStyle(.roundedBorder)
                 WorkDatePicker(title: "회의 날짜", value: $model.workDate, calendar: model.calendar)
             }.disabled(model.isSummarizing)
-            audioControls
+            MeetingAudioControlsView(model: model)
+            if model.audio.isCapturing || !model.audio.visible.isEmpty { MeetingLiveTranscriptView(audio: model.audio) }
+            legacyAudioControls
             GroupBox("회의 전사") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("전사 결과를 확인하고 잘못 인식한 단어를 수정하세요. 추가 전사는 기존 원문 뒤에 붙습니다.")
+                    Text("현재 활성 전사본입니다. 직접 편집하면 수정본을 별도 버전으로 보존합니다. 다른 전사 결과는 아래에서 비교 후 선택하세요.")
                         .font(.caption).foregroundStyle(.secondary)
                     TextEditor(text: $model.transcript).frame(minHeight: 160)
                         .accessibilityLabel("회의 전사 원문")
-                        .disabled(model.speech.isTranscribing || model.isSummarizing)
+                        .disabled(model.isSummarizing)
                 }.padding(6)
             }
             GroupBox("직접 작성한 메모") {
                 TextEditor(text: $model.notes).frame(minHeight: 140).padding(6)
                     .accessibilityLabel("회의 메모").disabled(model.isSummarizing)
+            }
+            DisclosureGroup("보관한 녹음과 전사 버전") {
+                MeetingRecordingLibraryView(model: model)
+                MeetingTranscriptVersionsView(model: model)
             }
             GroupBox("함께 요약할 기존 메모") {
                 VStack(alignment: .leading, spacing: 10) {
@@ -110,7 +120,7 @@ struct MeetingsScreen: View {
                         memoDate = model.workDate
                         memoIDs = Set(meeting.memoSnapshots.map(\.memoID))
                         showingMemoPicker = true
-                    }.disabled(model.isBusy)
+                    }.disabled(model.isSummarizing)
                 }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
@@ -123,11 +133,16 @@ struct MeetingsScreen: View {
                 Spacer()
                 Button("내보내기…") { exportMeeting() }.disabled(model.isSummarizing)
                 Button("삭제", role: .destructive) { confirmingDelete = true }
-                    .disabled(model.isBusy || model.recorder.recordingURL != nil)
+                    .disabled(!model.canDeleteSelected)
             }
-            Text("요약을 실행하면 전사 텍스트·회의 메모·선택한 메모가 연결된 ChatGPT 계정으로 전송됩니다. 음성 파일은 전송하지 않습니다.")
-                .font(.caption).foregroundStyle(.secondary)
-            if !model.canSummarize { Text("AI 요약은 설정에서 AI 사용을 켜고 앱을 다시 연 뒤 사용할 수 있습니다. 녹음·전사·메모는 로컬에서 계속 사용할 수 있습니다.").font(.caption) }
+            if meeting.localOnly {
+                Label("로컬 전용 회의 · 음성, 전사, 메모를 외부 AI로 보내지 않습니다. 외부 AI 요약은 사용할 수 없습니다.", systemImage: "lock.shield")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("요약을 실행하면 활성 전사 텍스트·회의 메모·선택한 메모가 연결된 ChatGPT 계정으로 전송됩니다. 음성 파일은 전송하지 않습니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !model.canSummarize { Text("외부 AI 요약은 설정의 AI 사용 및 ChatGPT 연결 상태를 확인해 주세요.").font(.caption) }
+            }
             if let summary = meeting.summary {
                 GroupBox("요약 초안 · 버전 \(summary.version)") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -156,47 +171,19 @@ struct MeetingsScreen: View {
         }
     }
 
-    private var audioControls: some View {
-        GroupBox("한국어 음성 전사 · 이 Mac에서 처리") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    if model.recorder.isRecording {
-                        Label("녹음 중", systemImage: "record.circle").foregroundStyle(.red)
-                        Button("녹음 중지 후 전사") { model.stopRecording() }
-                    } else {
-                        Button("녹음 시작", systemImage: "mic") { model.startRecording() }
-                            .disabled(model.isBusy || !model.speech.isModelReady || model.recorder.recordingURL != nil)
-                        Button("음성 파일 가져오기…") { importAudio() }
-                            .disabled(model.isBusy || !model.speech.isModelReady)
-                    }
-                    if model.speech.isTranscribing {
-                        ProgressView().controlSize(.small)
-                        Button("전사 취소") { model.cancelTranscription() }
-                    }
-                }
-                if let url = model.recorder.recordingURL, !model.recorder.isRecording {
+    @ViewBuilder private var legacyAudioControls: some View {
+        if let url = model.recorder.recordingURL {
+            GroupBox("이전 버전에서 복구한 녹음") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("새 녹음 보관함으로 가져와도 기존 원본을 보존합니다.").font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        Button("녹음 다시 전사") { model.transcribe(url) }.disabled(model.isBusy)
-                        Button("녹음 내보내기…") { exportAudio(url) }.disabled(model.isBusy)
-                        Button("녹음 삭제", role: .destructive) { confirmingDiscardAudio = true }.disabled(model.isBusy)
+                        Button("녹음 보관함으로 가져오기") { model.transcribe(url) }.disabled(model.isBusy)
+                        Button("기존 원본 내보내기…") { exportAudio(url) }
+                        Button("기존 원본 삭제", role: .destructive) { confirmingDiscardAudio = true }.disabled(model.isImporting)
                     }
-                }
-                if !model.speech.isModelReady {
-                    Button("한국어 모델 준비") { model.prepareModel() }.disabled(model.isBusy)
-                    Text("첫 사용 시 Apple 한국어 모델 다운로드에 인터넷이 필요합니다. 모델 설치 후 음성 인식은 기기에서 처리합니다.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if model.speech.isPreparing {
-                    HStack {
-                        ProgressView("한국어 모델 준비 중…")
-                        Button("준비 취소") { model.cancelTranscription() }
-                    }
-                }
-                if let status = model.speech.statusMessage { Text(status).font(.caption).foregroundStyle(.secondary) }
-                if let error = model.recorder.lastError { Text(error).font(.caption).foregroundStyle(.secondary) }
-                Text("녹음은 이 Mac의 마이크를 사용합니다. 화면을 나가면 녹음을 중지합니다. 전사 저장에 성공하면 임시 녹음을 삭제하며, 실패한 녹음은 다시 전사하거나 내보낼 수 있습니다.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
+                    if let error = model.recorder.lastError { Text(error).font(.caption).foregroundStyle(.secondary) }
+                }.padding(6)
+            }
         }
     }
 
@@ -218,12 +205,6 @@ struct MeetingsScreen: View {
             }
         }.padding(20).frame(width: 560, height: 440)
     }
-    private func importAudio() {
-        let panel = NSOpenPanel(); panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
-        panel.begin { result in
-            if result == .OK, let url = panel.url { model.transcribe(url) }
-        }
-    }
     private func exportMeeting() {
         guard model.save(), let meeting = model.selected else { return }
         let panel = NSSavePanel(); panel.allowedContentTypes = [.plainText]; panel.nameFieldStringValue = "회의록-\(meeting.workDate.iso).txt"
@@ -237,7 +218,7 @@ struct MeetingsScreen: View {
         let panel = NSSavePanel(); panel.allowedContentTypes = [.mpeg4Audio]; panel.nameFieldStringValue = "회의녹음.m4a"
         panel.begin { result in
             guard result == .OK, let destination = panel.url else { return }
-            do { try Data(contentsOf: url).write(to: destination, options: .atomic) } catch { model.show(error) }
+            do { try FileManager.default.copyItem(at: url, to: destination) } catch { model.show(error) }
         }
     }
 }

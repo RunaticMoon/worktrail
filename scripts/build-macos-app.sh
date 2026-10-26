@@ -60,6 +60,20 @@ mkdir -p "$APP/Contents/Frameworks"
 ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 cp "$ROOT/.build/artifacts/sparkle/Sparkle/LICENSE" "$APP/Contents/Resources/Sparkle-LICENSE.txt"
 
+# WhisperKit/SpeakerKit are distributed by the pinned Argmax OSS package. Preserve
+# both its own license and incorporated third-party notices in every app bundle.
+ARGMAX_SOURCE="$ROOT/.build/checkouts/argmax-oss-swift"
+ARGMAX_NOTICES="$APP/Contents/Resources/ThirdParty/ArgmaxOSS"
+mkdir -p "$ARGMAX_NOTICES"
+for NOTICE_FILE in LICENSE NOTICES; do
+    if [[ ! -f "$ARGMAX_SOURCE/$NOTICE_FILE" ]]; then
+        echo "Argmax OSS 고지 파일이 없습니다: $ARGMAX_SOURCE/$NOTICE_FILE" >&2
+        exit 1
+    fi
+    cp "$ARGMAX_SOURCE/$NOTICE_FILE" "$ARGMAX_NOTICES/$NOTICE_FILE"
+done
+cp "$ROOT/docs/meeting-models.md" "$ARGMAX_NOTICES/Meeting-Models.md"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,6 +91,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSMicrophoneUsageDescription</key><string>사용자가 시작한 회의 녹음을 Mac에서 전사하기 위해 마이크를 사용합니다.</string>
+    <key>NSScreenCaptureUsageDescription</key><string>사용자가 선택한 회의 앱의 출력 음성만 로컬 녹음합니다. 화면 영상은 저장하지 않습니다.</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>회의 음성을 Mac의 한국어 모델로 전사합니다. 음성 파일은 AI 서버로 보내지 않습니다.</string>
     <key>SUFeedURL</key><string>https://github.com/RunaticMoon/worktrail/releases/latest/download/appcast.xml</string>
     <key>SUEnableAutomaticChecks</key><true/>

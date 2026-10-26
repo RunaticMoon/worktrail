@@ -148,6 +148,26 @@ enum MeetingRecordingError: LocalizedError {
         lastError = nil
     }
 
+    /// Called only after the new PCM archive and its meeting record have been saved.
+    /// Releases legacy pending ownership while retaining the exact original M4A.
+    /// This does not start/stop capture, delete audio, or scan other legacy files.
+    func releasePendingKeepingAudio() throws {
+        guard !isRecording, !isStarting else { throw MeetingRecordingError.busy }
+        guard !recoveryFailed else { throw MeetingRecordingError.recoveryFailed }
+        guard let url = recordingURL, let meetingID = pendingMeetingID else { throw MeetingRecordingError.noRecording }
+        let expected = MeetingRecordingManifest(version: 1, fileName: url.lastPathComponent, meetingID: meetingID)
+        do {
+            guard try storage.audioURL(for: expected) == url else { throw MeetingRecordingError.recoveryFailed }
+            try storage.releasePendingKeepingAudio(expected: expected)
+        } catch {
+            lastError = MeetingRecordingError.recoveryFailed.localizedDescription
+            throw MeetingRecordingError.recoveryFailed
+        }
+        recordingURL = nil
+        pendingMeetingID = nil
+        lastError = nil
+    }
+
     nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         let url = recorder.url
         Task { @MainActor [weak self] in
@@ -238,6 +258,13 @@ struct MeetingRecordingStorage {
         // Only the validated manifest's exact regular file is removed. If either
         // deletion fails, expose the error instead of discarding recovery state.
         try FileManager.default.removeItem(at: audioURL(for: expected))
+        try FileManager.default.removeItem(at: manifestURL)
+    }
+
+    func releasePendingKeepingAudio(expected: MeetingRecordingManifest) throws {
+        // readPending validates both the current meeting/file identity and the
+        // original's regular-file status. A stale session cannot release a new one.
+        guard try readPending() == expected else { throw MeetingRecordingError.recoveryFailed }
         try FileManager.default.removeItem(at: manifestURL)
     }
 

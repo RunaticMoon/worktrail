@@ -1,5 +1,9 @@
 # 기술 결정 기록
 
+회의 음성 확장에서는 녹음 보존과 로컬 전용 경계를 우선한다. AVAudioEngine 마이크와 ScreenCaptureKit 선택 앱 출력을 별도 CAF로 보관한다. Argmax OSS 1.1.1의 WhisperKit large-v3-turbo 미리보기, large-v3 정밀 전사, SpeakerKit community-1 화자 분리를 사용한다. [고정 버전과 라이선스](meeting-models.md), [구현·검증 문서](live-meeting-audio.md)를 참조한다.
+
+새 migration v6와 회의 전용 저장소로 원본·전사 버전·구간·화자·수정본을 보존한다. 기존 Meeting.transcript는 활성 버전의 호환용 본문이다. 기존 migration과 공용 Domain/Models.swift는 수정하지 않는다. AIJobRunner의 선택적 preflight는 대기 중 localOnly 정책 변경까지 검사하기 위한 최소 공용 변경이다. 일반 업무 AI 기능은 유지한다. 원본/모델은 DB 백업에 포함하지 않으며 복원 후 누락 파일을 명시한다. 자동 원본 삭제는 하지 않는다.
+
 | ID | 결정 | 이유 |
 |---|---|---|
 | T01 | 문서 제안 스택(Swift/SwiftUI + AppKit 브리지 + SQLite)을 유지 | 제품 요구(네이티브 Mac, 로컬 우선)와 일치. 변경 사유 없음 |

@@ -10,7 +10,7 @@ public final class MeetingService: @unchecked Sendable {
     }
 
     public func create(title: String, workDate: WorkDate? = nil, transcript: String = "",
-                       notes: String = "", memoIDs: [String] = []) throws -> Meeting {
+                       notes: String = "", memoIDs: [String] = [], localOnly: Bool = true) throws -> Meeting {
         let title = try validateInput(title: title, transcript: transcript, notes: notes)
         let now = repo.clock.now()
         let date = workDate ?? repo.calendar.workDate(of: now)
@@ -19,9 +19,9 @@ public final class MeetingService: @unchecked Sendable {
             let snapshots = try snapshots(for: memoIDs, capturedAt: now)
             let id = repo.ids.make()
             try repo.db.runV("""
-                INSERT INTO meeting (id, title, work_date, transcript, notes, revision, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, id, title, date, transcript, notes, 1, now, now)
+                INSERT INTO meeting (id, title, work_date, transcript, notes, revision, created_at, updated_at, local_only)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, id, title, date, transcript, notes, 1, now, now, localOnly)
             try writeSnapshots(snapshots, meetingID: id)
             return try requireMeeting(id)
         }
@@ -54,12 +54,26 @@ public final class MeetingService: @unchecked Sendable {
             let current = try requireMeeting(id, expectedRevision: expectedRevision)
             guard current.title != title || current.workDate != workDate || current.transcript != transcript
                     || current.notes != notes else { return current }
+            let activeRunID = current.transcript == transcript ? current.activeTranscriptRunID
+                : try MeetingAudioStore(repo: repo).preserveManualTranscript(meeting: current, text: transcript)
             let changed = try repo.db.runV("""
                 UPDATE meeting SET title = ?, work_date = ?, transcript = ?, notes = ?,
-                    revision = revision + 1, updated_at = ?
+                    revision = revision + 1, updated_at = ?, active_transcript_run_id = ?
                 WHERE id = ? AND revision = ? AND deleted_at IS NULL
-                """, title, workDate, transcript, notes, repo.clock.now(), id, expectedRevision)
+                """, title, workDate, transcript, notes, repo.clock.now(), activeRunID, id, expectedRevision)
             try requireChanged(changed)
+            return try requireMeeting(id)
+        }
+    }
+
+    /// 외부 AI 사용을 명시적으로 허용한 호출자만 false로 바꿀 수 있다.
+    @discardableResult
+    public func setLocalOnly(id: String, expectedRevision: Int, localOnly: Bool) throws -> Meeting {
+        try repo.db.transaction {
+            let current = try requireMeeting(id, expectedRevision: expectedRevision)
+            if current.localOnly == localOnly { return current }
+            try repo.db.runV("UPDATE meeting SET local_only = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
+                localOnly, repo.clock.now(), id, expectedRevision)
             return try requireMeeting(id)
         }
     }
@@ -90,6 +104,9 @@ public final class MeetingService: @unchecked Sendable {
     public func delete(id: String, expectedRevision: Int) throws {
         try repo.db.transaction {
             _ = try requireMeeting(id, expectedRevision: expectedRevision)
+            guard try repo.db.scalarIntV("SELECT COUNT(*) FROM meeting_recording WHERE meeting_id = ? AND state IN ('recording','paused')", id) == 0 else {
+                throw WorkLogError.invalidTransition("녹음 중인 회의는 삭제할 수 없습니다. 녹음을 먼저 종료해 주세요.")
+            }
             let now = repo.clock.now()
             let changed = try repo.db.runV("""
                 UPDATE meeting SET deleted_at = ?, updated_at = ?, revision = revision + 1
@@ -125,6 +142,7 @@ public final class MeetingService: @unchecked Sendable {
     public func generateSummary(id: String, regenerate: Bool = false) async throws -> MeetingSummary {
         try Task.checkCancellation()
         let source = try requireMeeting(id)
+        try requireCloudSummaryAllowed(source)
         if !regenerate, let existing = source.summary, !source.isSummaryStale { return existing }
         guard let runner else { throw WorkLogError.validation("AI 연결을 설정한 뒤 요약을 생성해 주세요.") }
         let sources = MeetingSummaryContract.sources(for: source)
@@ -140,7 +158,13 @@ public final class MeetingService: @unchecked Sendable {
         }
         let request = AIJobRequest(jobType: .meetingSummary, instructions: MeetingSummaryContract.instructions,
             payloadJSON: payload, regenerationNonce: regenerate ? repo.ids.make() : nil)
-        let result = try await runner.submit(request)
+        let result = try await runner.submit(request, preflight: { [self] in
+            let current = try requireMeeting(id)
+            try requireCloudSummaryAllowed(current)
+            guard current.revision == source.revision else {
+                throw WorkLogError.conflict("대기 중 회의가 변경되어 AI 전송을 취소했습니다.")
+            }
+        })
         try Task.checkCancellation()
         guard let raw = result.output?.rawJSON, result.job.status == .succeeded else {
             throw WorkLogError.validation(Self.failureMessage(for: result.job))
@@ -162,6 +186,7 @@ public final class MeetingService: @unchecked Sendable {
         }
         return try repo.db.transaction {
             let current = try requireMeeting(id)
+            try requireCloudSummaryAllowed(current)
             guard current.revision == source.revision,
                   current.summary?.id == source.summary?.id,
                   current.summary?.revision == source.summary?.revision else {
@@ -183,6 +208,12 @@ public final class MeetingService: @unchecked Sendable {
                 throw WorkLogError.storage("회의 요약 저장 후 조회 실패")
             }
             return saved
+        }
+    }
+
+    private func requireCloudSummaryAllowed(_ meeting: Meeting) throws {
+        guard !meeting.localOnly else {
+            throw WorkLogError.policyBlocked("이 회의는 로컬 전용입니다. 전사·메모를 외부 AI로 전송할 수 없습니다.")
         }
     }
 
@@ -296,9 +327,12 @@ public final class MeetingService: @unchecked Sendable {
                 return MeetingMemoSnapshot(memoID: memoID, revision: revision, body: body,
                     workDate: date, capturedAt: capturedAt)
             }
-        return Meeting(id: id, title: title, workDate: date, transcript: transcript, notes: notes,
+        var meeting = Meeting(id: id, title: title, workDate: date, transcript: transcript, notes: notes,
             memoSnapshots: snapshots, revision: revision, createdAt: createdAt, updatedAt: updatedAt,
             deletedAt: row.date("deleted_at"), summary: try latestSummary(meetingID: id))
+        meeting.localOnly = row.bool("local_only")
+        meeting.activeTranscriptRunID = row.string("active_transcript_run_id")
+        return meeting
     }
 
     private func decodeSummary(_ row: SQLRow) throws -> MeetingSummary {
