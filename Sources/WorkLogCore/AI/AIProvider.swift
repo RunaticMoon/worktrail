@@ -11,6 +11,7 @@ public enum AIJobType: String, Codable, Sendable, CaseIterable {
     case memoTaskSuggestions = "memo_task_suggestions"
     case queryPlan = "query_plan"
     case groundedAnswer = "grounded_answer"
+    case meetingSummary = "meeting_summary"
 }
 
 /// AI에 보내는 일반 기록 입력. jobContext/facts/sources는 앱이 만든 JSON 문자열이다.

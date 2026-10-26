@@ -45,7 +45,7 @@ open -n After.app --args --ui-test-fixture many
 
 ## 추가 동선 검사
 
-현재 메인 창의 화면 이동은 ⌘1 오늘, ⌘2 업무, ⌘3 프로젝트, ⌘4 주간보고, ⌘5 성과자료, ⌘6 리포트 보관함, ⌘7 Secret, ⌘8 검색, ⌘9 관계 그래프다. 휴지통에는 번호가 없다. `keyboard-empty.js`는 ⌘9 → ⌘0(사이드바 포커스) → ↓로 휴지통에 이동한 뒤 잠금 화면·콘텐츠 포커스를 확인한다. `secret-flow.js`의 대체 진입은 ⌘7이며, `verify-ui.js`의 Secret 캡처와 `resize` 인자도 `7`을 사용한다(지원 인자: `1`, `2`, `4`, `5`, `7`).
+현재 메인 창의 화면 이동은 ⌘1 오늘, ⌘2 업무, ⌘3 프로젝트, ⌘4 주간보고, ⌘5 성과자료, ⌘6 리포트 보관함, ⌘7 Secret, ⌘8 검색, ⌘9 관계 그래프다. 회의록·휴지통에는 번호가 없다. `keyboard-empty.js`는 ⌘9 → ⌘0(사이드바 포커스) → ↓(회의록) → ↓(휴지통)로 이동한 뒤 잠금 화면·콘텐츠 포커스를 확인한다. `secret-flow.js`의 대체 진입은 ⌘7이며, `verify-ui.js`의 Secret 캡처와 `resize` 인자도 `7`을 사용한다(지원 인자: `1`, `2`, `4`, `5`, `7`).
 
 검색 범위는 패널 ⌘1–⌘5 / 메인 검색 ⌃1–⌃5 = 전체 / 기록 / 업무 / Secret / 리포트(1 전체 · 2 기록 · 3 업무 · 4 Secret · 5 리포트)이다. 범위 탭의 단축키 키캡은 메인 검색 Control·패널 Command를 누르는 동안에만 표시된다. 빠른 입력의 ⌘1–⌘3 = 메모 / 업무 / Secret은 별도 동선이다. `search-roundtrip.js`와 `capture-search-flow.js`는 현재 숫자로 Secret 범위를 고르는 동작 없이 일반 메모 검색·원문 왕복만 검사한다.
 
@@ -93,6 +93,19 @@ Task는 가짜 진행 기록 추가, 보고서는 편집·저장·계획 확인�
 - `empty`·`few`·`many` 실행 결과와 화면 전후 비교를 각각 남긴다. 구문 검사, 빌드, 창 존재 assertion만 통과한 항목을 실제 전체 동선 통과로 보고하지 않는다.
 
 `keyboard-safety.js`는 업무 버튼의 Return/Space 활성화, 도움말 반복 닫기 후 복귀와 Secret 빈 행 삭제 후 동일 프로세스 생존도 검사합니다. `keyboard-empty.js`는 휴지통의 콘텐츠 AX 포커스를 확인한 뒤 실제 Space 활성화로 가짜 잠금 해제까지 통과해야 성공합니다.
+
+## 회의록과 로컬 한국어 전사
+
+`run-meeting-stt-check.sh`는 로컬 Yuna 음성으로 가짜 한국어 문장을 파일로 합성한 뒤 실제 `MeetingSpeechTranscriber`를 macOS 26 대상으로 컴파일합니다. 네트워크를 차단한 테스트 프로세스에서 한국어 전사, 외부 URL 거부, 취소 후 상태 정리·원본 유지가 통과해야 성공합니다. 실제 마이크·계정·회사 자료를 사용하지 않습니다. 설치된 음성이나 한국어 모델이 없으면 다운로드 없이 `SKIP`과 종료 코드 77을 반환합니다.
+
+```sh
+scripts/maclab/run-meeting-stt-check.sh
+scripts/maclab/run-meeting-recording-recovery-check.sh
+scripts/maclab/run-meeting-termination-check.sh
+osascript -l JavaScript scripts/maclab/meeting-ui-check.js --fixture many
+```
+
+UI helper는 잠금 해제된 Mac에서 `dev.worklog.UIReview` 번들과 실제 `--ui-test-fixture many` 실행 인자를 모두 검사합니다. 회의록 키보드 이동, 가짜 회의 생성·키보드 편집·⌘S 저장, 화면 이동 후 편집 보존, 삭제·복구를 확인합니다. 마이크·모델 다운로드·로그인·AI 요약 버튼은 누르지 않습니다. 잠긴 화면에서는 `MAC_SCREEN_LOCKED`로 중단하며 기능 검증 통과로 세지 않습니다. 실제 실행 결과와 한글 IME·실제 마이크·기업 계정 검증 여부는 별도로 기록해야 합니다.
 
 ## 설정과 종료 업무 확인 (2026-10-13)
 

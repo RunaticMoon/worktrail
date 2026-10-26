@@ -15,6 +15,7 @@ enum WorkLogEntryPoint {
 }
 
 @MainActor struct WorkLogApp: App {
+    @NSApplicationDelegateAdaptor(WorkLogApplicationDelegate.self) private var appDelegate
     @State private var controller = AppController()
     @FocusedValue(\.worklogCreateProject) private var createProject
     private let updater = AppUpdater.shared
@@ -23,7 +24,10 @@ enum WorkLogEntryPoint {
             AppRootView(controller: controller)
                 .environment(\.hotkeyDiagnostics, controller.hotkeyDiagnostics)
                 .frame(minWidth: 840, minHeight: 560)
-                .task { await controller.start() }
+                .task {
+                    appDelegate.prepareToTerminate = { [weak controller] in controller?.prepareToTerminate() ?? true }
+                    await controller.start()
+                }
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)

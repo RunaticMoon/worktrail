@@ -5,9 +5,9 @@ import WorkLogCore
 /// Destinations and their menu order are shared by the sidebar and View menu.
 enum SidebarRoute: String, CaseIterable, Identifiable {
     case day, tasks, projects, weekly, performance, reportLibrary, secrets
-    case search, graph, trash, backups, settings
+    case search, graph, meetings, trash, backups, settings
     static let primary: [SidebarRoute] = [.day, .tasks, .projects, .weekly, .performance, .reportLibrary, .secrets]
-    static let secondary: [SidebarRoute] = [.search, .graph, .trash, .backups, .settings]
+    static let secondary: [SidebarRoute] = [.search, .graph, .meetings, .trash, .backups, .settings]
     static let numbered = Array((primary + secondary).prefix(9))
     var id: String { rawValue }
     var title: String {
@@ -19,6 +19,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         case .performance: return "성과자료"
         case .reportLibrary: return "리포트"
         case .secrets: return "Secret"
+        case .meetings: return "회의록"
         case .search: return "검색"
         case .graph: return "관계 그래프"
         case .trash: return "휴지통"
@@ -43,6 +44,7 @@ enum SidebarRoute: String, CaseIterable, Identifiable {
         case .performance: return "doc.text.magnifyingglass"
         case .reportLibrary: return "books.vertical"
         case .secrets: return "lock"
+        case .meetings: return "waveform"
         case .search: return "magnifyingglass"
         case .graph: return "point.3.connected.trianglepath.dotted"
         case .trash: return "trash"
@@ -236,6 +238,8 @@ struct AppRootView: View {
                     onProjectCreated: { controller.refresh() },
                     detailDismissalRevision: detailDismissalRevision)
             }
+        case .meetings:
+            if let meetings = controller.meetings { MeetingsScreen(model: meetings) }
         case .search:
             if let search = controller.search, let surface = controller.searchSurface {
                 SearchScreen(model: search, surface: surface, environment: environment, secrets: controller.secrets,
@@ -265,7 +269,7 @@ struct AppRootView: View {
             if let secrets = controller.secrets { TrashScreen(model: secrets) }
         case .settings:
             if let settings = controller.settingsModel, let prompts = controller.prompts {
-                SettingsScreen(model: settings, prompts: prompts, onSave: { controller.saveSettings() },
+                SettingsScreen(chatGPTLogin: controller.chatGPTLogin, model: settings, prompts: prompts, onSave: { controller.saveSettings() },
                     onBeginHotkeyRecording: { controller.beginHotkeyRecording() },
                     onEndHotkeyRecording: { controller.endHotkeyRecording() },
                     backups: controller.backups, onOpenBackups: { controller.route = .backups })

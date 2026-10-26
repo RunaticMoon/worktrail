@@ -38,6 +38,13 @@ jobs:
         run: swift build --build-tests
       - name: Test WorkLogCore
         run: swift test
+      - name: Test OAuth callback, identity and recording recovery with fake data
+        timeout-minutes: 3
+        run: |
+          bash scripts/maclab/run-chatgpt-identity-check.sh
+          bash scripts/maclab/run-chatgpt-loopback-check.sh
+          bash scripts/maclab/run-meeting-recording-recovery-check.sh
+          bash scripts/maclab/run-meeting-termination-check.sh
       - name: Package unsigned DMG
         timeout-minutes: 15
         run: |

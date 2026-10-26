@@ -4,6 +4,7 @@ import WorkLogCore
 
 @MainActor
 struct SettingsScreen: View {
+    var chatGPTLogin: ChatGPTLoginCoordinator? = nil
     @Bindable var model: SettingsModel
     let prompts: PromptSettingsModel
     let onSave: () -> Void
@@ -19,9 +20,10 @@ struct SettingsScreen: View {
     @State private var destination: SettingsDestination = .general
     @State private var promptEditor: PromptEditorSelection?
 
-    init(model: SettingsModel, prompts: PromptSettingsModel, onSave: @escaping () -> Void,
+    init(chatGPTLogin: ChatGPTLoginCoordinator? = nil, model: SettingsModel, prompts: PromptSettingsModel, onSave: @escaping () -> Void,
          onBeginHotkeyRecording: @escaping () -> Void, onEndHotkeyRecording: @escaping () -> Void,
          backups: BackupModel? = nil, onOpenBackups: (() -> Void)? = nil) {
+        self.chatGPTLogin = chatGPTLogin
         self.model = model
         self.prompts = prompts
         self.onSave = onSave
@@ -346,35 +348,44 @@ struct SettingsScreen: View {
             Divider()
             Toggle("일반 기록에 AI 사용", isOn: $model.draft.aiEnabled).toggleStyle(.switch)
             hint(SettingsModel.transmissionNotice)
-            field("Codex 실행 경로") {
-                TextField("Codex 실행 경로", text: Binding(
-                    get: { model.draft.codexExecutablePath ?? "" },
-                    set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }),
-                    prompt: Text("비우면 자동으로 찾습니다"))
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder).accessibilityLabel("Codex 실행 경로")
+            if let login = chatGPTLogin {
+                HStack {
+                    Button("ChatGPT로 로그인") {
+                        Task { model.accountConnectionChanged(); await login.startLogin(); model.accountConnectionChanged(); await model.checkAccount() }
+                    }.disabled(login.isLoggingIn)
+                    Button("다른 계정으로 로그인") {
+                        Task { model.accountConnectionChanged(); await login.startLogin(addAccount: true); model.accountConnectionChanged(); await model.checkAccount() }
+                    }.disabled(login.isLoggingIn)
+                    if login.isLoggingIn {
+                        ProgressView().controlSize(.small)
+                        Button("로그인 취소") { login.cancel() }
+                    } else {
+                        Button("로그아웃") { Task { await login.signOut(); model.accountConnectionChanged(); await model.checkAccount() } }
+                    }
+                }
+                if let message = login.message { hint(message) }
             }
             HStack(spacing: 12) {
                 Button("로그인 상태 확인") { Task { await model.checkAccount() } }
                     .worklogKeyboardActivation { Task { await model.checkAccount() } }
                     .disabled(model.isCheckingAccount).focusable()
-                    .worklogHelp("설치된 Codex의 로그인 상태 확인")
+                    .worklogHelp("ChatGPT OAuth 로그인 상태 확인")
                 if model.isCheckingAccount {
-                    ProgressView().controlSize(.small).accessibilityLabel("Codex 로그인 상태 확인 중")
+                    ProgressView().controlSize(.small).accessibilityLabel("ChatGPT 로그인 상태 확인 중")
                 }
             }
             Text(model.accountMessage)
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel("Codex 계정 상태: \(model.accountMessage)")
-            hint("설치된 Codex와 회사 정책에서 허용하는 기능만 사용합니다. AI에 연결하지 않아도 일반 기록과 검색을 사용할 수 있습니다.")
+                .accessibilityLabel("ChatGPT 계정 상태: \(model.accountMessage)")
+            hint("CLI 설치 없이 공식 OAuth로 연결합니다. 현재 공개 문서는 Plus·Pro 플랜 사용을 안내하며 Enterprise 지원은 보장하지 않습니다. 조직의 사용 정책과 계정 허용 범위를 확인하세요.")
         }
     }
 
     private var aiTasksSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
-                hint("자동으로 선택되는 모델은 로컬 Codex의 모델 목록을 기준으로 표시합니다. 작업마다 모델과 사고 수준(Effort)을 정할 수 있으며, 변경사항을 저장하면 다음 AI 작업부터 사용합니다.")
+                hint("자동으로 선택되는 모델은 ChatGPT 계정의 모델 목록을 기준으로 표시합니다. 작업마다 모델과 사고 수준(Effort)을 정할 수 있으며, 변경사항을 저장하면 다음 AI 작업부터 사용합니다.")
                 HStack(spacing: 12) {
                     Button("모델 목록 불러오기") { Task { await model.refreshModels() } }
                         .worklogKeyboardActivation { Task { await model.refreshModels() } }
@@ -392,7 +403,7 @@ struct SettingsScreen: View {
             ForEach(AIJobType.allCases, id: \.rawValue) { type in
                 aiTaskCard(type)
             }
-            hint("스킬 이름 또는 SKILL.md 경로를 입력하세요. 비우면 추가 스킬 없이 작업 프롬프트를 사용합니다. 기존 스킬 파일은 수정하지 않습니다.")
+            hint("명시적인 SKILL.md 파일 경로를 입력하세요. OAuth 연결은 CLI의 이름 기반 스킬 검색을 사용하지 않습니다. 기존 스킬 파일은 수정하지 않습니다.")
             hint("프롬프트 편집 창의 저장은 일반 설정 저장과 별도로 적용됩니다.")
         }
         .task { await model.loadModelsIfNeeded() }
@@ -407,16 +418,18 @@ struct SettingsScreen: View {
                 field("추가 스킬") {
                     TextField("추가 스킬", text: Binding(
                         get: { model.skillBinding(for: type) }, set: { model.setSkill($0, for: type) }),
-                        prompt: Text("스킬 이름 또는 SKILL.md 경로"))
+                        prompt: Text("SKILL.md 파일 경로"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder).accessibilityLabel("\(jobTitle(type)) 스킬")
                 }
+                if !PromptCatalog.purposes(for: type).isEmpty {
                 Button { promptEditor = PromptEditorSelection(job: type) } label: {
                     Label("프롬프트 편집", systemImage: "square.and.pencil")
                 }
                 .worklogKeyboardActivation { promptEditor = PromptEditorSelection(job: type) }
                 .focusable().accessibilityLabel("\(jobTitle(type)) 프롬프트 편집")
                 .worklogHelp("\(jobTitle(type)) 지침과 출력 예시 편집")
+                }
                 if let note = PromptCatalog.usageNote(for: type) { hint(note) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -558,6 +571,7 @@ struct SettingsScreen: View {
         case .memoTaskSuggestions: return "메모·업무 연결 제안"
         case .queryPlan: return "검색 계획"
         case .groundedAnswer: return "기록 기반 답변"
+        case .meetingSummary: return "회의록 요약"
         }
     }
 
@@ -586,7 +600,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "빠른 입력의 기본 동작을 정합니다."
         case .shortcuts: return "자주 쓰는 동작을 키보드로 빠르게 실행합니다."
-        case .aiConnection: return "회사 Codex 연결과 AI 전송 범위를 확인합니다."
+        case .aiConnection: return "ChatGPT OAuth 연결과 AI 전송 범위를 확인합니다."
         case .aiTasks: return "작업에 맞는 모델·사고 수준·스킬·프롬프트를 선택합니다."
         case .backups: return "기록을 안전하게 보관하고 필요할 때 복원합니다."
         case .secret: return "보관함 잠금과 클립보드 보호 시간을 정합니다."
@@ -611,7 +625,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         switch self {
         case .general: keywords = "기본 입력 유형 메모 업무 memo task secret"
         case .shortcuts: keywords = "빠른 입력 검색 키보드 hotkey shortcut 등록 충돌"
-        case .aiConnection: keywords = "로그인 계정 실행 경로 Codex 회사 전송 보안"
+        case .aiConnection: keywords = "로그인 계정 OAuth ChatGPT Enterprise 회사 전송 보안"
         case .aiTasks: keywords = "모델 model effort low medium high 사고 수준 스킬 skill prompt 프롬프트 주간보고 팀 제출용 성과자료 성과 질문 메모 업무 연결 제안 검색 계획 기록 기반 답변"
         case .backups: keywords = "위치 보관 기간 복원 backup retention"
         case .secret: keywords = "잠금 복사 클립보드 보호 key 값 비밀"

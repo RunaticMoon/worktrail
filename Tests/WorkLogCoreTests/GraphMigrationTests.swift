@@ -43,7 +43,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testFreshDatabaseMigratesToV4AndCreatesRecordLink() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         XCTAssertEqual(db.userVersion, 4)
         XCTAssertTrue(try objectExists(db, type: "table", name: "record_link"),
@@ -67,7 +67,7 @@ final class GraphMigrationTests: XCTestCase {
         try db.run("INSERT INTO memo (id, body, work_date, recorded_at) VALUES (?, ?, ?, ?)",
                    ["memo-keep", "승격 전 본문", "2026-10-01", "2026-10-01T09:00:00.000Z"])
 
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         XCTAssertEqual(db.userVersion, 4)
         XCTAssertTrue(try objectExists(db, type: "table", name: "record_link"))
@@ -80,7 +80,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testCanonicalPairInsertSucceedsAndMatchesSQLOrdering() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         // 한글·대소문자·숫자 id를 섞어 UTF-8/BINARY 순서를 확인한다.
         let refs = [
@@ -111,7 +111,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testNonCanonicalOrderIsRejected() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         // kind는 memo < task이므로 memo를 from에 두는 것이 정규 순서다. 뒤집으면 실패.
         XCTAssertThrowsError(try insertLink(
@@ -130,7 +130,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testSelfLinkIsRejected() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         XCTAssertThrowsError(try insertLink(
             db, id: "l-self",
@@ -142,7 +142,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testDuplicateLinkIsRejected() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         let from = RecordReference(kind: .memo, id: "m1")
         let to = RecordReference(kind: .task, id: "t1")
@@ -154,7 +154,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testSecretKindIsRejected() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         // from_kind의 허용 목록에 'secret'은 없다. 순서상 'secret' < 'task'라도 거절돼야 한다.
         XCTAssertThrowsError(try db.run("""
@@ -173,7 +173,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testNonRelatedRelationTypeIsRejected() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         XCTAssertThrowsError(try insertLink(
             db, id: "l-blocking",
@@ -186,7 +186,7 @@ final class GraphMigrationTests: XCTestCase {
 
     func testRelationTypeDefaultsToRelated() throws {
         let db = try makeDatabase()
-        try Migrator.migrate(db, migrations: WorkSchema.migrations)
+        try Migrator.migrate(db, migrations: WorkSchema.migrations.filter { $0.version <= 4 })
 
         try db.run("""
         INSERT INTO record_link (id, from_kind, from_id, to_kind, to_id, created_at)

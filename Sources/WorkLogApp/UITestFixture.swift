@@ -89,6 +89,10 @@ enum UITestFixture: String {
                 body: "검증 메모 \(index + 1) · 업무 도중 빠르게 기록한 내용\n첫 번째 관찰: 검색 결과와 원문을 바로 연결할 수 있어야 합니다.\n두 번째 관찰: 화면 크기가 달라도 긴 한국어 문장이 잘리지 않아야 합니다.",
                 workDate: today, projectNames: [names[index % names.count]], tagNames: ["검증"])
         }
+        let meetingService = MeetingService(repo: environment.repo)
+        _ = try meetingService.create(title: "가짜 제품 회의 · 로컬 전사 검증", workDate: today,
+            transcript: "다음 주 화요일에 회의록 기능을 검토하기로 했습니다. 화면 검증과 원문 보존을 확인합니다.",
+            notes: "직접 메모: 실제 음성이 아닌 UI 검증용 데이터입니다.")
         _ = try environment.tasks.captureMemo(body: "지난주 회의 메모\n실제로 수행한 내용과 다음 주 계획은 따로 표시하기로 했습니다.",
                                               workDate: prior, projectNames: [names[0]], tagNames: ["회의"])
         let candidates = try environment.plans.generateCandidates(weekStart: week)
