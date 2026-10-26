@@ -199,16 +199,22 @@ final class SecretSettingsUXTests: XCTestCase {
 
     // MARK: - AI 상태 요약
 
-    @MainActor func testAIConnectionSummaryReflectsRuntimeRunner() throws {
+    @MainActor func testAIConnectionSummaryRequiresExplicitAccountCheck() async throws {
         let noAI = SettingsModel(environment: try environment())
         XCTAssertEqual(noAI.aiConnectionSummary, .notConfigured)
         XCTAssertEqual(noAI.aiConnectionSummary.title, "AI에 연결되어 있지 않습니다")
         XCTAssertEqual(noAI.aiConnectionSummary.detail,
                        "기록·검색·기록 기반 초안은 그대로 사용할 수 있습니다. 필요할 때 설정에서 연결하세요.")
 
-        let withAI = SettingsModel(environment: try environment(aiProvider: MockAIProvider()))
+        let provider = MockAIProvider()
+        let withAI = SettingsModel(environment: try environment(aiProvider: provider))
+        XCTAssertEqual(withAI.aiConnectionSummary, .notConfigured)
+        await withAI.checkAccount()
         XCTAssertEqual(withAI.aiConnectionSummary, .connected)
         XCTAssertEqual(withAI.aiConnectionSummary.title, "AI에 연결되어 있습니다")
+        provider.accountState = .loggedOut
+        await withAI.checkAccount()
+        XCTAssertEqual(withAI.aiConnectionSummary, .notConfigured)
         XCTAssertEqual(AIConnectionSummary.unavailable(reason: "네트워크 오류").detail, "네트워크 오류")
     }
 

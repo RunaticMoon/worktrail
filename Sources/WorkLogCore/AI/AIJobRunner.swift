@@ -162,6 +162,9 @@ public final class AIJobRunner: @unchecked Sendable {
     /// 1회 실행. provider 오류는 throw하지 않고 상태로 저장해 결과로 돌려준다.
     /// 저장소 오류만 throw한다.
     public func submit(_ request: AIJobRequest) async throws -> AIJobResult {
+        // Bind queued work before any FIFO suspension. This reads no token or account file.
+        let accountProvider = provider as? AIAccountGenerationProvider
+        let submittedAccountGeneration = await accountProvider?.accountGeneration()
         // 0) 명시 스킬이 없으면 설정 바인딩에서 해석한다. payloadGuard 검사·key 계산보다 먼저.
         //    스킬 파일 해시가 바뀌면 새 key로 재생성되고, 같은 스킬이면 기존 결과를 재사용한다.
         var request = request
@@ -231,7 +234,16 @@ public final class AIJobRunner: @unchecked Sendable {
                                instructions: request.instructions, payloadJSON: request.payloadJSON,
                                skill: request.skill)
         do {
-            let output = try await provider.run(input)
+            let output: AIJobOutput
+            if let accountProvider, let submittedAccountGeneration {
+                guard await accountProvider.accountGeneration() == submittedAccountGeneration else {
+                    throw AIProviderError(.cancelled, "대기 중 ChatGPT 계정 연결이 변경되어 요청을 취소했습니다.")
+                }
+                // Passing the captured value also closes the gap between this check and run's first await.
+                output = try await accountProvider.run(input, expectedAccountGeneration: submittedAccountGeneration)
+            } else {
+                output = try await provider.run(input)
+            }
             // 출력 민감 마커 검사: 위반이면 출력 원문을 어디에도 남기지 않고 실패로 환원한다.
             if outputGuard.containsSensitiveContent(output.rawJSON)
                 || outputGuard.containsSensitiveContent(output.model ?? "")

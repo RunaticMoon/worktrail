@@ -65,7 +65,7 @@ public struct AITaskProfiles: Codable, Equatable, Sendable {
     public static func recommendedEffort(for type: AIJobType) -> String {
         switch type {
         case .memoTaskSuggestions, .queryPlan: return "low"
-        case .submissionWeekly, .evidenceQuiz, .groundedAnswer: return "medium"
+        case .submissionWeekly, .evidenceQuiz, .groundedAnswer, .meetingSummary: return "medium"
         case .performanceReport: return "high"
         }
     }
@@ -81,13 +81,13 @@ public struct AITaskProfiles: Codable, Equatable, Sendable {
         switch type {
         case .memoTaskSuggestions, .queryPlan, .evidenceQuiz:
             preferred = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-sol"]
-        case .submissionWeekly, .groundedAnswer, .performanceReport:
+        case .submissionWeekly, .groundedAnswer, .performanceReport, .meetingSummary:
             preferred = ["gpt-6.1-sol", "gpt-6-sol"]
         }
         for id in preferred {
             if let model = models.first(where: { $0.id == id }) { return model }
         }
-        return models.first { $0.isDefault }
+        return models.first { $0.isDefault } ?? models.first
     }
 
     /// Only send a recommended effort when account-visible metadata confirms support.

@@ -24,6 +24,8 @@ import WorkLogCore
     private(set) var secrets: SecretsModel?
     private(set) var settingsModel: SettingsModel?
     private(set) var backups: BackupModel?
+    private(set) var meetings: MeetingsModel?
+    private(set) var chatGPTLogin: ChatGPTLoginCoordinator?
     private var protectionTimer: Timer?
     private var isRestoring = false
     var route: SidebarRoute? = .day
@@ -70,6 +72,7 @@ import WorkLogCore
             secrets = SecretsModel(environment: env)
             settingsModel = SettingsModel(environment: env)
             backups = BackupModel(environment: env)
+            meetings = MeetingsModel(environment: env)
             installProtectionTimer()
             let launch = env.onLaunch()
             if launch.backupError != nil { notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다." }
@@ -101,17 +104,20 @@ import WorkLogCore
         }
         #endif
         let paths = AppPaths.standard()
-        let settings = try SettingsStore(fileURL: paths.settingsFile).load()
-        var provider: AIProvider?
-        if settings.aiEnabled {
-            let profileStore = AITaskProfileStore(dataRoot: paths.dataRoot)
-            let candidate = CodexAppServerProvider(config: CodexProviderConfig(
-                executablePath: settings.codexExecutablePath, stagingRoot: paths.aiJobsDirectory),
-                profileResolver: { type in try profileStore.load().executionProfile(for: type) })
-            let capabilities = await candidate.checkCapabilities()
-            if capabilities.installed && capabilities.protocolCompatible { provider = candidate }
-            else { notice = "AI 연결을 사용할 수 없습니다. 기록과 원문 검색은 정상 동작합니다." }
-        }
+        let profileStore = AITaskProfileStore(dataRoot: paths.dataRoot)
+        let transport = ChatGPTURLSessionTransport()
+        let session = ChatGPTOAuthSession(
+            store: ChatGPTKeychainCredentialStore(service: AppIdentity.default.bundleIdentifier + ".chatgpt-oauth"),
+            transport: transport, identityValidator: ChatGPTJWKSIdentityValidator(transport: transport))
+        let provider = ChatGPTResponsesProvider(session: session,
+            blockedSkillPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path],
+            profileResolver: { type in
+                guard try SettingsStore(fileURL: paths.settingsFile).load().aiEnabled else {
+                    throw AIProviderError(.policyRestricted, "설정에서 AI 사용이 꺼져 있습니다.")
+                }
+                return try profileStore.load()[type]
+            })
+        chatGPTLogin = ChatGPTLoginCoordinator(session: session, cancelRequests: { await provider.cancelAll() })
         return try AppEnvironment.open(AppEnvironmentOptions(paths: paths,
             keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier),
             authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider))
@@ -240,6 +246,7 @@ import WorkLogCore
         switch route ?? .day {
         case .projects: return "프로젝트 추가"
         case .tasks: return "새 업무"
+        case .meetings: return "새 회의"
         default: return "빠른 입력"
         }
     }
@@ -251,6 +258,7 @@ import WorkLogCore
         switch route ?? .day {
         case .projects: onCreateProject?()
         case .tasks: showTaskCapture()
+        case .meetings: meetings?.create()
         default: showCapture()
         }
     }
@@ -307,13 +315,31 @@ import WorkLogCore
         }
     }
     func beginHotkeyRecording() { hotkeyCoordinator?.beginRecording() }
+    func prepareToTerminate() -> Bool {
+        guard meetings?.leaveScreen() != false else {
+            route = .meetings
+            notice = "회의록을 저장하지 못해 종료를 취소했습니다. 입력 오류를 수정하고 저장한 뒤 다시 종료하세요."
+            openMainWindow?()
+            NSApp.activate(ignoringOtherApps: true)
+            return false
+        }
+        return true
+    }
     func endHotkeyRecording() {
         let messages = hotkeyCoordinator?.endRecording() ?? []
         if !messages.isEmpty { notice = messages.joined(separator: "\n") }
     }
 
     func restoreBackup(_ backup: BackupInfo, includeVault: Bool) async {
+        guard meetings?.isBusy != true, meetings?.recorder.recordingURL == nil else {
+            notice = "회의 작업을 마치고 남은 녹음을 내보내거나 삭제한 뒤 백업을 복원하세요."
+            return
+        }
         guard !isRestoring, let options = environment?.options, let model = backups, !model.isBusy else { return }
+        guard meetings?.save() != false else {
+            notice = "회의록 저장을 완료하지 못했습니다. 회의록의 입력을 확인한 뒤 복원하세요."
+            return
+        }
         isRestoring = true
         // Weak lifetime checks ensure SQLite deinit has closed both databases before file replacement.
         weak var previousEnvironment = environment
@@ -334,8 +360,10 @@ import WorkLogCore
         selectedTaskId = nil; selectedMemoId = nil
         capturePanel?.teardown(); capturePanel = nil
         captureSession?.detach(); graph?.detach(); prompts?.detach()
+        meetings?.detach(); meetings = nil
         secrets?.detach(); settingsModel?.detach(); model.detach()
         searchPanel?.teardown(); searchPanel = nil
+        chatGPTLogin?.cancel(); chatGPTLogin = nil
         clearRegistrations()
         captureSession = nil; graph = nil; prompts = nil
         // These read models own an immutable environment and expose no detach API.
@@ -389,7 +417,10 @@ import WorkLogCore
             })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
             object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.environment?.lockSecrets(.appQuit) }
+                MainActor.assumeIsolated {
+                    self?.meetings?.leaveScreen()
+                    self?.environment?.lockSecrets(.appQuit)
+                }
             })
         observers.append(DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in

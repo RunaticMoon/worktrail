@@ -76,6 +76,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key><string>사용자가 시작한 회의 녹음을 Mac에서 전사하기 위해 마이크를 사용합니다.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>회의 음성을 Mac의 한국어 모델로 전사합니다. 음성 파일은 AI 서버로 보내지 않습니다.</string>
     <key>SUFeedURL</key><string>https://github.com/RunaticMoon/worktrail/releases/latest/download/appcast.xml</string>
     <key>SUEnableAutomaticChecks</key><true/>
     <key>SUScheduledCheckInterval</key><integer>86400</integer>

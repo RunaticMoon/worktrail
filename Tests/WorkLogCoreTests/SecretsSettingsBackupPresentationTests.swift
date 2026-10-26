@@ -287,10 +287,11 @@ final class SecretsSettingsBackupPresentationTests: XCTestCase {
         provider.accountState = .loggedOut
         await model.checkAccount(provider: provider)
         XCTAssertTrue(model.accountMessage.contains("로그인되어 있지"))
-        provider.accountState = .loggedIn(accountType: "chatgpt", email: "not-displayed@example.test", planType: "enterprise")
+        provider.accountState = .loggedIn(accountType: "chatgpt", email: "active-account@example.test", planType: "enterprise")
         await model.checkAccount(provider: provider)
         XCTAssertTrue(model.accountMessage.contains("Enterprise"))
-        XCTAssertFalse(model.accountMessage.contains("not-displayed"))
+        // OAuth supports account switching; show the explicitly checked account to prevent wrong-account use.
+        XCTAssertTrue(model.accountMessage.contains("active-account@example.test"))
         XCTAssertTrue(SettingsModel.transmissionNotice.contains("제목"))
     }
 

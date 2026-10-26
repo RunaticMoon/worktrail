@@ -66,7 +66,7 @@ final class AITaskProfileTests: XCTestCase {
     @MainActor func testAutomaticOptionsShowResolvedModelAndEffortFromLocalCatalog() async throws {
         let settings = SettingsModel(environment: try environment())
         settings.draft.aiEnabled = true
-        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · Codex 기본값 (미확인)")
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · 계정 모델 확인 필요")
         XCTAssertEqual(settings.effortOptions(for: .queryPlan).first?.title, "자동 · 모델 기본값")
 
         await settings.loadModelsIfNeeded(provider: Catalog(models: models))
@@ -137,7 +137,7 @@ final class AITaskProfileTests: XCTestCase {
         settings.draft.aiEnabled = false
         let catalog = RecordingCatalog(models: models)
         await settings.loadModelsIfNeeded(provider: catalog)
-        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · Codex 기본값 (미확인)")
+        XCTAssertEqual(settings.modelOptions(for: .queryPlan).first?.title, "자동 · 계정 모델 확인 필요")
 
         settings.draft.aiEnabled = true
         await settings.loadModelsIfNeeded(provider: catalog)

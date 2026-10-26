@@ -4,7 +4,7 @@ import XCTest
 final class PromptCatalogTests: XCTestCase {
 
     func testEveryJobAndPurposeRoundTripsExactlyOnce() {
-        for job in AIJobType.allCases {
+        for job in AIJobType.allCases where job != .meetingSummary {
             XCTAssertFalse(PromptCatalog.purposes(for: job).isEmpty,
                            "purpose가 없는 AI 작업: \(job)")
         }
@@ -33,7 +33,7 @@ final class PromptCatalogTests: XCTestCase {
         XCTAssertEqual(PromptCatalog.title(for: .performancePeriodic), "성과 리포트 · 주·월·분기·연간")
         XCTAssertEqual(PromptCatalog.usageNote(for: .queryPlan), "현재 검색 경로에서 사용되지 않습니다.")
 
-        for job in AIJobType.allCases where job != .queryPlan {
+        for job in AIJobType.allCases where job != .queryPlan && job != .meetingSummary {
             XCTAssertNil(PromptCatalog.usageNote(for: job))
         }
 

@@ -18,6 +18,8 @@ public enum PromptCatalog {
             return [.queryPlan]
         case .groundedAnswer:
             return [.groundedAnswer]
+        case .meetingSummary:
+            return [] // MeetingService owns the versioned evidence/output contract.
         }
     }
 
@@ -72,6 +74,8 @@ public enum PromptCatalog {
             return nil
         case .queryPlan:
             return "현재 검색 경로에서 사용되지 않습니다."
+        case .meetingSummary:
+            return "회의 전사와 메모의 근거를 보존하는 내장 요약 지침을 사용합니다."
         }
     }
 
