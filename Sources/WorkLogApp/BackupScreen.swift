@@ -31,6 +31,9 @@ struct BackupScreen: View {
                 }
                 Text(BackupManifest.standardNote).font(.callout).foregroundStyle(WorkLogTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
+                Text("회의 전사·메모·화자·버전은 DB 백업에 포함됩니다. 원본 음성·모델은 포함되지 않습니다. 원본은 회의의 ‘원본 내보내기’로 별도 보관하세요. 복원 후 없는 음성은 ‘원본 없음’으로 표시합니다.")
+                    .font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
                 BackupFeedback(model: model, retryTitle: retryTitle, retry: { retry() }, canRetry: !model.isBusy)
                 if model.isBusy {
                     StateView(kind: .loading, title: "백업 처리 중…", detail: "완료할 때까지 새 백업·검증·복원은 기다려 주세요.")

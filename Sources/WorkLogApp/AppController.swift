@@ -325,6 +325,15 @@ import WorkLogCore
         }
         return true
     }
+    func prepareAudioAndTerminate() async -> Bool {
+        guard prepareToTerminate() else { return false }
+        guard await meetings?.shutdownAudio() != false else {
+            notice = "녹음 원본을 마무리하지 못했습니다. 녹음 상태를 확인한 뒤 다시 종료하세요."
+            route = .meetings; openMainWindow?(); NSApp.activate(ignoringOtherApps: true)
+            return false
+        }
+        return prepareToTerminate()
+    }
     func endHotkeyRecording() {
         let messages = hotkeyCoordinator?.endRecording() ?? []
         if !messages.isEmpty { notice = messages.joined(separator: "\n") }

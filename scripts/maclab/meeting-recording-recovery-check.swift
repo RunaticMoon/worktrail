@@ -40,6 +40,28 @@ import WorkLogCore
                     && storage.entryExists(unrelated) && storage.entryExists(outside), "Discard touched unrelated files")
         print("PASS: discard removes only the exact pending file and manifest")
 
+        let migrated = MeetingRecordingManifest(version: 1, fileName: "migrated-original.m4a", meetingID: "legacy-meeting")
+        let migratedURL = try storage.audioURL(for: migrated)
+        let originalBytes = Data("fake migrated original".utf8)
+        try originalBytes.write(to: migratedURL)
+        try storage.writePending(migrated)
+        let released = MeetingAudioRecorder(directory: storage.directory)
+        // Simulate another writer changing the pending meeting before release.
+        let wrongMeeting = MeetingRecordingManifest(version: 1, fileName: migrated.fileName, meetingID: "different-meeting")
+        try JSONEncoder().encode(wrongMeeting).write(to: storage.manifestURL)
+        do {
+            try released.releasePendingKeepingAudio()
+            fail("Stale pending ownership was released")
+        } catch MeetingRecordingError.recoveryFailed { }
+        try requireThat(try storage.readPending() == wrongMeeting, "Failed release removed another meeting's manifest")
+        try JSONEncoder().encode(migrated).write(to: storage.manifestURL)
+        try released.releasePendingKeepingAudio()
+        requireThat(released.recordingURL == nil && released.pendingMeetingID == nil && released.lastError == nil,
+                    "Release did not clear pending ownership")
+        try requireThat(try Data(contentsOf: migratedURL) == originalBytes, "Release changed or deleted legacy audio")
+        requireThat(!storage.entryExists(storage.manifestURL) && storage.entryExists(unrelated), "Release changed unrelated files")
+        print("PASS: migrated legacy release checks meeting ownership, removes only manifest and preserves original bytes")
+
         try Data("corrupt manifest".utf8).write(to: storage.manifestURL)
         let corrupt = MeetingAudioRecorder(directory: storage.directory)
         requireThat(corrupt.lastError != nil && corrupt.recordingURL == nil, "Corrupt manifest not reported")

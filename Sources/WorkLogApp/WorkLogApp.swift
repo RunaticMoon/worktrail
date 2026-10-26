@@ -25,7 +25,8 @@ enum WorkLogEntryPoint {
                 .environment(\.hotkeyDiagnostics, controller.hotkeyDiagnostics)
                 .frame(minWidth: 840, minHeight: 560)
                 .task {
-                    appDelegate.prepareToTerminate = { [weak controller] in controller?.prepareToTerminate() ?? true }
+                    appDelegate.prepareToTerminate = { [weak controller = controller] in controller?.prepareToTerminate() ?? true }
+                    appDelegate.prepareAsyncTermination = { [weak controller = controller] in await controller?.prepareAudioAndTerminate() ?? true }
                     await controller.start()
                 }
         }
@@ -99,6 +100,12 @@ private struct ResidentMenu: View {
         Button("검색 열기 (\(controller.hotkeyDisplay(.search)))") { controller.showSearch() }
         hotkeyStatus(.search)
         CheckForUpdatesButton()
+        if let audio = controller.meetings?.audio, audio.isCapturing {
+            Divider()
+            Text("녹음 중 · \(audio.meetingTitle)")
+            Button("녹음 중지") { audio.stop() }
+                .disabled(audio.phase == .stopping)
+        }
         Divider()
         Button("종료") { controller.environment?.lockSecrets(.appQuit); NSApp.terminate(nil) }
     }

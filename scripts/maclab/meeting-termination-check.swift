@@ -3,7 +3,7 @@
 import AppKit
 
 @main struct MeetingTerminationCheck {
-    @MainActor static func main() {
+    @MainActor static func main() async {
         let application = NSApplication.shared
         let delegate = WorkLogApplicationDelegate()
 
@@ -34,6 +34,44 @@ import AppKit
         requireThat(delegate.applicationShouldTerminate(application) == .terminateNow && attempts == 3,
                     "An unset callback must not call a stale save handler")
         print("PASS: clearing the callback does not retain a stale cancellation")
+
+        var replies: [Bool] = []
+        var asynchronousAttempts = 0
+        var firstDecision: CheckedContinuation<Bool, Never>?
+        delegate.replyToTermination = { replies.append($0) }
+        delegate.prepareAsyncTermination = {
+            asynchronousAttempts += 1
+            return await withCheckedContinuation { firstDecision = $0 }
+        }
+        requireThat(delegate.applicationShouldTerminate(application) == .terminateLater,
+                    "Recording shutdown must defer the quit decision")
+        requireThat(delegate.applicationShouldTerminate(application) == .terminateLater,
+                    "A second request must wait for the same async shutdown")
+        await waitUntil { firstDecision != nil }
+        requireThat(asynchronousAttempts == 1 && replies.isEmpty, "Concurrent quit requests must not duplicate draining or reply early")
+        print("PASS: async shutdown defers termination and concurrent quit requests share one drain")
+
+        firstDecision?.resume(returning: false)
+        await waitUntil { replies.count == 1 }
+        requireThat(replies == [false], "Failed async save must reply with cancellation")
+        print("PASS: failed async save returns a cancellation through the injected reply")
+
+        delegate.prepareAsyncTermination = { asynchronousAttempts += 1; return true }
+        requireThat(delegate.applicationShouldTerminate(application) == .terminateLater,
+                    "Successful retry must still wait for async drain")
+        await waitUntil { replies.count == 2 }
+        requireThat(replies == [false, true] && asynchronousAttempts == 2, "A completed shutdown must permit a fresh successful retry")
+        print("PASS: async retry succeeds without invoking real application termination")
+        delegate.prepareAsyncTermination = nil
+        delegate.replyToTermination = nil
+    }
+
+    @MainActor static func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<1_000 {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        requireThat(false, "Timed out waiting for fake asynchronous quit decision")
     }
 
     static func requireThat(_ condition: @autoclosure () -> Bool, _ message: String) {

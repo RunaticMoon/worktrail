@@ -9,6 +9,10 @@ var dependencies: [Package.Dependency] = [
 // Sparkle contains macOS binary targets; exclude the package entirely on Linux.
 dependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"))
 appDependencies.append(.product(name: "Sparkle", package: "Sparkle"))
+// Core ML inference is app-only. Keep the public SDK and model revisions explicit.
+dependencies.append(.package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.1"))
+appDependencies.append(.product(name: "WhisperKit", package: "argmax-oss-swift"))
+appDependencies.append(.product(name: "SpeakerKit", package: "argmax-oss-swift"))
 #endif
 
 // WorkLog — 임시 코드명. 표시 이름·bundle id·데이터 경로는 AppIdentity에서 교체한다.

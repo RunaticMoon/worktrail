@@ -1,5 +1,9 @@
 # 구현 계획 (WLOG-45A3)
 
+## 로컬 실시간 회의 음성 확장
+
+WhisperKit 미리보기 → 원본 기반 large-v3 → SpeakerKit OSS 화자 분리를 순차 실행한다. native PCM 원본 보존, 화면과 독립된 세션, 앱별 온라인 오디오 분리, 전사 버전·사용자 수정, migration v6 및 localOnly 기본 정책을 추가한다. 구현·검증·남은 수동 확인은 [live-meeting-audio.md](live-meeting-audio.md), SDK·모델 고정과 라이선스는 [meeting-models.md](meeting-models.md)를 따른다.
+
 기준: `docs/mac_worklog_ai_handoff/01_AI_BUILD_PROMPT.md`(실행 지시), `02_PRODUCT_SPEC.md`(요구사항 기준).
 
 ## 실행 환경 (2026-10-01 확인)

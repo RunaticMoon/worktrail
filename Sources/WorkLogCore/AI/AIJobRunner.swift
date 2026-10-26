@@ -161,7 +161,9 @@ public final class AIJobRunner: @unchecked Sendable {
 
     /// 1회 실행. provider 오류는 throw하지 않고 상태로 저장해 결과로 돌려준다.
     /// 저장소 오류만 throw한다.
-    public func submit(_ request: AIJobRequest) async throws -> AIJobResult {
+    public func submit(_ request: AIJobRequest,
+                       preflight: (@Sendable () async throws -> Void)? = nil) async throws -> AIJobResult {
+        try await preflight?()
         // Bind queued work before any FIFO suspension. This reads no token or account file.
         let accountProvider = provider as? AIAccountGenerationProvider
         let submittedAccountGeneration = await accountProvider?.accountGeneration()
@@ -194,6 +196,8 @@ public final class AIJobRunner: @unchecked Sendable {
         // 6) 동시성 1: 앞선 submit이 끝날 때까지 FIFO로 대기한다.
         await executionLock.acquire()
         defer { executionLock.release() }
+        // Policy may change while queued; validate before reusing results or sending any input.
+        try await preflight?()
 
         // 잠금 획득 후 재확인(그 사이 다른 호출이 같은 key를 완료했을 수 있다).
         let job: AIJob
@@ -234,11 +238,13 @@ public final class AIJobRunner: @unchecked Sendable {
                                instructions: request.instructions, payloadJSON: request.payloadJSON,
                                skill: request.skill)
         do {
+            try await preflight?()
             let output: AIJobOutput
             if let accountProvider, let submittedAccountGeneration {
                 guard await accountProvider.accountGeneration() == submittedAccountGeneration else {
                     throw AIProviderError(.cancelled, "대기 중 ChatGPT 계정 연결이 변경되어 요청을 취소했습니다.")
                 }
+                try await preflight?()
                 // Passing the captured value also closes the gap between this check and run's first await.
                 output = try await accountProvider.run(input, expectedAccountGeneration: submittedAccountGeneration)
             } else {

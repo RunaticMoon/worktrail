@@ -1,5 +1,7 @@
 # ChatGPT OAuth와 로컬 회의록 (0.11.0)
 
+> 아래 회의 음성 동작은 0.11.0 당시 기록이다. 현재 작업의 WhisperKit/SpeakerKit, 원본 보존, 화면 이동 중 녹음 유지, 로컬 전용 정책은 [실시간 회의 음성](live-meeting-audio.md)을 따른다. 현재 기본 회의에서는 외부 AI 요약을 사용할 수 없다.
+
 ## 연결 방식과 Enterprise 확인
 
 WorkLog macOS 앱은 사용자의 Codex CLI를 실행하지 않고 공식 **Sign in with ChatGPT** 공개 로컬 앱 흐름으로 연결한다. 설정에서 브라우저 로그인을 시작하며, 기존 Codex 인증 파일을 가져오지 않는다. 기존 `codexExecutablePath` 설정은 호환성을 위해 읽되 앱 실행 경로로 사용하지 않는다. 개발 CLI의 기존 app-server 어댑터와 프로토콜 회귀 테스트는 유지한다.

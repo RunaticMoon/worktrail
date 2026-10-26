@@ -13,6 +13,9 @@ public struct Meeting: Codable, Hashable, Sendable, Identifiable {
     public var updatedAt: Date
     public var deletedAt: Date?
     public var summary: MeetingSummary?
+    /// 모든 신규·이전 회의의 기본값. true이면 네트워크 AI 입력으로 사용할 수 없다.
+    public var localOnly: Bool = true
+    public var activeTranscriptRunID: String? = nil
 
     public var isSummaryStale: Bool { summary.map { $0.sourceRevision != revision } ?? false }
 }

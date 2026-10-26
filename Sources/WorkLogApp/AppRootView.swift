@@ -133,6 +133,17 @@ struct AppRootView: View {
 
     private func workspace(_ environment: AppEnvironment) -> some View {
         VStack(spacing: 0) {
+            if let audio = controller.meetings?.audio, audio.captureIssue, let message = audio.captureMessage {
+                HStack(alignment: .top) {
+                    InlineNotice(message: message)
+                    Button("회의록 보기") { controller.navigate(to: .meetings) }
+                    if audio.isSavePending {
+                        Button("저장 재시도") { _ = audio.retrySaving() }.disabled(audio.isCapturing)
+                    } else {
+                        Button("닫기") { audio.dismissCaptureIssue() }
+                    }
+                }.padding(12)
+            }
             if let notice = controller.notice {
                 HStack(alignment: .top, spacing: 8) {
                     InlineNotice(message: notice)
@@ -151,6 +162,16 @@ struct AppRootView: View {
         .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(selectedRoute.title)
         .toolbar {
+            ToolbarItem(placement: .status) {
+                if let audio = controller.meetings?.audio, audio.isCapturing {
+                    HStack {
+                        Label("\(audio.meetingTitle) · \(Int(audio.elapsed) / 60):\(String(format: "%02d", Int(audio.elapsed) % 60))", systemImage: "record.circle")
+                            .lineLimit(1).foregroundStyle(.red)
+                        Button("녹음 중지", systemImage: "stop.fill") { audio.stop() }
+                            .disabled(audio.phase == .stopping)
+                    }
+                }
+            }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button("빠른 입력", systemImage: "square.and.pencil") { controller.showCapture() }
                     .worklogHelp("빠른 입력", keys: controller.hotkeyDisplay(.capture))
