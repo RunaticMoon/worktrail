@@ -13,7 +13,7 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                Toggle("마감일 설정", isOn: Binding(get: { dueOn != nil }, set: setHasDueDate))
+                Toggle("마감일 설정", isOn: Binding(get: { dueOn != nil }, set: { setHasDueDate($0) }))
                     .dueFocus(isCapture, id: "dueToggle", order: 710) { setHasDueDate(dueOn == nil) }
                     .accessibilityIdentifier("task-due-enabled")
                 if dueOn != nil {
@@ -29,7 +29,7 @@ import WorkLogCore
                 }
             }
             if dueOn != nil {
-                Toggle("마감 알림", isOn: Binding(get: { daysBefore != nil }, set: setHasReminder))
+                Toggle("마감 알림", isOn: Binding(get: { daysBefore != nil }, set: { setHasReminder($0) }))
                     .dueFocus(isCapture, id: "dueReminderToggle", order: 712) { setHasReminder(daysBefore == nil) }
                     .accessibilityIdentifier("task-due-reminder-enabled")
                 if let days = daysBefore {

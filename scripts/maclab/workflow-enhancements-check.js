@@ -3,11 +3,12 @@
  * Requires a /tmp/WorkLogUIReview- directory, dev.worklog.UIReview.Workflow013,
  * verified --ui-test-fixture many, and the exact PID.
  * Never launches OAuth, stores credentials, starts recording, or targets production.
- * The fixture guard and locked-session refusal were executed on macOS; workflow
- * actions still require validation in an unlocked console session.
+ * The fixture guard, locked-session refusal, and due-date flow were executed on
+ * macOS. Remaining actions require validation in an unlocked console session.
  */
 ObjC.import('AppKit');
 ObjC.import('ApplicationServices');
+ObjC.import('CoreGraphics');
 
 function read(node, attribute) {
     var output = Ref();
@@ -90,14 +91,40 @@ function run(args) {
         }
         function control(role, label, exact) { return need(find(role, label, exact), 'MISSING_' + label); }
         function front() { return Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === pid; }
-        function press(node) { need(front(), 'FOREGROUND'); need(Number($.AXUIElementPerformAction(node, $('AXPress'))) === 0, 'PRESS'); pause(); }
-        function key(code, modifiers) { need(front(), 'FOREGROUND'); events.keyCode(code, {using: modifiers || []}); pause(); }
+        function inputAllowed() {
+            var current = ObjC.deepUnwrap(ObjC.castRefToObject($.CGSessionCopyCurrentDictionary()));
+            var locked = current.CGSSessionScreenIsLocked;
+            if (!result.inputLockSamples) result.inputLockSamples = [];
+            result.inputLockSamples.push({type: typeof locked, value: locked === undefined ? null : locked});
+            need(locked === undefined || locked === false || locked === 0, 'SCREEN_LOCKED');
+            need(Boolean(current.kCGSSessionOnConsoleKey) && Boolean(current.kCGSessionLoginDoneKey), 'CONSOLE_UNAVAILABLE');
+            need(front(), 'FOREGROUND');
+        }
+        function press(node) { inputAllowed(); need(Number($.AXUIElementPerformAction(node, $('AXPress'))) === 0, 'PRESS'); pause(); }
+        function key(code, modifiers) { inputAllowed(); events.keyCode(code, {using: modifiers || []}); pause(); }
+        function capture(label) {
+            inputAllowed();
+            var info = array(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID)));
+            var owned = info.filter(function (item) {
+                return Number(ObjC.unwrap(item.objectForKey('kCGWindowOwnerPID'))) === pid &&
+                    Number(ObjC.unwrap(item.objectForKey('kCGWindowLayer'))) === 0;
+            });
+            if (!owned.length) { result.screenshotUnavailable = true; return; }
+            var id = Number(ObjC.unwrap(owned[0].objectForKey('kCGWindowNumber')));
+            need(Number.isInteger(id) && id > 0, 'SCREENSHOT_WINDOW_ID');
+            var destination = path.replace(/\/[^/]+\.app$/, '') + '/' + label + '.png';
+            try {
+                automation.doShellScript('/usr/sbin/screencapture -x -o -l ' + id + " '" + destination.replace(/'/g, "'\\''") + "'");
+                if (!result.screenshots) result.screenshots = [];
+                result.screenshots.push(destination);
+            } catch (_) { result.screenshotUnavailable = true; }
+        }
         function focused(node) { var value = read(node, 'AXFocused'); return value !== null && Boolean(ObjC.unwrap(value)); }
-        function focus(node) { need(Number($.AXUIElementSetAttributeValue(node, $('AXFocused'), $.kCFBooleanTrue)) === 0, 'FOCUS'); pause(); }
+        function focus(node) { inputAllowed(); need(Number($.AXUIElementSetAttributeValue(node, $('AXFocused'), $.kCFBooleanTrue)) === 0, 'FOCUS'); pause(); }
         function input(node, value) {
             focus(node); key(0, ['command down']);
-            var board = $.NSPasteboard.generalPasteboard; board.clearContents;
-            need(board.setStringForType($(value), $.NSPasteboardTypeString), 'FAKE_PASTE'); key(9, ['command down']);
+            need(/^[A-Za-z0-9 ]*$/.test(value), 'SYNTHETIC_ASCII_INPUT');
+            inputAllowed(); events.keystroke(value); pause();
         }
         function activate() {
             if (!windows().length) {
@@ -108,16 +135,10 @@ function run(args) {
             }
             app.activateWithOptions(3);
             var main = windows().filter(function (window) { return text(window, 'AXSubrole') === 'AXStandardWindow'; })[0];
-            if (main) { $.AXUIElementPerformAction(main, $('AXRaise')); $.AXUIElementSetAttributeValue(main, $('AXMain'), $.kCFBooleanTrue); }
-            var processes = events.processes.whose({unixId: pid})();
-            need(processes.length === 1, 'FIXTURE_PROCESS');
-            processes[0].frontmost = true;
-            var nativeWindows = processes[0].windows();
-            if (nativeWindows.length) {
-                var position = nativeWindows[0].position(), size = nativeWindows[0].size();
-                var point = $.CGPointMake(position[0] + size[0] / 2, position[1] + 12);
-                $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft));
-                $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, point, $.kCGMouseButtonLeft));
+            if (main) {
+                $.AXUIElementPerformAction(main, $('AXRaise'));
+                $.AXUIElementSetAttributeValue(main, $('AXMain'), $.kCFBooleanTrue);
+                $.AXUIElementSetAttributeValue(main, $('AXFocused'), $.kCFBooleanTrue);
             }
             wait(front, 'ACTIVATE');
         }
@@ -144,11 +165,12 @@ function run(args) {
             press(wait(function () { return find('AXButton', 'AI 연결', true); }, 'AI_NAV'));
             check('cliPathField', find('AXTextField', 'Codex CLI 실행 파일') !== null);
             var picker = control('AXPopUpButton', 'AI 연결 방식'); press(picker);
-            press(wait(function () { return find('AXMenuItem', 'OpenAI Compatible', false); }, 'COMPATIBLE_OPTION'));
+            press(wait(function () { return find('AXMenuItem', 'OpenAI 호환 API', false); }, 'COMPATIBLE_OPTION'));
             check('compatibleBaseURL', find('AXTextField', 'API 기본 URL') !== null);
             check('deepSeekPreset', find('AXButton', 'DeepSeek 기본값 사용', true) !== null);
             press(control('AXButton', 'DeepSeek 기본값 사용', true));
             check('deepSeekURL', text(control('AXTextField', 'API 기본 URL'), 'AXValue') === 'https://api.deepseek.com');
+            capture('compatible-settings');
             press(control('AXPopUpButton', 'AI 연결 방식'));
             press(wait(function () { return find('AXMenuItem', 'Codex CLI', false); }, 'CLI_OPTION'));
             press(control('AXButton', '활동 수집', true));
@@ -158,6 +180,7 @@ function run(args) {
             check('jiraHost', find('AXTextField', 'https://company.atlassian.net') !== null);
             check('jiraJQL', find('AXTextField', '수집할 이슈 JQL') !== null || find('AXTextArea', '수집할 이슈 JQL') !== null);
             check('manualImport', find('AXButton', '지금 가져오기', true) !== null);
+            capture('activity-integrations');
         } else if (action === 'due') {
             key(19, ['command down']); key(45, ['command down']);
             wait(function () { return find(null, 'task-due-enabled', true); }, 'DUE_TOGGLE');
@@ -166,8 +189,10 @@ function run(args) {
             press(control(null, 'task-due-reminder-enabled', true));
             check('threeDaysDefault', find(null, '마감 3일 전부터') !== null);
             var stepper = control(null, 'task-due-reminder-days', true);
+            inputAllowed();
             need(Number($.AXUIElementPerformAction(stepper, $('AXIncrement'))) === 0, 'STEPPER_INCREMENT'); pause();
             check('fourDaysSelected', find(null, '마감 4일 전부터') !== null);
+            capture('task-due-four-days');
             press(control(null, 'task-due-enabled', true));
             check('reminderRemovedWithDueDate', find(null, 'task-due-reminder-enabled', true) === null);
             key(53);
@@ -179,16 +204,18 @@ function run(args) {
             check('groupInitiallyFocused', focused(group));
             input(group, 'UI');
             check('groupCompletionVisible', wait(function () { return find(null, 'UI 검증 전용', true); }, 'GROUP_COMPLETION'));
+            capture('secret-group-completion');
             key(125); key(36);
             check('completionApplied', text(control('AXTextField', '그룹 (선택 사항)', true), 'AXValue') === 'UI 검증 전용');
             key(48);
             check('tabMovesToName', focused(control('AXTextField', 'Secret 제목', true)));
+            capture('secret-name-focus');
             key(53);
         } else if (action === 'reports') {
-            var report = find(null, '리포트', true); if (report) press(report);
-            else throw new Error('REPORT_NAV');
+            key(22, ['command down']); // Command-6: report library.
             press(wait(function () { return find(null, 'report-library-period-weekly', true); }, 'WEEKLY_FILTER'));
             check('weeklyAndPerformanceRows', find(null, '주간보고') !== null && find(null, '성과자료') !== null);
+            capture('report-family-icons');
         } else throw new Error('UNKNOWN_ACTION');
         result.ok = true; result.stage = stage; return JSON.stringify(result);
     } catch (error) { result.stage = stage; result.error = String(error.message || error); throw new Error(JSON.stringify(result)); }

@@ -66,9 +66,9 @@ import WorkLogCore
                                 if model.asOf == nil {
                                     GroupBox("마감·알림") {
                                         TaskDueFields(
-                                            dueOn: Binding(get: { model.detail?.task.dueOn }, set: model.setDueDate),
+                                            dueOn: Binding(get: { model.detail?.task.dueOn }, set: { model.setDueDate($0) }),
                                             daysBefore: Binding(get: { model.detail?.task.dueReminderDaysBefore },
-                                                                set: model.setDueReminderDaysBefore),
+                                                                set: { model.setDueReminderDaysBefore($0) }),
                                             calendar: model.workCalendar, defaultDate: model.today)
                                             .padding(4)
                                     }

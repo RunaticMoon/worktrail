@@ -53,12 +53,13 @@ GitHub Events API는 서버 보존 기간과 최대 300개 제한이 있어 전�
 
 자동 검증은 가짜 API·가짜 계정·합성 오디오·격리된 화면 fixture만 사용한다.
 
-- macOS 27 SDK / Apple Swift 6.4: `swift build --build-tests` 성공, XCTest 전체 992개 통과.
+- macOS 27 SDK / Apple Swift 6.4: `swift build --build-tests` 및 최적화 release 빌드 성공, XCTest 전체 992개 통과. 마감일 Binding의 신규 동시성 경고 4건도 명시적 클로저로 해소했다.
+- 로컬 검증용 DMG 0.13.0: arm64·최소 macOS 26·서명 무결성·Sparkle 로더 smoke 통과. 로컬 ad-hoc 서명본은 배포하지 않으며 운영 산출물은 CI에서 고정 인증서로 다시 서명한다.
 - OCI Linux aarch64 / Swift 6.3.3: 전체 빌드 성공, 전체 991개와 이후 추가된 rollback 검사를 포함한 ActivityImportTests 9개를 별도 검증. 호스트의 libxml2 ABI 차이는 `/tmp`에만 호환 라이브러리를 추출해 해결했고 시스템 패키지는 변경하지 않았다.
 - 배포 도구 Python 검사: 60개 중 55개 통과, 조건부 검사 5개 생략.
 - 합성 PCM 기반 native 회의 세션 검사: 9개 통과. 실제 마이크는 열지 않았다.
 - 실제 Codex 0.163.0 + localhost 가짜 API: 인증 헤더 없음, 노출 도구 `[]`, 가짜 MCP 실행 없음, 임시 HOME 정리 확인. 재실행: `python3 scripts/maclab/run-codex-isolation-check.py --codex /path/to/codex`.
-- 화면·키보드: 현재 Mac의 `screenLocked=true`로 입력 전 차단. 전용 fixture 검사 스크립트 문법과 잠금 방어는 확인했지만 기능 동선·화면 캡처는 미검증이다. `scripts/maclab/workflow-enhancements-check.js`로 잠금 해제된 세션에서 재검사한다. 기존 사용자의 fixture 프로세스는 보존했다.
+- 화면·키보드: 전용 fixture에서 오늘 화면 렌더링과 Cmd2 → CmdN → 마감일 설정 → 알림 시작 3일/4일 변경 → 마감일 해제 시 알림 제거 → Escape 동선을 통과했다. 설정·Secret·리포트 동선은 Mac의 반복 잠금으로 확인이 제한되었다. `scripts/maclab/workflow-enhancements-check.js`는 입력 전에 소유 PID·fixture 경로·foreground·화면 잠금을 검사한다. 잠금 해제 후 추가 검사 결과는 PR에 기록하며 기존 사용자의 fixture 프로세스는 보존한다.
 
 실제 Enterprise 로그인, DeepSeek 유료 호출, 사내 GitHub/Jira 접근, 마이크 녹음과 OS 알림 전달은 별도 사용자 환경 확인 대상이다. 녹음 시작 코드의 결함을 수정했지만, 사용자가 겪은 마이크 실패의 실제 권한·장치 상태까지 확인한 것은 아니다.
 
