@@ -334,7 +334,8 @@ final class WorkRepositoryTests: XCTestCase {
         XCTAssertEqual(loaded.dueOn, tuesday)
         XCTAssertEqual(loaded.projectTrackingMode, .perProject)
         XCTAssertEqual(loaded.cachedStatus, .inProgress)
-        XCTAssertEqual(loaded.revision, 1)
+        // Editing the due date is now a user-visible source change; cache-only status updates are not.
+        XCTAssertEqual(loaded.revision, 2)
 
         try repo.setTaskCachedStatus(id: task.id, status: nil)
         XCTAssertNil(try repo.task(id: task.id)?.cachedStatus)

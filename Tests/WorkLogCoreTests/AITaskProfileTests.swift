@@ -105,6 +105,10 @@ final class AITaskProfileTests: XCTestCase {
 
         settings.draft.codexExecutablePath = "/fake/other-codex"
         await settings.loadModelsIfNeeded(provider: catalog)
+        let unsavedPathCount = await catalog.requests
+        XCTAssertEqual(unsavedPathCount, 1, "Do not query the previous provider while connection edits are unsaved")
+        XCTAssertTrue(settings.save())
+        await settings.loadModelsIfNeeded(provider: catalog)
         let changedPathCount = await catalog.requests
         XCTAssertEqual(changedPathCount, 2)
         await settings.refreshModels(provider: catalog)

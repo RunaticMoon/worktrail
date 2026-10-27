@@ -7,7 +7,15 @@ import Foundation
 import ScreenCaptureKit
 import WorkLogCore
 
-struct MeetingMicrophoneDevice: Identifiable, Sendable { let id: String; let name: String }
+struct MeetingMicrophoneDevice: Identifiable, Sendable {
+    let id: String
+    let name: String
+    var isBuiltIn = false
+
+    /// Device names are localized and Continuity microphones may sort first.
+    /// Without a built-in input, let the user explicitly choose another device.
+    static func preferredID(in devices: [Self]) -> String? { devices.first(where: \.isBuiltIn)?.id }
+}
 struct MeetingOnlineApplication: Identifiable, Sendable { let id: Int32; let name: String }
 enum MeetingCaptureMode: Sendable {
     case microphone(deviceID: String)
@@ -41,6 +49,7 @@ enum MeetingAudioCaptureError: LocalizedError {
     private let clock: any MeetingMonotonicClock
     private let wallClock: any Clock
     private var engine: AVAudioEngine?
+    private var microphoneTapInstalled = false
     private var stream: SCStream?
     private var streamStartTask: Task<Void, Error>?
     private var sink: MeetingCaptureSink?
@@ -60,8 +69,12 @@ enum MeetingAudioCaptureError: LocalizedError {
     static func microphoneDevices() -> [MeetingMicrophoneDevice] {
         MeetingAudioDeviceCatalog.devices().compactMap { device in
             guard MeetingAudioDeviceCatalog.hasInput(device), let uid = MeetingAudioDeviceCatalog.string(device, selector: kAudioDevicePropertyDeviceUID) else { return nil }
-            return MeetingMicrophoneDevice(id: uid, name: MeetingAudioDeviceCatalog.string(device, selector: kAudioObjectPropertyName) ?? uid)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            return MeetingMicrophoneDevice(id: uid, name: MeetingAudioDeviceCatalog.string(device, selector: kAudioObjectPropertyName) ?? uid,
+                isBuiltIn: MeetingAudioDeviceCatalog.uint32(device, selector: kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeBuiltIn)
+        }.sorted {
+            if $0.isBuiltIn != $1.isBuiltIn { return $0.isBuiltIn }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
     }
 
     /// Invoked when the user opens the application chooser. ScreenCaptureKit may
@@ -123,7 +136,6 @@ enum MeetingAudioCaptureError: LocalizedError {
             onFailure: { [weak self] error in Task { @MainActor in await self?.fail(error) } })
         sink = receiver
         do {
-            installObservers(device: device)
             if let filter {
                 let configuration = SCStreamConfiguration()
                 configuration.width = 2; configuration.height = 2
@@ -149,9 +161,10 @@ enum MeetingAudioCaptureError: LocalizedError {
                 guard capture.inputNode.auAudioUnit.deviceID == device else { throw MeetingAudioCaptureError.missingDevice }
                 let format = capture.inputNode.outputFormat(forBus: 0)
                 guard format.sampleRate > 0, format.channelCount > 0 else { throw MeetingAudioCaptureError.invalidFormat }
-                capture.inputNode.installTap(onBus: 0, bufferSize: 2_048, format: format) { buffer, time in
+                capture.inputNode.installTap(onBus: 0, bufferSize: 8_192, format: format, block: MeetingMicrophoneTap.make { buffer, time in
                     receiver.receiveMicrophone(buffer, at: time)
-                }
+                })
+                microphoneTapInstalled = true
                 capture.prepare()
                 try capture.start()
                 observe(NotificationCenter.default, name: .AVAudioEngineConfigurationChange, object: capture) { [weak self] in
@@ -159,6 +172,9 @@ enum MeetingAudioCaptureError: LocalizedError {
                 }
             }
             try checkStart()
+            // Selecting/starting a device can itself change its stream format.
+            // Observe external changes only after that startup has completed.
+            installObservers(device: device)
             installSessionMonitor(mode: mode, deviceID: device, receiver: receiver)
             onEvent(.started)
         } catch {
@@ -174,13 +190,14 @@ enum MeetingAudioCaptureError: LocalizedError {
         if let stopping { return await stopping.value }
         sink?.close()
         let captureEngine = engine; engine = nil
+        let hadMicrophoneTap = microphoneTapInstalled; microphoneTapInstalled = false
         let captureStream = stream; stream = nil
         let startup = streamStartTask
         let originalWriter = writer
         removeObservers()
         let event = onEvent
         let task = Task { @MainActor () -> MeetingAudioArchiveSnapshot? in
-            captureEngine?.inputNode.removeTap(onBus: 0)
+            if hadMicrophoneTap { captureEngine?.inputNode.removeTap(onBus: 0) }
             captureEngine?.stop()
             var failure = reason
             if let captureStream {
@@ -260,6 +277,15 @@ enum MeetingAudioCaptureError: LocalizedError {
         }
         deviceObservers.removeAll()
         sessionTimer?.invalidate(); sessionTimer = nil
+    }
+}
+
+/// AVAudioNodeTapBlock is non-Sendable in Apple's SDK and runs on an audio
+/// callback queue. Construct it outside MainActor so it cannot inherit the
+/// caller's actor isolation and trap when the first microphone buffer arrives.
+enum MeetingMicrophoneTap {
+    static func make(_ receive: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void) -> AVAudioNodeTapBlock {
+        { buffer, time in receive(buffer, time) }
     }
 }
 
@@ -384,6 +410,13 @@ private final class MeetingCaptureSink: NSObject, SCStreamOutput, SCStreamDelega
 }
 
 private enum MeetingAudioDeviceCatalog {
+    static func uint32(_ device: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value
+    }
     static func devices() -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0

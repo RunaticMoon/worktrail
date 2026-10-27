@@ -758,4 +758,99 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertTrue(try backupService.verify(directoryNamed: name),
                       "심볼릭 링크를 추가한 뒤에도 정상 백업 이름은 통과해야 한다")
     }
+
+    private func saveConnectionSettings(at paths: AppPaths, suffix: String) throws {
+        try AIConnectionSettingsStore(dataRoot: paths.dataRoot, ids: SequentialIDGenerator()).save(
+            AIConnectionSettings(kind: .openAICompatible, baseURL: "https://ai-\(suffix).example.invalid",
+                                 model: "fixture-\(suffix)"))
+        var settings = ActivityIntegrationSettings()
+        settings.github.enabled = true
+        settings.github.baseURL = "https://github-\(suffix).example.invalid"
+        settings.github.account = "fixture-user"
+        try ActivityIntegrationSettingsStore(dataRoot: paths.dataRoot).save(settings)
+    }
+
+    func testConnectionSettingsBackupRestoreAndPreRestorePreserveBothVersions() throws {
+        let root = try makeRoot(), clock = fixedClock()
+        let source = makePaths(root: root.appendingPathComponent("source"))
+        let sourceStores = try openStores(source, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { sourceStores.close() }
+        try saveConnectionSettings(at: source, suffix: "source")
+        // 백업은 허용 목록만 복사하며, 데이터 폴더의 임의 자격증명 파일은 수집하지 않는다.
+        try Data("fake-token-never-back-up".utf8).write(to: source.dataRoot.appendingPathComponent("fake-credentials.json"))
+        let sourceService = makeService(source, sourceStores, clock: clock)
+        let backup = try sourceService.createBackup(reason: .manual)
+        try sourceService.verify(backup)
+        let names = [AIConnectionSettingsStore.fileName, ActivityIntegrationSettingsStore.fileName]
+        for name in names {
+            XCTAssertTrue(backup.manifest.files.contains { $0.name == name })
+            XCTAssertEqual(fileBytes(backup.directory.appendingPathComponent(name)), fileBytes(source.dataRoot.appendingPathComponent(name)))
+            XCTAssertEqual(permissions(of: backup.directory.appendingPathComponent(name)), 0o600)
+        }
+        XCTAssertFalse(backup.manifest.files.contains { $0.name == "fake-credentials.json" })
+
+        let target = makePaths(root: root.appendingPathComponent("target"))
+        try saveConnectionSettings(at: target, suffix: "target")
+        let previous = names.map { fileBytes(target.dataRoot.appendingPathComponent($0)) }
+        try BackupService.restore(backup, into: target, keyStore: InMemoryVaultKeyStore(), includeVault: false, clock: clock)
+        let targetDB = try SQLiteDatabase(path: target.workDatabase.path)
+        defer { targetDB.close() }
+        let targetService = BackupService(paths: target, workDB: targetDB, vaultDB: sourceStores.vaultDB, clock: clock)
+        let preserved = try XCTUnwrap(targetService.listBackups().first { $0.manifest.reason == .preRestore })
+        for (index, name) in names.enumerated() {
+            XCTAssertEqual(fileBytes(target.dataRoot.appendingPathComponent(name)), fileBytes(source.dataRoot.appendingPathComponent(name)))
+            XCTAssertEqual(fileBytes(preserved.directory.appendingPathComponent(name)), previous[index])
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.vaultDatabase.path))
+    }
+
+    func testDailyBackupDetectsConnectionSettingAdditionChangeAndRemoval() throws {
+        let root = try makeRoot(), paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { stores.close() }
+        let service = makeService(paths, stores, clock: clock)
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        clock.advance(by: 86_400)
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        try saveConnectionSettings(at: paths, suffix: "first")
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        clock.advance(by: 86_400)
+        var ai = try AIConnectionSettingsStore(dataRoot: paths.dataRoot).load()
+        ai.model = "changed-fixture-model"
+        try AIConnectionSettingsStore(dataRoot: paths.dataRoot).save(ai)
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        clock.advance(by: 86_400)
+        var activity = try ActivityIntegrationSettingsStore(dataRoot: paths.dataRoot).load()
+        activity.github.account = "another-fixture-user"
+        try ActivityIntegrationSettingsStore(dataRoot: paths.dataRoot).save(activity)
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        clock.advance(by: 86_400)
+        try FileManager.default.removeItem(at: paths.dataRoot.appendingPathComponent(ActivityIntegrationSettingsStore.fileName))
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        clock.advance(by: 86_400)
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+    }
+
+    func testConnectionSettingsRestoreFailureRollsBackBothFiles() throws {
+        let root = try makeRoot(), clock = fixedClock()
+        let source = makePaths(root: root.appendingPathComponent("source"))
+        let stores = try openStores(source, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { stores.close() }
+        try saveConnectionSettings(at: source, suffix: "source")
+        let backup = try makeService(source, stores, clock: clock).createBackup(reason: .manual)
+        let target = makePaths(root: root.appendingPathComponent("target"))
+        try saveConnectionSettings(at: target, suffix: "target")
+        let names = [AIConnectionSettingsStore.fileName, ActivityIntegrationSettingsStore.fileName]
+        let previous = names.map { fileBytes(target.dataRoot.appendingPathComponent($0)) }
+        XCTAssertThrowsError(try BackupService.restore(backup, into: target, keyStore: InMemoryVaultKeyStore(),
+            includeVault: false, clock: clock, beforePlacing: { name in
+                if name == ActivityIntegrationSettingsStore.fileName { throw BackupFailure.ioFailed("가짜 배치 실패") }
+            }))
+        for (index, name) in names.enumerated() {
+            XCTAssertEqual(fileBytes(target.dataRoot.appendingPathComponent(name)), previous[index])
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.workDatabase.path), "실패한 복원의 새 DB는 남지 않는다")
+        XCTAssertFalse(allFiles(in: target.dataRoot).contains { $0.lastPathComponent.contains(".restore-") || $0.lastPathComponent.contains(".stash-") })
+    }
 }

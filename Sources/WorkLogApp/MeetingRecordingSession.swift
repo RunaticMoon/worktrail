@@ -89,7 +89,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     func refreshMicrophones() {
         microphones = MeetingAudioCapture.microphoneDevices()
         // Initial selection is visible to the user; never switch a running capture's device.
-        if microphoneID.isEmpty { microphoneID = microphones.first?.id ?? "" }
+        if microphoneID.isEmpty { microphoneID = MeetingMicrophoneDevice.preferredID(in: microphones) ?? "" }
     }
     func refreshApplications() async {
         do { applications = try await MeetingAudioCapture.onlineApplications() }

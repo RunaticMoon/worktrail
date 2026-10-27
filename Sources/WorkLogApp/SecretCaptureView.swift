@@ -132,7 +132,7 @@ import WorkLogCore
             if model.isLocked { navigation.focus("secretUnlock") }
             else if !model.canEdit(from: .capture) { navigation.focus("secretRetry") }
             else if phase == .draftChoice { navigation.focus("secretContinue") }
-            else if phase == .editing { navigation.focus("secretTitle") }
+            else if phase == .editing { navigation.focus("secretGroup") }
         }
     }
 

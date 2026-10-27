@@ -63,7 +63,17 @@ import WorkLogCore
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
-                                if model.asOf == nil { activityComposer.id("activities") }
+                                if model.asOf == nil {
+                                    GroupBox("마감·알림") {
+                                        TaskDueFields(
+                                            dueOn: Binding(get: { model.detail?.task.dueOn }, set: model.setDueDate),
+                                            daysBefore: Binding(get: { model.detail?.task.dueReminderDaysBefore },
+                                                                set: model.setDueReminderDaysBefore),
+                                            calendar: model.workCalendar, defaultDate: model.today)
+                                            .padding(4)
+                                    }
+                                    activityComposer.id("activities")
+                                }
                                 SectionDisclosure(title: "프로젝트별 적용 상태", summary: projectSummary(detail),
                                                   isExpanded: $projectsExpanded) { projectStatuses(detail) }
                                 Divider()

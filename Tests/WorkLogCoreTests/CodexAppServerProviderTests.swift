@@ -114,8 +114,9 @@ final class FakeCodexServer: LineTransport, @unchecked Sendable {
 
     private func defaultResult(for method: String) -> JSONValue {
         if method == "initialize" {
-            return j(#"{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux","userAgent":"codex-cli/0.159.2"}"#)
+            return j(#"{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux","userAgent":"codex-cli/0.163.0"}"#)
         }
+        if method == "config/read" { return .object(["config": .object([:])]) }
         return .object([:])
     }
 }
@@ -250,7 +251,7 @@ final class CodexAppServerProviderTests: XCTestCase {
         let capabilities = await provider.checkCapabilities()
         XCTAssertTrue(capabilities.installed)
         XCTAssertTrue(capabilities.protocolCompatible)
-        XCTAssertEqual(capabilities.version, "codex-cli/0.159.2")
+        XCTAssertEqual(capabilities.version, "codex-cli/0.163.0")
         XCTAssertEqual(server.methods.first, "initialize")
         XCTAssertTrue(server.methods.contains("initialized"))
     }
@@ -340,6 +341,7 @@ final class CodexAppServerProviderTests: XCTestCase {
         XCTAssertEqual(threadRequest["params"]?["sandbox"]?.stringValue, "read-only")
         XCTAssertEqual(threadRequest["params"]?["approvalPolicy"]?.stringValue, "never")
         XCTAssertEqual(threadRequest["params"]?["ephemeral"]?.boolValue, true)
+        XCTAssertEqual(threadRequest["params"]?["environments"]?.arrayValue, [])
         XCTAssertEqual(threadRequest["params"]?["developerInstructions"]?.stringValue, "지침")
         let cwd = try XCTUnwrap(threadRequest["params"]?["cwd"]?.stringValue)
         XCTAssertTrue(cwd.hasPrefix(root.path), "cwd는 stagingRoot 하위여야 함")
@@ -350,7 +352,7 @@ final class CodexAppServerProviderTests: XCTestCase {
         XCTAssertEqual(inputItems?.first?["text"]?.stringValue, #"{"facts":[]}"#)
     }
 
-    func testRunUsesSkillMentionAndCompletedItemTakesPrecedence() async throws {
+    func testRunAppendsVerifiedSkillAndCompletedItemTakesPrecedence() async throws {
         let server = FakeCodexServer()
         scriptSuccessfulTurn(server: server, followups: [
             delta(threadId: "thread-1", turnId: "turn-1", "partial"),
@@ -358,13 +360,53 @@ final class CodexAppServerProviderTests: XCTestCase {
             turnCompleted(threadId: "thread-1", turnId: "turn-1", status: "completed"),
         ])
         let provider = makeProvider(server: server)
-        let input = makeInput(skill: SkillRef(name: "weekly-report"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("worklog-skill-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let skillURL = root.appendingPathComponent("SKILL.md")
+        try Data("Use concise fixture sentences.".utf8).write(to: skillURL)
+        let skill = try XCTUnwrap(SkillBindingResolver.resolve(skillURL.path))
+        let input = makeInput(skill: skill)
         let output = try await provider.run(input)
         XCTAssertEqual(output.rawJSON, #"{"final":true}"#)
 
         let turnRequest = try XCTUnwrap(server.messages(withMethod: "turn/start").first)
         let text = turnRequest["params"]?["input"]?.arrayValue?.first?["text"]?.stringValue
-        XCTAssertEqual(text, "$weekly-report\n{\"facts\":[]}")
+        XCTAssertEqual(text, "{\"facts\":[]}")
+        let instructions = server.messages(withMethod: "thread/start").first?["params"]?["developerInstructions"]?.stringValue
+        XCTAssertTrue(instructions?.contains("Use concise fixture sentences.") == true)
+    }
+
+    func testCLIArgumentsDisableFileAndExternalTools() {
+        let arguments = CodexAppServerProvider.processArguments
+        XCTAssertTrue(arguments.contains("features.shell_tool=false"))
+        XCTAssertTrue(arguments.contains("features.apps=false"))
+        XCTAssertTrue(arguments.contains("features.plugins=false"))
+        XCTAssertTrue(arguments.contains("features.skip_host_skill_discovery=true"))
+        XCTAssertTrue(arguments.contains("features.stable_environment_tools=false"))
+        XCTAssertTrue(CodexAppServerProvider.fallbackDirectories.contains { $0.hasSuffix("/.local/bin") })
+        XCTAssertTrue(CodexAppServerProvider.supportsEnvironmentIsolation("worklog/0.163.0 (macOS)"))
+        XCTAssertFalse(CodexAppServerProvider.supportsEnvironmentIsolation("worklog/0.159.2"))
+        XCTAssertFalse(CodexAppServerProvider.supportsEnvironmentIsolation(nil))
+    }
+
+    func testInheritedMCPServersAreDisabledWithoutForwardingTheirCredentials() async throws {
+        let server = FakeCodexServer()
+        server.script.mutate {
+            $0.results["config/read"] = .object(["config": .object(["mcp_servers": .object([
+                "fixture-private-server": .object(["url": .string("https://fixture.invalid"),
+                    "http_headers": .object(["Authorization": .string("Bearer fake-private-key")])])
+            ])])])
+        }
+        scriptSuccessfulTurn(server: server, followups: [
+            agentMessageItem(threadId: "thread-1", turnId: "turn-1", text: "{}"),
+            turnCompleted(threadId: "thread-1", turnId: "turn-1", status: "completed")
+        ])
+        _ = try await makeProvider(server: server).run(makeInput())
+        let request = try XCTUnwrap(server.messages(withMethod: "thread/start").first)
+        XCTAssertEqual(request["params"]?["config"]?["mcp_servers"]?["fixture-private-server"]?["enabled"]?.boolValue, false)
+        let serialized = try JSONEncoder().encode(request)
+        XCTAssertFalse(String(decoding: serialized, as: UTF8.self).contains("fake-private-key"))
     }
 
     func testSubmissionUsesStrictOutputSchemaAndRoundTripsDraft() async throws {

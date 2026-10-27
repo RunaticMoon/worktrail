@@ -16,6 +16,12 @@ public final class BackupService: @unchecked Sendable {
     public static let settingsFileName = "settings.json"
     public static let manifestFileName = "manifest.json"
     private static let tmpPrefix = ".tmp-"
+    /// 일반 설정만 허용한다. 서비스 API 키·토큰 및 Keychain은 백업 대상이 아니다.
+    private static let additionalSettingsFileNames = [
+        AITaskProfileStore.fileName,
+        AIConnectionSettingsStore.fileName,
+        ActivityIntegrationSettingsStore.fileName,
+    ]
 
     private let paths: AppPaths
     private let workDB: SQLiteDatabase
@@ -221,9 +227,11 @@ public final class BackupService: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: paths.settingsFile.path) {
             sources.append(.file(paths.settingsFile, name: Self.settingsFileName))
         }
-        let profilesFile = paths.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)
-        if FileManager.default.fileExists(atPath: profilesFile.path) {
-            sources.append(.file(profilesFile, name: AITaskProfileStore.fileName))
+        for name in Self.additionalSettingsFileNames {
+            let file = paths.dataRoot.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: file.path) {
+                sources.append(.file(file, name: name))
+            }
         }
         return sources
     }
@@ -340,10 +348,10 @@ public final class BackupService: @unchecked Sendable {
         return BackupInfo(id: staged.id, directory: finalDir, manifest: staged.manifest)
     }
 
-    /// 최신 백업 대비 DB 또는 작업별 AI 설정이 달라졌는지.
+    /// 최신 백업 대비 DB 또는 AI·외부 활동 연결 설정이 달라졌는지.
     private static func snapshotChanged(staged: Staged, latest: BackupInfo?) -> Bool {
         guard let latest else { return true }
-        for name in [workFileName, vaultFileName, AITaskProfileStore.fileName] {
+        for name in [workFileName, vaultFileName] + additionalSettingsFileNames {
             let newHash = staged.manifest.files.first { $0.name == name }?.sha256
             let oldHash = latest.manifest.files.first { $0.name == name }?.sha256
             if newHash != oldHash { return true }
@@ -452,7 +460,7 @@ public final class BackupService: @unchecked Sendable {
     /// → 대상 DB의 -wal/-shm 제거 후 rename으로 교체.
     ///
     /// 호출자는 복원 전에 target의 DB 연결을 닫아야 한다(파일을 교체하므로).
-    /// `includeVault == false`면 work.sqlite·settings.json만 복원한다(키 없는 환경의 일반 기록 복구).
+    /// `includeVault == false`면 work.sqlite와 일반 설정만 복원한다(키 없는 환경의 일반 기록 복구).
     public static func restore(_ backup: BackupInfo, into target: AppPaths,
                                keyStore: VaultKeyStore, includeVault: Bool = true,
                                clock: Clock = SystemClock()) throws {
@@ -491,8 +499,8 @@ public final class BackupService: @unchecked Sendable {
         if manifest.files.contains(where: { $0.name == settingsFileName }) {
             restoreNames.append(settingsFileName)
         }
-        if manifest.files.contains(where: { $0.name == AITaskProfileStore.fileName }) {
-            restoreNames.append(AITaskProfileStore.fileName)
+        for name in additionalSettingsFileNames where manifest.files.contains(where: { $0.name == name }) {
+            restoreNames.append(name)
         }
 
         // 기존 데이터 보존(복원 지점).
@@ -641,8 +649,7 @@ public final class BackupService: @unchecked Sendable {
             (workFileName, target.workDatabase),
             (vaultFileName, target.vaultDatabase),
             (settingsFileName, target.settingsFile),
-            (AITaskProfileStore.fileName, target.dataRoot.appendingPathComponent(AITaskProfileStore.fileName)),
-        ]
+        ] + additionalSettingsFileNames.map { ($0, target.dataRoot.appendingPathComponent($0)) }
         for (name, url) in candidates {
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {

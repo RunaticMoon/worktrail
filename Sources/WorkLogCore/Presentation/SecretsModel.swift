@@ -4,10 +4,30 @@ import Observation
 /// Which screen is currently allowed to edit the shared Secret editor.
 public enum SecretEditorHost: Sendable, Equatable { case main, capture }
 
+public struct SecretTitleGroup: Identifiable, Sendable {
+    public var id: String { name ?? "" }
+    public let name: String?
+    public let items: [SecretMetadata]
+    public var label: String { name ?? "그룹 없음" }
+}
+
 /// Local-only editor. All value access goes through the authenticated session.
 @Observable @MainActor public final class SecretsModel {
     public var query = "" { didSet { searchTitles() } }
     public private(set) var titles: [SecretMetadata] = []
+    public private(set) var groupNames: [String] = []
+    public var titleGroups: [SecretTitleGroup] {
+        let groups = Dictionary(grouping: titles, by: { $0.groupName ?? "" })
+        return groups.keys.sorted {
+            if $0.isEmpty { return false }
+            if $1.isEmpty { return true }
+            return $0.localizedStandardCompare($1) == .orderedAscending
+        }.map { SecretTitleGroup(name: $0.isEmpty ? nil : $0, items: groups[$0] ?? []) }
+    }
+    public var groupSuggestions: [String] {
+        let text = SecretNormalizer.trim(groupName)
+        return groupNames.filter { text.isEmpty || $0.localizedStandardContains(text) }
+    }
     public private(set) var trashItems: [SecretMetadata] = []
     public private(set) var isLocked = true
     public private(set) var isUnlocking = false
@@ -79,7 +99,10 @@ public enum SecretEditorHost: Sendable, Equatable { case main, capture }
 
     public func searchTitles() {
         guard let environment else { return }
-        do { titles = try environment.vaultSession.searchTitles(query) }
+        do {
+            titles = try environment.vaultSession.searchTitles(query)
+            groupNames = try environment.vaultSession.groupNames()
+        }
         catch { message = "제목 목록을 불러오지 못했습니다. 다시 시도하세요." }
     }
     public func tick() {

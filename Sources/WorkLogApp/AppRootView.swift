@@ -152,6 +152,9 @@ struct AppRootView: View {
                         .accessibilityLabel("안내 닫기").worklogHelp("안내 닫기")
                 }.padding(12)
             }
+            if let message = controller.taskNotifications?.errorMessage {
+                InlineNotice(message: message).padding(12)
+            }
             GeometryReader { viewport in
                 destination(environment)
                     .environment(\.worklogContentAutofocus, !sidebarFocused)
@@ -293,7 +296,8 @@ struct AppRootView: View {
                 SettingsScreen(chatGPTLogin: controller.chatGPTLogin, model: settings, prompts: prompts, onSave: { controller.saveSettings() },
                     onBeginHotkeyRecording: { controller.beginHotkeyRecording() },
                     onEndHotkeyRecording: { controller.endHotkeyRecording() },
-                    backups: controller.backups, onOpenBackups: { controller.route = .backups })
+                    backups: controller.backups, onOpenBackups: { controller.route = .backups },
+                    activityIntegrations: controller.activityIntegrations, onImported: { controller.refresh() })
             }
         case .backups:
             if let backups = controller.backups {

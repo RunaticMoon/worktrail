@@ -34,7 +34,7 @@ final class MeetingAudioStoreTests: XCTestCase {
         XCTAssertEqual(old.transcript, "보존할 전사")
         XCTAssertEqual(old.notes, "보존할 메모")
         XCTAssertTrue(try service.create(title: "새 회의").localOnly)
-        XCTAssertEqual(db.userVersion, 6)
+        XCTAssertEqual(db.userVersion, WorkSchema.migrations.map(\.version).max())
         try Migrator.migrate(db, migrations: WorkSchema.migrations)
         XCTAssertEqual(try service.meetings().count, 2)
         XCTAssertTrue(try db.integrityCheck())

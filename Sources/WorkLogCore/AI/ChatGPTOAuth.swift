@@ -41,8 +41,10 @@ public struct ChatGPTHTTPResponse: Sendable {
     public var status: Int
     public var body: Data
     public var requestID: String?
-    public init(status: Int, body: Data, requestID: String? = nil) {
+    public var headers: [String: String]
+    public init(status: Int, body: Data, requestID: String? = nil, headers: [String: String] = [:]) {
         self.status = status; self.body = body; self.requestID = requestID
+        self.headers = headers.reduce(into: [:]) { $0[$1.key.lowercased()] = $1.value }
     }
 }
 
@@ -129,8 +131,13 @@ private final class ChatGPTHTTPDownload: NSObject, URLSessionDataDelegate, @unch
             return
         }
         lock.lock()
-        let result = response.map { ChatGPTHTTPResponse(status: $0.statusCode, body: data,
-                                                        requestID: $0.value(forHTTPHeaderField: "x-request-id")) }
+        let result = response.map { response in
+            ChatGPTHTTPResponse(status: response.statusCode, body: data,
+                requestID: response.value(forHTTPHeaderField: "x-request-id"),
+                headers: response.allHeaderFields.reduce(into: [:]) { result, pair in
+                    if let key = pair.key as? String { result[key.lowercased()] = String(describing: pair.value) }
+                })
+        }
         lock.unlock()
         if let result { finish(.success(result)) }
         else { finish(.failure(AIProviderError(.protocolMismatch, "OpenAI HTTP 응답이 없습니다."))) }

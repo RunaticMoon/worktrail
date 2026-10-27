@@ -34,6 +34,8 @@ public enum AIConnectionSummary: Equatable, Sendable {
 
 @Observable @MainActor public final class SettingsModel {
     public var draft: AppSettings
+    public var aiConnection = AIConnectionSettings()
+    public private(set) var apiKeyMessage: String?
     public private(set) var errors: [String] = []
     public private(set) var message: String?
     public private(set) var accountMessage = "로그인 상태를 아직 확인하지 않았습니다."
@@ -43,20 +45,26 @@ public enum AIConnectionSummary: Equatable, Sendable {
     public private(set) var modelCatalogMessage = "모델 목록을 불러오면 계정에서 사용할 수 있는 모델과 추론 강도를 선택할 수 있습니다."
     public private(set) var aiTaskProfiles = AITaskProfiles()
     @ObservationIgnored private let profileStore: AITaskProfileStore
+    @ObservationIgnored private let connectionStore: AIConnectionSettingsStore
+    @ObservationIgnored private let credentialStore: (any ServiceCredentialStore)?
+    @ObservationIgnored private var savedConnection = AIConnectionSettings()
+    @ObservationIgnored private var connectionLoadFailed = false
     @ObservationIgnored private var savedProfiles = AITaskProfiles()
     @ObservationIgnored private var profileLoadFailed = false
     @ObservationIgnored private var catalogGeneration = 0
     @ObservationIgnored private var hasRequestedModels = false
     @ObservationIgnored private var requestedModelsExecutablePath: String?
     @ObservationIgnored private var environment: AppEnvironment?
-    public static let transmissionNotice = "연결한 ChatGPT 계정에는 일반 메모·업무·활동·계획·리포트·회의 전사와 메모·관련 근거·질문·스킬 지침을 작업에 필요한 범위로 전송합니다. 회의 음성 파일은 전송하지 않습니다. Secret은 제목·그룹·key·값·이전 버전·초안까지 모두 제외합니다."
-    public init(environment: AppEnvironment) {
+    public static let transmissionNotice = "선택한 AI 공급자에는 일반 메모·업무·활동·계획·리포트·회의 전사와 메모·관련 근거·질문·스킬 지침을 작업에 필요한 범위로 전송합니다. 회의 음성 파일은 전송하지 않습니다. Secret은 제목·그룹·key·값·이전 버전·초안까지 모두 제외합니다."
+    public init(environment: AppEnvironment, credentialStore: (any ServiceCredentialStore)? = nil) {
         self.environment = environment; draft = environment.settings
+        self.credentialStore = credentialStore
         profileStore = AITaskProfileStore(dataRoot: environment.options.paths.dataRoot, ids: environment.options.ids)
-        loadProfiles()
+        connectionStore = AIConnectionSettingsStore(dataRoot: environment.options.paths.dataRoot, ids: environment.options.ids)
+        loadProfiles(); loadConnection()
     }
     public var hasChanges: Bool {
-        environment.map { draft != $0.settings || aiTaskProfiles != savedProfiles } ?? false
+        environment.map { draft != $0.settings || aiTaskProfiles != savedProfiles || aiConnection != savedConnection } ?? false
     }
     public var defaultCaptureKind: CaptureKind {
         get { draft.defaultCaptureKind }
@@ -65,21 +73,25 @@ public enum AIConnectionSummary: Equatable, Sendable {
     public func detach() { catalogGeneration += 1; environment = nil }
     /// 설정 화면 상단의 AI 연결 상태. 런타임 AI 실행기가 없으면 미연결로 본다.
     public var aiConnectionSummary: AIConnectionSummary {
-        guard let environment, environment.settings.aiEnabled, environment.aiRunner != nil, hasVerifiedAccount else { return .notConfigured }
+        guard let environment, environment.settings.aiEnabled, environment.aiRunner != nil, hasVerifiedAccount,
+              !hasUnsavedAIConnection else { return .notConfigured }
         return .connected
     }
     public func reset() {
         if let environment { draft = environment.settings }
         catalogGeneration += 1
-        errors = []; message = nil; loadProfiles()
+        errors = []; message = nil; loadProfiles(); loadConnection()
     }
     public func validate() -> Bool {
         // 단축키 검증·정규화 규칙은 HotkeyBinding 한 곳에서만 정의한다.
         errors = SettingsStore.validate(draft)
+        if connectionLoadFailed { errors.append("AI 연결 설정을 읽을 수 없습니다. 기존 파일을 확인하세요.") }
+        do { try aiConnection.validate() } catch let error as AIProviderError { errors.append(error.message) }
+        catch { errors.append("AI 연결 설정을 확인하세요.") }
         if profileLoadFailed { errors.append("AI 작업 설정을 읽을 수 없습니다. 기존 파일을 확인한 뒤 다시 불러오세요.") }
         for type in AIJobType.allCases {
             let profile = aiTaskProfiles[type]
-            if let model = profile.model, !aiTaskProfiles.models.isEmpty,
+            if aiConnection.kind == .codexCLI, let model = profile.model, !aiTaskProfiles.models.isEmpty,
                !aiTaskProfiles.models.contains(where: { $0.id == model }) {
                 errors.append("현재 목록에 없는 모델이 선택되어 있습니다. 작업별 AI 설정에서 모델을 다시 선택하세요.")
                 break
@@ -135,10 +147,14 @@ public enum AIConnectionSummary: Equatable, Sendable {
             let applySettings = {
                 if let apply { try apply(self.draft) } else { try environment.updateSettings(self.draft) }
             }
-            if aiTaskProfiles != savedProfiles {
-                try profileStore.save(aiTaskProfiles, applying: applySettings)
-                savedProfiles = aiTaskProfiles
-            } else { try applySettings() }
+            let connectionChanged = aiConnection != savedConnection || draft.codexExecutablePath != environment.settings.codexExecutablePath
+            try connectionStore.save(aiConnection) {
+                if aiTaskProfiles != savedProfiles {
+                    try profileStore.save(aiTaskProfiles, applying: applySettings)
+                } else { try applySettings() }
+            }
+            savedProfiles = aiTaskProfiles; savedConnection = aiConnection
+            if connectionChanged { accountConnectionChanged() }
             message = "설정을 저장했습니다. 모델·추론 강도는 다음 AI 작업부터 적용됩니다. AI 사용을 새로 켰다면 앱을 다시 열어 주세요."
             errors = []; return true
         } catch {
@@ -157,12 +173,59 @@ public enum AIConnectionSummary: Equatable, Sendable {
     public func setSkill(_ value: String, for type: AIJobType) { draft.skillBindings[type.rawValue] = value }
     public func skillBinding(for type: AIJobType) -> String { draft.skillBindings[type.rawValue] ?? "" }
 
+    public var hasUnsavedAIConnection: Bool {
+        aiConnection != savedConnection || draft.codexExecutablePath != environment?.settings.codexExecutablePath
+    }
+    private func loadConnection() {
+        do { aiConnection = try connectionStore.load(); savedConnection = aiConnection; connectionLoadFailed = false }
+        catch { connectionLoadFailed = true; errors.append("AI 연결 설정을 읽을 수 없습니다. 기존 파일을 확인하세요.") }
+    }
+    public func selectConnection(_ kind: AIConnectionKind) {
+        guard kind != aiConnection.kind else { return }
+        aiConnection.kind = kind
+        aiTaskProfiles = AITaskProfiles()
+        hasVerifiedAccount = false; hasRequestedModels = false; catalogGeneration += 1
+        accountMessage = "연결 방식을 저장한 뒤 상태를 확인하세요."
+    }
+    public func useDeepSeekPreset() {
+        selectConnection(.openAICompatible)
+        aiConnection.baseURL = "https://api.deepseek.com"; aiConnection.model = "deepseek-flash"
+        aiTaskProfiles = AITaskProfiles()
+    }
+    @discardableResult public func saveAPIKey(_ value: String) async -> Bool {
+        do {
+            guard let credentialStore else { throw AIProviderError(.notLoggedIn, "안전한 인증 저장소를 사용할 수 없습니다.") }
+            let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, !key.contains("\r"), !key.contains("\n") else {
+                throw AIProviderError(.notLoggedIn, "API 키를 입력하세요.")
+            }
+            let account = try aiConnection.credentialAccount()
+            await (environment?.options.aiProvider as? ConfiguredAIProvider)?.invalidateConnection()
+            try credentialStore.write(key, account: account)
+            await (environment?.options.aiProvider as? ConfiguredAIProvider)?.invalidateConnection()
+            accountConnectionChanged(); apiKeyMessage = "이 API 주소의 키를 Keychain에 저장했습니다. 연결 설정도 저장하세요."
+            return true
+        } catch let error as AIProviderError { apiKeyMessage = error.message }
+        catch { apiKeyMessage = "API 키를 안전하게 저장하지 못했습니다." }
+        return false
+    }
+    public func deleteAPIKey() async {
+        do {
+            guard let credentialStore else { return }
+            let account = try aiConnection.credentialAccount()
+            await (environment?.options.aiProvider as? ConfiguredAIProvider)?.invalidateConnection()
+            try credentialStore.delete(account: account)
+            await (environment?.options.aiProvider as? ConfiguredAIProvider)?.invalidateConnection()
+            accountConnectionChanged(); apiKeyMessage = "이 API 주소의 저장된 키를 삭제했습니다."
+        } catch { apiKeyMessage = "API 키를 삭제하지 못했습니다." }
+    }
+
     private func loadProfiles() {
         do {
             aiTaskProfiles = try profileStore.load(); savedProfiles = aiTaskProfiles
             profileLoadFailed = false
             if !aiTaskProfiles.models.isEmpty {
-                modelCatalogMessage = "저장된 모델 목록을 사용합니다. ChatGPT 계정이 바뀌었다면 새로 불러오세요."
+                modelCatalogMessage = "저장된 모델 목록을 사용합니다. 선택한 AI 연결이 바뀌었다면 새로 불러오세요."
             } else {
                 modelCatalogMessage = "모델 목록을 불러오면 계정에서 사용할 수 있는 모델과 추론 강도를 선택할 수 있습니다."
             }
@@ -186,7 +249,9 @@ public enum AIConnectionSummary: Equatable, Sendable {
     }
     public func modelOptions(for type: AIJobType) -> [AIModelOption] {
         let automaticTitle: String
-        if let model = aiTaskProfiles.automaticModel(for: type) {
+        if aiConnection.kind == .openAICompatible {
+            automaticTitle = "자동 · \(aiConnection.model)"
+        } else if let model = aiTaskProfiles.automaticModel(for: type) {
             automaticTitle = "자동 · \(model.id)"
         } else {
             automaticTitle = isLoadingModels ? "자동 · 모델 확인 중…" : "자동 · 계정 모델 확인 필요"
@@ -223,12 +288,15 @@ public enum AIConnectionSummary: Equatable, Sendable {
         case .meetingSummary: purpose = "회의 전사와 직접 작성한 메모를 함께 요약합니다."
         case .performanceReport: purpose = "기간 전체의 근거와 성과를 깊이 있게 종합합니다."
         }
+        if aiConnection.kind == .openAICompatible {
+            return purpose + " 적용: \(aiTaskProfiles[type].model ?? aiConnection.model) · API 모델 기본 추론 설정."
+        }
         guard let model = aiTaskProfiles.selectedModel(for: type) else {
             if let model = aiTaskProfiles[type].model {
                 let effort = aiTaskProfiles[type].effort.map(AITaskProfiles.effortTitle) ?? "모델 기본값"
                 return purpose + " 저장된 선택: \(model) · 추론 \(effort). 모델 목록을 확인하세요."
             }
-            return purpose + " ChatGPT 계정에서 사용 가능한 모델을 확인합니다. 모델을 조회할 수 없으면 실행 전에 안내합니다."
+            return purpose + " 선택한 AI 연결에서 사용 가능한 모델을 확인합니다. 모델을 조회할 수 없으면 실행 전에 안내합니다."
         }
         let effective = aiTaskProfiles.executionProfile(for: type)
         let effort = effective.effort.map(AITaskProfiles.effortTitle) ?? "모델 기본값"
@@ -245,26 +313,28 @@ public enum AIConnectionSummary: Equatable, Sendable {
 
     public func refreshModels(provider: AIModelCatalogProvider? = nil) async {
         guard !isLoadingModels, let environment else { return }
+        guard !hasUnsavedAIConnection else { modelCatalogMessage = "연결 설정을 먼저 저장하세요."; return }
         hasRequestedModels = true
         requestedModelsExecutablePath = draft.codexExecutablePath
         isLoadingModels = true; defer { isLoadingModels = false }
         let generation = catalogGeneration
         let executablePath = draft.codexExecutablePath
+        let connection = aiConnection
         guard let provider = provider ?? (environment.options.aiProvider as? AIModelCatalogProvider) else {
-            modelCatalogMessage = "ChatGPT OAuth 연결을 사용할 수 없습니다."; return
+            modelCatalogMessage = "AI 연결을 사용할 수 없습니다. Codex CLI 경로 또는 API 설정을 확인하세요."; return
         }
         do {
             let models = try await provider.listAvailableModels()
             guard self.environment != nil, generation == catalogGeneration,
-                  executablePath == draft.codexExecutablePath else { return }
+                  executablePath == draft.codexExecutablePath, connection == aiConnection else { return }
             aiTaskProfiles.models = models
             modelCatalogMessage = aiTaskProfiles.models.isEmpty
-                ? "사용 가능한 모델이 없습니다. ChatGPT 로그인 상태를 확인하세요."
+                ? "사용 가능한 모델이 없습니다. CLI 로그인 또는 API 키를 확인하세요."
                 : "모델 \(aiTaskProfiles.models.count)개를 불러왔습니다. 저장하면 다음 AI 작업부터 적용됩니다."
         } catch {
             guard self.environment != nil, generation == catalogGeneration,
-                  executablePath == draft.codexExecutablePath else { return }
-            modelCatalogMessage = "모델 목록을 불러오지 못했습니다. ChatGPT 로그인과 플랜 지원 범위를 확인하세요. 저장된 선택은 유지됩니다."
+                  executablePath == draft.codexExecutablePath, connection == aiConnection else { return }
+            modelCatalogMessage = "모델 목록을 불러오지 못했습니다. CLI 로그인 또는 API 주소·키를 확인하세요. 저장된 선택은 유지됩니다."
         }
     }
     /// Account changes invalidate in-flight catalog responses and persisted metadata, not user choices.
@@ -283,31 +353,33 @@ public enum AIConnectionSummary: Equatable, Sendable {
     }
     public func checkAccount(provider: AIProvider? = nil) async {
         guard !isCheckingAccount, let environment else { return }
+        guard !hasUnsavedAIConnection else { accountMessage = "연결 설정을 먼저 저장하세요."; return }
         isCheckingAccount = true; hasVerifiedAccount = false; defer { isCheckingAccount = false }
         // No account reads at initialization, and no access to authentication files.
         guard let provider = provider ?? environment.options.aiProvider else {
-            accountMessage = "ChatGPT OAuth 연결을 사용할 수 없습니다."; return
+            accountMessage = "AI 연결을 사용할 수 없습니다. Codex CLI 경로 또는 API 설정을 확인하세요."; return
         }
         let generation = catalogGeneration
+        let connection = aiConnection
         do {
             let state = try await provider.getAccountStatus()
-            guard self.environment != nil, generation == catalogGeneration else { return }
+            guard self.environment != nil, generation == catalogGeneration, connection == aiConnection else { return }
             switch state {
             case .unknown: accountMessage = "로그인 상태를 확인할 수 없습니다."
-            case .notInstalled: accountMessage = "ChatGPT OAuth 연결을 사용할 수 없습니다."
-            case .loggedOut: accountMessage = "로그인되어 있지 않습니다. ‘ChatGPT로 로그인’을 눌러 연결하세요."
+            case .notInstalled: accountMessage = "AI 연결을 사용할 수 없습니다. Codex CLI 경로 또는 API 설정을 확인하세요."
+            case .loggedOut: accountMessage = "로그인되어 있지 않습니다. 터미널에서 codex login을 실행하거나 API 키를 저장하세요."
             case .loggedIn(let type, let email, let plan):
                 hasVerifiedAccount = true
                 let enterprise = [type, plan].compactMap { $0 }.contains { $0.lowercased().contains("enterprise") }
-                accountMessage = enterprise ? "로그인됨 · Enterprise 플랜 사용 가능 여부는 모델 조회와 실제 요청에서 확인합니다." : "ChatGPT 로그인됨 · 사용할 수 있는 모델을 조회하세요."
+                accountMessage = enterprise ? "Codex CLI 로그인됨 · Enterprise · 모델 사용 가능 여부는 실제 요청에서 확인합니다." : "AI 연결 확인됨 · 사용할 수 있는 모델을 조회하세요."
                 if let email, !email.isEmpty { accountMessage = email + " · " + accountMessage }
             }
         } catch {
-            guard self.environment != nil, generation == catalogGeneration else { return }
+            guard self.environment != nil, generation == catalogGeneration, connection == aiConnection else { return }
             switch AIErrorClassifier.classify(error) {
-            case .notInstalled: accountMessage = "ChatGPT OAuth 연결을 사용할 수 없습니다."
-            case .notLoggedIn, .authExpired: accountMessage = "인증을 확인하지 못했습니다. ChatGPT로 다시 로그인하세요."
-            default: accountMessage = "로그인 상태 확인에 실패했습니다. ChatGPT 연결을 확인하세요."
+            case .notInstalled: accountMessage = "AI 연결을 사용할 수 없습니다. Codex CLI 경로 또는 API 설정을 확인하세요."
+            case .notLoggedIn, .authExpired: accountMessage = "인증을 확인하지 못했습니다. CLI 로그인 또는 API 키를 확인하세요."
+            default: accountMessage = "로그인 상태 확인에 실패했습니다. CLI 또는 API 연결을 확인하세요."
             }
         }
     }
