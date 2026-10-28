@@ -170,7 +170,8 @@ import WorkLogCore
     }
 
     @ViewBuilder private func rowMetadata(_ item: ReportLibraryItem) -> some View {
-        Text(item.familyLabel).font(.callout).foregroundStyle(.secondary)
+        Label(item.familyLabel, systemImage: item.report.family == .submission ? "doc.text" : "chart.bar.xaxis")
+            .font(.callout).foregroundStyle(.secondary)
         StatusBadge(label: item.stateLabel,
             systemImage: item.latestVersion?.state == .confirmed ? "checkmark.seal" : "doc.text",
             tone: item.latestVersion?.state == .confirmed ? .success : .neutral)

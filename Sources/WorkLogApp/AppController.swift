@@ -25,6 +25,13 @@ import WorkLogCore
     private(set) var settingsModel: SettingsModel?
     private(set) var backups: BackupModel?
     private(set) var meetings: MeetingsModel?
+    private(set) var activityIntegrations: ActivityIntegrationsModel?
+    private(set) var taskNotifications: TaskNotificationScheduler?
+    private var usesFixture = false
+    private var maintenanceTimer: Timer?
+    private var maintenanceTask: Task<Void, Never>?
+    private var notificationTask: Task<Void, Never>?
+    private var needsNotificationRefresh = false
     private(set) var chatGPTLogin: ChatGPTLoginCoordinator?
     private var protectionTimer: Timer?
     private var isRestoring = false
@@ -70,10 +77,31 @@ import WorkLogCore
             plan = PlanModel(environment: env)
             quiz = QuizModel(environment: env)
             secrets = SecretsModel(environment: env)
-            settingsModel = SettingsModel(environment: env)
+            settingsModel = SettingsModel(environment: env, credentialStore: usesFixture ? nil : ServiceKeychainCredentialStore())
             backups = BackupModel(environment: env)
             meetings = MeetingsModel(environment: env)
+            if !usesFixture {
+                activityIntegrations = ActivityIntegrationsModel(dataRoot: env.options.paths.dataRoot,
+                    repo: env.repo, credentials: ServiceKeychainCredentialStore())
+                if Bundle.main.bundleIdentifier != nil {
+                    taskNotifications = TaskNotificationScheduler()
+                    taskNotifications?.onOpenTask = { [weak self] id in
+                        self?.openMainWindow?(); NSApp.activate(); self?.openTask(id)
+                    }
+                }
+            }
+            #if DEBUG
+            if usesFixture {
+                activityIntegrations = ActivityIntegrationsModel(dataRoot: env.options.paths.dataRoot,
+                    repo: env.repo, credentials: FixtureServiceCredentials(),
+                    client: ActivityAPIClient(transport: FixtureActivityTransport()))
+            }
+            #endif
+            taskDetail?.onChanged = { [weak self] in self?.refreshBackgroundServices() }
             installProtectionTimer()
+            maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshBackgroundServices() }
+            }
             let launch = env.onLaunch()
             if launch.backupError != nil { notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다." }
             refresh()
@@ -100,24 +128,14 @@ import WorkLogCore
     private func openEnvironment() async throws -> AppEnvironment {
         #if DEBUG
         if let fixture = try UITestFixture.requested() {
+            usesFixture = true
             return try await fixture.makeEnvironment()
         }
         #endif
         let paths = AppPaths.standard()
-        let profileStore = AITaskProfileStore(dataRoot: paths.dataRoot)
-        let transport = ChatGPTURLSessionTransport()
-        let session = ChatGPTOAuthSession(
-            store: ChatGPTKeychainCredentialStore(service: AppIdentity.default.bundleIdentifier + ".chatgpt-oauth"),
-            transport: transport, identityValidator: ChatGPTJWKSIdentityValidator(transport: transport))
-        let provider = ChatGPTResponsesProvider(session: session,
-            blockedSkillPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path],
-            profileResolver: { type in
-                guard try SettingsStore(fileURL: paths.settingsFile).load().aiEnabled else {
-                    throw AIProviderError(.policyRestricted, "설정에서 AI 사용이 꺼져 있습니다.")
-                }
-                return try profileStore.load()[type]
-            })
-        chatGPTLogin = ChatGPTLoginCoordinator(session: session, cancelRequests: { await provider.cancelAll() })
+        usesFixture = false
+        let provider = AIProviderFactory.make(paths: paths)
+        chatGPTLogin = nil
         return try AppEnvironment.open(AppEnvironmentOptions(paths: paths,
             keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier),
             authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider))
@@ -139,6 +157,9 @@ import WorkLogCore
         navigate(to: routes[(current + offset + routes.count) % routes.count])
     }
     private func clearRegistrations() {
+        maintenanceTimer?.invalidate(); maintenanceTimer = nil
+        maintenanceTask?.cancel()
+        notificationTask?.cancel()
         protectionTimer?.invalidate(); protectionTimer = nil
         hotkeyCoordinator?.shutdown(); hotkeyCoordinator = nil
         hotkeys?.shutdown()
@@ -160,6 +181,28 @@ import WorkLogCore
         if let selectedTaskId { taskDetail?.load(taskId: selectedTaskId, asOf: taskDetail?.asOf) }
         search?.search()
         if let graph, graph.phase != .idle { graph.reload() }
+        refreshBackgroundServices()
+    }
+
+    private func refreshBackgroundServices() {
+        guard !isRestoring, !usesFixture, let environment else { return }
+        // Network collection must never delay cancellation/rescheduling of due notifications.
+        needsNotificationRefresh = true
+        if notificationTask == nil {
+            notificationTask = Task { [weak self] in
+                repeat {
+                    self?.needsNotificationRefresh = false
+                    await self?.taskNotifications?.refresh(environment: environment)
+                } while self?.needsNotificationRefresh == true && !Task.isCancelled
+                self?.notificationTask = nil
+            }
+        }
+        guard maintenanceTask == nil else { return }
+        maintenanceTask = Task { [weak self] in
+            if !Task.isCancelled { await self?.activityIntegrations?.sync() }
+            if !Task.isCancelled { self?.day?.load(); self?.search?.search() }
+            self?.maintenanceTask = nil
+        }
     }
     func openTask(_ id: String, asOf: WorkDate? = nil) {
         selectedTaskId = id
@@ -340,6 +383,10 @@ import WorkLogCore
     }
 
     func restoreBackup(_ backup: BackupInfo, includeVault: Bool) async {
+        guard activityIntegrations?.isRunning != true else {
+            notice = "활동 수집이 끝난 뒤 백업을 복원하세요."
+            return
+        }
         guard meetings?.isBusy != true, meetings?.recorder.recordingURL == nil else {
             notice = "회의 작업을 마치고 남은 녹음을 내보내거나 삭제한 뒤 백업을 복원하세요."
             return
@@ -350,6 +397,14 @@ import WorkLogCore
             return
         }
         isRestoring = true
+        activityIntegrations?.detach()
+        maintenanceTask?.cancel()
+        notificationTask?.cancel()
+        await maintenanceTask?.value
+        await notificationTask?.value
+        maintenanceTask = nil
+        notificationTask = nil
+        activityIntegrations = nil; taskNotifications = nil
         // Weak lifetime checks ensure SQLite deinit has closed both databases before file replacement.
         weak var previousEnvironment = environment
         weak var previousCapture = captureSession
@@ -411,6 +466,10 @@ import WorkLogCore
     }
 
     private func installLifecycleObservers() {
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshBackgroundServices() }
+            })
         isPanelKeyWindow = NSApp.keyWindow is NSPanel
         observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
             object: nil, queue: .main) { [weak self] notification in

@@ -67,7 +67,7 @@ private struct MeetingCaptureSettingsView: View {
                     .frame(maxWidth: 300)
                 Picker("마이크/현장", selection: $audio.microphoneID) {
                     Text("장치 선택").tag("")
-                    ForEach(audio.microphones) { Text($0.name).tag($0.id) }
+                    ForEach(audio.microphones) { Text($0.name + ($0.isBuiltIn ? " · Mac 내장" : "")).tag($0.id) }
                 }.frame(maxWidth: 320)
                 Button("장치 새로고침") { audio.refreshMicrophones() }
             }.disabled(audio.isCapturing)

@@ -163,10 +163,10 @@ import WorkLogCore
 
     private var titleList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("제목 검색", text: $model.query).textFieldStyle(.roundedBorder)
+            TextField("제목·그룹 검색", text: $model.query).textFieldStyle(.roundedBorder)
                 .focused($queryFocused)
                 .accessibilityLabel("Secret 제목 검색")
-                .accessibilityHint("잠금 중에도 제목만 검색합니다")
+                .accessibilityHint("잠금 중에도 제목과 그룹만 검색합니다")
             if model.titles.isEmpty {
                 if model.query.isEmpty {
                     StateView(kind: .empty, title: "저장된 Secret이 없습니다", detail: "새 Secret을 입력하세요.",
@@ -183,17 +183,18 @@ import WorkLogCore
                     selectTitle(item)
                     if NSApp.currentEvent?.type == .leftMouseUp { showsTitlePicker = false }
                 })) {
-                    ForEach(model.titles) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).font(.body.weight(.medium))
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let group = item.groupName {
-                                Text(group).font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    ForEach(model.titleGroups) { group in
+                        Section {
+                            ForEach(group.items) { item in
+                                Text(item.title).font(.body.weight(.medium))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                                    .tag(item.id)
+                                    .accessibilityLabel("\(item.title), \(group.label)")
                             }
+                        } header: {
+                            Label("\(group.label) · \(group.items.count)", systemImage: "folder")
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                        .tag(item.id)
-                        .accessibilityElement(children: .combine)
                     }
                 }
                 .listStyle(.plain)
@@ -330,13 +331,13 @@ import WorkLogCore
         }
         guard modifiers.isEmpty, !model.isUnlocking, !model.titles.isEmpty else { return false }
         if queryFocused, event.keyCode == 125 {
-            if selectedTitleId == nil, let item = model.titles.first { selectTitle(item) }
+            if selectedTitleId == nil, let item = model.titleGroups.first?.items.first { selectTitle(item) }
             queryFocused = false; titlesFocused = true
             return true
         }
         if queryFocused || titlesFocused, event.keyCode == 36 || event.keyCode == 76 {
             if !event.isARepeat {
-                if selectedTitleId == nil, let item = model.titles.first { selectTitle(item) }
+                if selectedTitleId == nil, let item = model.titleGroups.first?.items.first { selectTitle(item) }
                 showsTitlePicker = false
                 if model.isLocked { unlock() }
                 else if model.selectedId != nil { viewerFocusRequest += 1 }

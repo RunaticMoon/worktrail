@@ -459,10 +459,10 @@ extension View {
                 }
             case .secret:
                 if let navigation,
-                   ["secretTitle", "secretUnlock", "secretContinue", "secretRetry"].contains(where: { navigation.focus($0) }) {
+                   ["secretGroup", "secretUnlock", "secretContinue", "secretRetry"].contains(where: { navigation.focus($0) }) {
                     return
                 }
-                for label in ["Secret 제목", "잠금 해제", "이어서 편집", "다시 시도"] {
+                for label in ["그룹 (선택 사항)", "잠금 해제", "이어서 편집", "다시 시도"] {
                     if self.focusAccessibleElement(in: self.contentView, label: label) { break }
                 }
             }
@@ -915,6 +915,10 @@ extension View {
                         CaptureDraftEditor(model: model,
                             label: isNewTask ? "첫 줄은 업무명, 다음 줄은 진행 내용" : "진행 내용", showsTokens: true)
                         if isNewTask {
+                            TaskDueFields(dueOn: $model.dueOn, daysBefore: $model.dueReminderDaysBefore,
+                                          calendar: model.workCalendar, defaultDate: model.workDate,
+                                          isCapture: true)
+                                .disabled(isLocked)
                             VStack(alignment: .leading, spacing: 6) {
                                 Toggle("프로젝트별로 진행·완료를 따로 관리", isOn: Binding(
                                     get: { model.projectTrackingMode == .perProject },
