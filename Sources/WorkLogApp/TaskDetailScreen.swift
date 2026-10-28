@@ -8,6 +8,8 @@ import WorkLogCore
     let onClose: () -> Void
     var taskNames: [String: String] = [:]
     var onOpenTask: ((String) -> Void)? = nil
+    var meetingRepository: WorkRepository? = nil
+    var onOpenMeeting: ((MeetingLocalSearchHit) -> Void)? = nil
     @State private var editingProperties = false
     @State private var editingChecklist: ChecklistItem?
     @State private var correctingEvent: DomainEvent?
@@ -51,6 +53,10 @@ import WorkLogCore
                 if let error = model.errorMessage { InlineNotice(message: error) }
                 if let notice = model.noticeMessage { Text(notice).font(.callout).foregroundStyle(.secondary) }
                 if let detail = model.detail {
+                    if let meetingRepository, let onOpenMeeting {
+                        TaskMeetingEvidenceView(repo: meetingRepository, taskID: detail.task.id, onOpen: onOpenMeeting)
+                            .disabled(hasUnsavedInput)
+                    }
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 12) { taskStatus(detail) }
                         VStack(alignment: .leading, spacing: 8) { taskStatus(detail) }

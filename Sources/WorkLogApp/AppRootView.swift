@@ -99,7 +99,11 @@ struct AppRootView: View {
                     set: { if !$0 { controller.selectedTaskId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                     if let detail = controller.taskDetail {
                         TaskDetailScreen(model: detail, onClose: { controller.selectedTaskId = nil },
-                            taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) })
+                            taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) },
+                            meetingRepository: environment.repo, onOpenMeeting: { hit in
+                                controller.selectedTaskId = nil
+                                controller.openMeeting(hit)
+                            })
                             .buttonStyle(.bordered)
                             .frame(minWidth: 560, minHeight: 480)
                     }
@@ -258,14 +262,20 @@ struct AppRootView: View {
                 ProjectsScreen(model: projects, calendar: environment.calendar,
                     onOpen: { controller.openTask($0) }, onCapture: { controller.showTaskCapture() },
                     onProjectCreated: { controller.refresh() },
+                    relatedMeetings: controller.meetings?.rows ?? [],
+                    onOpenMeetings: { controller.openProjectMeetings($0) },
                     detailDismissalRevision: detailDismissalRevision)
             }
         case .meetings:
-            if let meetings = controller.meetings { MeetingsScreen(model: meetings) }
+            if let meetings = controller.meetings {
+                MeetingsScreen(model: meetings).onAppear {
+                    meetings.onOpenTask = { controller.openTask($0) }
+                }
+            }
         case .search:
             if let search = controller.search, let surface = controller.searchSurface {
                 SearchScreen(model: search, surface: surface, environment: environment, secrets: controller.secrets,
-                    onOpenSecrets: { controller.route = .secrets })
+                    onOpenSecrets: { controller.route = .secrets }, onOpenMeeting: { controller.openMeeting($0) })
             }
         case .graph:
             if let graph = controller.graph { GraphScreen(model: graph, onOpen: { controller.openGraphNode($0) }) }

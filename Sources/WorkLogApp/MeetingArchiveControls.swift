@@ -44,6 +44,7 @@ private struct MeetingArchiveSheet: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
             }
+            .disabled(busy)
             GroupBox("가져오기") {
                 VStack(alignment: .leading, spacing: 10) {
                     Button("아카이브 폴더 선택…") { chooseImport() }
@@ -57,9 +58,10 @@ private struct MeetingArchiveSheet: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
             }
+            .disabled(busy)
             if let message { Text(message).font(.callout).fixedSize(horizontal: false, vertical: true) }
             HStack {
-                if busy { ProgressView().controlSize(.small); Text("로컬 파일 처리 중…"); Button("작업 취소") { worker?.cancel() } }
+                if busy { ProgressView().controlSize(.small); Text("로컬 파일 처리 중…"); Button("작업 취소") { worker?.cancel() }.disabled(worker == nil) }
                 Spacer()
                 Button("닫기") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
             }
@@ -89,9 +91,9 @@ private struct MeetingArchiveSheet: View {
         panel.canCreateDirectories = true
         panel.begin { result in
             guard result == .OK, let url = panel.url else { return }
-            let service = service, include = includeAudio, id = meeting.id
+            let service = service, include = includeAudio, id = meeting.id, preview = exportPreview
             run {
-                try service.export(meetingID: id, includeAudio: include, to: url) { try Task.checkCancellation() }
+                try service.export(meetingID: id, includeAudio: include, to: url, expectedPreview: preview) { try Task.checkCancellation() }
                 return nil
             }
         }

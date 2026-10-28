@@ -11,7 +11,9 @@ import WorkLogCore
     let environment: AppEnvironment
     var secrets: SecretsModel? = nil
     var onOpenSecrets: (() -> Void)? = nil
+    var onOpenMeeting: ((MeetingLocalSearchHit) -> Void)? = nil
     var isPanel: Bool = false
+    @State private var showingMeetingSearch = false
     @State private var secretQuery = ""
     @State private var completedQuery = ""
     @State private var secretTitles: [SecretMetadata] = []
@@ -64,11 +66,22 @@ import WorkLogCore
     var body: some View {
         searchLifecycle
             .sheet(isPresented: sourcePresented, onDismiss: sourceDidDismiss) { sourceSheet }
+            .sheet(isPresented: $showingMeetingSearch) {
+                MeetingLocalSearchSheet(repo: environment.repo) { hit in
+                    showingMeetingSearch = false
+                    onOpenMeeting?(hit)
+                }
+            }
     }
 
     private var searchContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            scopePicker
+            HStack(alignment: .top) {
+                scopePicker
+                Button("회의 (로컬)", systemImage: "waveform") { showingMeetingSearch = true }
+                    .disabled(onOpenMeeting == nil)
+                    .accessibilityIdentifier("search.scope.meetings")
+            }
             queryField
             searchResults
             keyboardHints
@@ -994,7 +1007,8 @@ import WorkLogCore
 
 
     private func taskSourceSheet(_ detail: TaskDetailModel) -> some View {
-        TaskDetailScreen(model: detail, onClose: closeSource)
+        TaskDetailScreen(model: detail, onClose: closeSource, meetingRepository: environment.repo,
+            onOpenMeeting: { hit in closeSource(); onOpenMeeting?(hit) })
             .buttonStyle(.bordered)
             .frame(minWidth: 560, minHeight: 480)
     }

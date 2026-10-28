@@ -26,6 +26,7 @@ public struct TaskDisclosurePolicy {
             return !facts.tasks.contains { protected.contains($0.id) }
                 && !facts.sources.contains { $0.taskId.map(protected.contains) ?? false }
                 && !facts.confirmedPlans.contains { protected.contains($0.taskId) }
+                && !facts.memoLinksAccepted.contains { protected.contains($0.taskId) }
         case .memo, .github, .jira: return true
         }
     }
@@ -36,7 +37,8 @@ public struct TaskDisclosurePolicy {
         let protected = try protectedTaskIDs()
         guard !facts.tasks.contains(where: { protected.contains($0.id) }),
               !facts.sources.contains(where: { $0.taskId.map(protected.contains) ?? false }),
-              !facts.confirmedPlans.contains(where: { protected.contains($0.taskId) }) else {
+              !facts.confirmedPlans.contains(where: { protected.contains($0.taskId) }),
+              !facts.memoLinksAccepted.contains(where: { protected.contains($0.taskId) }) else {
             throw WorkLogError.validation("로컬 전용 회의에서 연결한 업무가 포함되어 있습니다. 자료를 새로 불러온 후 다시 시도하세요.")
         }
     }

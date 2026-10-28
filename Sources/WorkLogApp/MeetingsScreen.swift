@@ -29,6 +29,7 @@ struct MeetingsScreen: View {
             }.frame(minWidth: 380)
         }
         .toolbar {
+            ToolbarItem { MeetingArchiveControls(model: model) }
             ToolbarItem {
                 Button("새 회의", systemImage: "plus") { model.create() }
             }

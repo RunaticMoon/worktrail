@@ -208,6 +208,19 @@ import WorkLogCore
         selectedTaskId = id
         taskDetail?.load(taskId: id, asOf: asOf)
     }
+    func openMeeting(_ hit: MeetingLocalSearchHit) {
+        guard meetings?.save() == true else { return }
+        meetings?.openLocalSearchHit(hit)
+        route = .meetings
+        NSApp.activate()
+        openMainWindow?()
+    }
+    func openProjectMeetings(_ projectID: String) {
+        guard meetings?.save() == true else { return }
+        meetings?.filterProjectID = projectID
+        meetings?.reload()
+        route = .meetings
+    }
     func openMemo(_ id: String) { selectedMemoId = id; memoDetail?.load(id: id) }
     func openGraphNode(_ node: GraphNode) {
         switch node.id.kind {
@@ -335,7 +348,7 @@ import WorkLogCore
                     // bringing the main window forward.
                     NSApp.activate()
                     self?.openMainWindow?()
-                })
+                }, onOpenMeeting: { [weak self] hit in self?.openMeeting(hit) })
         }
         searchPanel?.show()
     }

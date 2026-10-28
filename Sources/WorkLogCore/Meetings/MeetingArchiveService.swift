@@ -3,7 +3,7 @@ import Crypto
 
 public enum MeetingArchiveDuplicatePolicy: Sendable { case reject, newCopy }
 
-public struct MeetingArchivePreview: Sendable {
+public struct MeetingArchivePreview: Sendable, Equatable {
     public let title: String
     public let audioFileCount: Int
     public let audioBytes: Int64
@@ -33,7 +33,19 @@ private enum ArchiveCell: Codable {
     var string: String? { if case .text(let value) = self { return value }; return nil }
 }
 private typealias ArchiveRow = [String: ArchiveCell]
-private struct ArchivePayload: Codable { var tables: [String: [ArchiveRow]] }
+private struct ArchiveProjectReference: Codable {
+    var id: String
+    /// nil records an already unavailable reference, rather than inventing a name.
+    var name: String?
+    var archivedAt: Date?
+}
+private struct ArchiveTagReference: Codable { var id: String; var name: String? }
+private struct ArchivePayload: Codable {
+    var tables: [String: [ArchiveRow]]
+    /// Only classifications selected by this meeting. Optional for older v1 archives.
+    var projects: [ArchiveProjectReference]?
+    var tags: [ArchiveTagReference]?
+}
 private struct ArchiveEntry: Codable {
     var path: String
     var size: Int64
@@ -79,6 +91,7 @@ public final class MeetingArchiveService: @unchecked Sendable {
     }
 
     public func export(meetingID: String, includeAudio: Bool, to destination: URL,
+                       expectedPreview: MeetingArchivePreview? = nil,
                        checkCancellation: () throws -> Void = {}) throws {
         guard destination.isFileURL, !fm.fileExists(atPath: destination.path) else { throw failure("이미 있는 아카이브를 덮어쓰지 않습니다.") }
         try validateAncestors(destination.deletingLastPathComponent())
@@ -86,9 +99,16 @@ public final class MeetingArchiveService: @unchecked Sendable {
         let data = try StableJSON.encode(payload)
         guard data.count <= Self.maxPayloadBytes else { throw failure("회의 텍스트가 아카이브 제한을 넘습니다.") }
         let (audio, missing) = try audioFiles(payload, includeAudio: includeAudio)
+        if let expectedPreview {
+            let actual = MeetingArchivePreview(title: payload.tables["meeting"]?.first?["title"]?.string ?? "회의",
+                audioFileCount: audio.count, audioBytes: audio.reduce(0) { $0 + $1.size },
+                missingTrackCount: missing.count, includesAudio: includeAudio)
+            guard actual == expectedPreview else { throw failure("회의 또는 원본 파일이 변경되었습니다. 파일 수·용량과 누락 원본을 다시 확인하세요.") }
+        }
         let total = audio.reduce(Int64(data.count)) { $0 + $1.size }
         try requireCapacity(total, at: destination.deletingLastPathComponent())
         let temporary = destination.deletingLastPathComponent().appendingPathComponent(".meeting-incomplete-" + repo.ids.make())
+        guard !fm.fileExists(atPath: temporary.path) else { throw failure("임시 아카이브 경로가 이미 있습니다. 기존 파일은 유지했습니다.") }
         try createDirectory(temporary)
         defer { try? fm.removeItem(at: temporary) }
         try data.write(to: temporary.appendingPathComponent("records.json"), options: .atomic)
@@ -146,7 +166,7 @@ public final class MeetingArchiveService: @unchecked Sendable {
         let directoryName = "import-" + repo.ids.make()
         let staging = audioRoot.appendingPathComponent(".incomplete-" + directoryName)
         let final = audioRoot.appendingPathComponent(directoryName)
-        guard !fm.fileExists(atPath: final.path) else { throw failure("가져오기 경로가 이미 있습니다.") }
+        guard !fm.fileExists(atPath: final.path), !fm.fileExists(atPath: staging.path) else { throw failure("가져오기 경로가 이미 있습니다.") }
         try createDirectory(staging)
         var moved = false
         var succeeded = false
@@ -185,6 +205,8 @@ public final class MeetingArchiveService: @unchecked Sendable {
             }
         }
         try repo.db.transaction {
+            // Classification creation shares the meeting transaction and rolls back with it.
+            try remapMetadata(in: &payload)
             for table in Self.tableOrder {
                 guard let rows = payload.tables[table], !rows.isEmpty else { continue }
                 let columns = try knownColumns(table)
@@ -227,7 +249,18 @@ public final class MeetingArchiveService: @unchecked Sendable {
                     try row.columns.mapValues(ArchiveCell.init)
                 }
             }
-            return ArchivePayload(tables: tables)
+            let metadata = try tables["meeting"]?.first?["metadata_json"]?.string.map {
+                try StableJSON.decode(MeetingMetadata.self, from: $0)
+            }
+            let projects = try Set(metadata?.projectIDs ?? []).sorted().map { id in
+                let project = try repo.project(id: id)
+                return ArchiveProjectReference(id: id, name: project?.name, archivedAt: project?.archivedAt)
+            }
+            let tags = try Set(metadata?.tagIDs ?? []).sorted().map { id in
+                let row = try repo.db.queryOneV("SELECT name FROM tag WHERE id = ?", id)
+                return ArchiveTagReference(id: id, name: row?.string("name"))
+            }
+            return ArchivePayload(tables: tables, projects: projects, tags: tags)
         }
     }
 
@@ -255,8 +288,80 @@ public final class MeetingArchiveService: @unchecked Sendable {
         let trackIDs = Set((payload.tables["meeting_audio_track"] ?? []).compactMap { $0["id"]?.string })
         let audioIDs = manifest.entries.compactMap(\.trackID)
         guard Set(audioIDs).count == audioIDs.count, Set(audioIDs).isSubset(of: trackIDs),
-              manifest.includesAudio || audioIDs.isEmpty else { throw failure("오디오 연결이 잘못되었습니다.") }
+              Set(manifest.missingTrackIDs).count == manifest.missingTrackIDs.count,
+              Set(manifest.missingTrackIDs) == trackIDs.subtracting(audioIDs),
+              manifest.includesAudio || audioIDs.isEmpty else { throw failure("오디오 연결 또는 누락 목록이 잘못되었습니다.") }
+        let metadata = try payload.tables["meeting"]?.first?["metadata_json"]?.string.map {
+            try StableJSON.decode(MeetingMetadata.self, from: $0)
+        }
+        if let projects = payload.projects {
+            guard Set(projects.map(\.id)).count == projects.count,
+                  Set(projects.map(\.id)) == Set(metadata?.projectIDs ?? []) else {
+                throw failure("회의에서 선택한 프로젝트 범위를 확인할 수 없습니다.")
+            }
+        }
+        if let tags = payload.tags {
+            guard Set(tags.map(\.id)).count == tags.count,
+                  Set(tags.map(\.id)) == Set(metadata?.tagIDs ?? []) else {
+                throw failure("회의에서 선택한 태그 범위를 확인할 수 없습니다.")
+            }
+        }
         return (manifest, payload)
+    }
+
+    /// Reuse matching classifications without changing their current name/archive state.
+    /// Unknown references stay unavailable even if their old ID belongs to unrelated local data.
+    private func remapMetadata(in payload: inout ArchivePayload) throws {
+        guard var meeting = payload.tables["meeting"]?.first,
+              let json = meeting["metadata_json"]?.string else { return }
+        var metadata = try StableJSON.decode(MeetingMetadata.self, from: json)
+        let projects = Dictionary(uniqueKeysWithValues: (payload.projects ?? []).map { ($0.id, $0) })
+        let tags = Dictionary(uniqueKeysWithValues: (payload.tags ?? []).map { ($0.id, $0) })
+        var projectMapping: [String: String] = [:], tagMapping: [String: String] = [:]
+        for id in Set(metadata.projectIDs).sorted() {
+            guard let reference = projects[id], let name = reference.name else {
+                projectMapping[id] = try unusedReference(id, table: "project")
+                continue
+            }
+            if let existing = try repo.project(id: id), existing.name == name {
+                projectMapping[id] = existing.id
+            } else if let existing = try repo.db.queryOneV("SELECT id FROM project WHERE name = ?", name)?.string("id") {
+                projectMapping[id] = existing
+            } else {
+                let newID = repo.ids.make()
+                try repo.db.runV("INSERT INTO project (id, name, archived_at) VALUES (?, ?, ?)", newID, name, reference.archivedAt)
+                projectMapping[id] = newID
+            }
+        }
+        for id in Set(metadata.tagIDs).sorted() {
+            guard let name = tags[id]?.name else {
+                tagMapping[id] = try unusedReference(id, table: "tag")
+                continue
+            }
+            if let row = try repo.db.queryOneV("SELECT name FROM tag WHERE id = ?", id), row.string("name") == name {
+                tagMapping[id] = id
+            } else if let existing = try repo.db.queryOneV("SELECT id FROM tag WHERE name = ?", name)?.string("id") {
+                tagMapping[id] = existing
+            } else {
+                let newID = repo.ids.make()
+                try repo.db.runV("INSERT INTO tag (id, name) VALUES (?, ?)", newID, name)
+                tagMapping[id] = newID
+            }
+        }
+        metadata.projectIDs = metadata.projectIDs.map { projectMapping[$0]! }
+        metadata.tagIDs = metadata.tagIDs.map { tagMapping[$0]! }
+        meeting["metadata_json"] = .text(try StableJSON.string(metadata))
+        payload.tables["meeting"] = [meeting]
+    }
+
+    private func unusedReference(_ original: String, table: String) throws -> String {
+        // The table is selected only by these two compiled callers; values are bound.
+        guard table == "project" || table == "tag" else { throw failure("잘못된 분류 종류입니다.") }
+        var candidate = original
+        while try repo.db.scalarIntV("SELECT COUNT(*) FROM \(table) WHERE id = ?", candidate) > 0 {
+            candidate = "archive-missing-" + repo.ids.make()
+        }
+        return candidate
     }
 
     private func audioFiles(_ payload: ArchivePayload, includeAudio: Bool, hashFiles: Bool = true) throws -> ([ArchiveEntry], [String]) {
@@ -268,7 +373,13 @@ public final class MeetingArchiveService: @unchecked Sendable {
                 let source = try sourceFile(trackID: id, payload: payload)
                 let path = "audio/track-\(index)." + source.pathExtension
                 entries.append(try hashFiles ? fileEntry(source, path: path, trackID: id) : ArchiveEntry(path: path, size: size(source), sha256: "", trackID: id))
-            } catch { missing.append(id) }
+            } catch {
+                let cocoa = error as NSError
+                let unavailable = cocoa.domain == NSCocoaErrorDomain
+                    && [CocoaError.fileNoSuchFile.rawValue, CocoaError.fileReadNoSuchFile.rawValue].contains(cocoa.code)
+                guard unavailable else { throw error }
+                missing.append(id)
+            }
         }
         return (entries, missing)
     }
