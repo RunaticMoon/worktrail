@@ -92,7 +92,7 @@ struct MeetingAudioArchive: Sendable {
         try validateRoot()
         guard manager.fileExists(atPath: root.path) else { return [] }
         return try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .filter { !$0.lastPathComponent.hasPrefix(".") }
+            .filter { !$0.lastPathComponent.hasPrefix(".") && !$0.lastPathComponent.hasPrefix("import-") }
             .map { try recover(recordingID: $0.lastPathComponent) }
             .sorted { $0.startedAt < $1.startedAt }
     }
@@ -103,7 +103,8 @@ struct MeetingAudioArchive: Sendable {
         guard manager.fileExists(atPath: root.path) else { return ([], 0) }
         var snapshots: [MeetingAudioArchiveSnapshot] = [], failures = 0
         for url in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            where !url.lastPathComponent.hasPrefix(".") {
+            // import-* folders are restored DB-owned files, not live recording recovery journals.
+            where !url.lastPathComponent.hasPrefix(".") && !url.lastPathComponent.hasPrefix("import-") {
             do { snapshots.append(try recover(recordingID: url.lastPathComponent)) }
             catch { failures += 1 }
         }
@@ -132,6 +133,27 @@ struct MeetingAudioArchive: Sendable {
     func audioURL(recordingID: String, track: MeetingAudioTrackID) throws -> URL {
         let result = try directory(recordingID: recordingID).appendingPathComponent(track.rawValue + ".caf")
         if entryExists(result) { try requireRegularFile(result) }
+        return result
+    }
+
+    /// DB-owned relative paths cover native recordings and imported meeting archives.
+    /// Validate every component, including the final file, before any audio reader opens it.
+    func resolveTrackURL(relativePath: String) throws -> URL {
+        try validateRoot()
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !relativePath.hasPrefix("/"), !relativePath.contains("\\"), !relativePath.contains("\0"),
+              !components.isEmpty, components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw MeetingAudioArchiveError.invalidPath
+        }
+        var result = root
+        for (index, component) in components.enumerated() {
+            result.appendPathComponent(String(component))
+            guard result.standardizedFileURL == result.resolvingSymlinksInPath().standardizedFileURL else {
+                throw MeetingAudioArchiveError.invalidPath
+            }
+            if index == components.count - 1 { try requireRegularFile(result) }
+            else { try requireDirectory(result) }
+        }
         return result
     }
 

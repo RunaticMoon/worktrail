@@ -71,6 +71,11 @@ public final class MeetingService: @unchecked Sendable {
     public func setLocalOnly(id: String, expectedRevision: Int, localOnly: Bool) throws -> Meeting {
         try repo.db.transaction {
             let current = try requireMeeting(id, expectedRevision: expectedRevision)
+            // Tightening a source policy also protects its existing derived tasks.
+            // Protection is sticky and must survive later policy changes or deletion.
+            if localOnly {
+                try repo.db.runV("UPDATE meeting_task_link SET local_only = 1 WHERE meeting_id = ? AND local_only = 0", id)
+            }
             if current.localOnly == localOnly { return current }
             try repo.db.runV("UPDATE meeting SET local_only = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
                 localOnly, repo.clock.now(), id, expectedRevision)
@@ -229,6 +234,8 @@ public final class MeetingService: @unchecked Sendable {
             guard let current = meeting.summary else { throw WorkLogError.notFound("회의 요약") }
             guard current.revision == expectedRevision else { throw staleEdit() }
             if current.content == content { return current }
+            try repo.db.runV("INSERT INTO meeting_summary_edit (id, summary_id, previous_content, replacement_content, created_at) VALUES (?, ?, ?, ?, ?)",
+                repo.ids.make(), current.id, current.content, content, repo.clock.now())
             let changed = try repo.db.runV("""
                 UPDATE meeting_summary SET content = ?, is_user_edited = ?, revision = revision + 1, updated_at = ?
                 WHERE id = ? AND revision = ?
@@ -238,6 +245,56 @@ public final class MeetingService: @unchecked Sendable {
                 throw WorkLogError.storage("회의 요약 편집 후 조회 실패")
             }
             return updated
+        }
+    }
+
+    /// Manual sections never invoke AI and never inherit citations from an older AI draft.
+    @discardableResult
+    public func saveManualSummary(meetingID: String, expectedMeetingRevision: Int,
+                                  expectedSummaryRevision: Int?, output: MeetingSummaryOutput) throws -> MeetingSummary {
+        let items = output.summary + output.decisions + output.actionItems + output.openQuestions
+        guard items.allSatisfy({ $0.citations.isEmpty }), !items.isEmpty else {
+            throw WorkLogError.validation("직접 작성할 내용을 입력해 주세요. 수동 초안에는 AI 근거를 자동 연결하지 않습니다.")
+        }
+        let content = MeetingSummaryContract.render(output, sources: [])
+        guard content.utf8.count <= MeetingLimits.summaryOutputBytes else { throw WorkLogError.validation("회의록이 너무 큽니다.") }
+        return try repo.db.transaction {
+            let meeting = try requireMeeting(meetingID, expectedRevision: expectedMeetingRevision)
+            guard meeting.summary?.revision == expectedSummaryRevision else { throw staleEdit() }
+            if let current = meeting.summary, current.isManual, current.structuredOutput == output,
+               current.sourceRevision == meeting.revision { return current }
+            let now = repo.clock.now()
+            try repo.db.runV("""
+                INSERT INTO meeting_summary (id, meeting_id, version, revision, source_revision, content,
+                    structured_json, sources_json, is_user_edited, created_at, updated_at, origin)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, repo.ids.make(), meetingID, (meeting.summary?.version ?? 0) + 1,
+                (meeting.summary?.revision ?? 0) + 1, meeting.revision, content,
+                try StableJSON.string(output), "[]", true, now, now, "manual")
+            return try latestSummary(meetingID: meetingID)!
+        }
+    }
+
+    @discardableResult
+    public func updateMetadata(meetingID: String, expectedRevision: Int, metadata: MeetingMetadata) throws -> Meeting {
+        guard metadata.participants.count <= 100, metadata.agenda.utf8.count <= MeetingLimits.notesBytes,
+              metadata.participants.allSatisfy({ $0.utf8.count <= 1000 }) else {
+            throw WorkLogError.validation("회의 분류 입력 크기를 확인해 주세요.")
+        }
+        return try repo.db.transaction {
+            let current = try requireMeeting(meetingID, expectedRevision: expectedRevision)
+            // Existing unavailable references remain visible; only newly attached IDs must exist.
+            for id in Set(metadata.projectIDs).subtracting(current.metadata?.projectIDs ?? []) {
+                guard try repo.project(id: id) != nil else { throw WorkLogError.notFound("프로젝트") }
+            }
+            let tags = Set(try repo.tags().map(\.id))
+            guard Set(metadata.tagIDs).subtracting(current.metadata?.tagIDs ?? []).isSubset(of: tags) else {
+                throw WorkLogError.notFound("태그")
+            }
+            if current.metadata == metadata { return current }
+            try repo.db.runV("UPDATE meeting SET metadata_json = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
+                try StableJSON.string(metadata), repo.clock.now(), meetingID, expectedRevision)
+            return try requireMeeting(meetingID)
         }
     }
 
@@ -332,6 +389,7 @@ public final class MeetingService: @unchecked Sendable {
             deletedAt: row.date("deleted_at"), summary: try latestSummary(meetingID: id))
         meeting.localOnly = row.bool("local_only")
         meeting.activeTranscriptRunID = row.string("active_transcript_run_id")
+        meeting.metadata = try row.string("metadata_json").map { try StableJSON.decode(MeetingMetadata.self, from: $0) }
         return meeting
     }
 
@@ -343,11 +401,13 @@ public final class MeetingService: @unchecked Sendable {
               let createdAt = row.date("created_at"), let updatedAt = row.date("updated_at") else {
             throw WorkLogError.storage("회의 요약 저장 형식이 올바르지 않습니다.")
         }
-        return MeetingSummary(id: id, meetingID: meetingID, version: version, revision: revision,
+        var result = MeetingSummary(id: id, meetingID: meetingID, version: version, revision: revision,
             sourceRevision: sourceRevision, content: content,
             structuredOutput: try StableJSON.decode(MeetingSummaryOutput.self, from: structured),
             sources: try StableJSON.decode([MeetingSummarySource].self, from: sources),
             isUserEdited: row.bool("is_user_edited"), createdAt: createdAt, updatedAt: updatedAt)
+        result.origin = row.string("origin") ?? "ai"
+        return result
     }
 
     private static func failureMessage(for job: AIJob) -> String {

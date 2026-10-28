@@ -7,7 +7,7 @@ struct SourceActivityDetailSheet: View {
     @Bindable var model: MemoDetailModel
     let calendar: WorkCalendar
     let onClose: () -> Void
-    let onSaveBody: (String) throws -> Void
+    let onSaved: () -> Void
     @State private var showsEditor = false
 
     var body: some View {
@@ -15,7 +15,7 @@ struct SourceActivityDetailSheet: View {
             SourceActivityDetailView(record: record, calendar: calendar, onClose: onClose,
                                      onEdit: { showsEditor = true })
         } else {
-            MemoDetailScreen(model: model, onClose: onClose, onSaveBody: onSaveBody)
+            MemoDetailScreen(model: model, onClose: onClose, onSaved: onSaved)
         }
     }
 }

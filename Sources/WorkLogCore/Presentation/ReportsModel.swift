@@ -36,7 +36,14 @@ import Observation
     public private(set) var errorMessage: String?
     public var isAIAvailable: Bool { environment.aiRunner != nil }
     public var visibleReports: [Report] { family == .submission ? submissionReports : performanceReports }
-    public var canEdit: Bool { !isGenerating && (version?.state == .draft || version?.state == .edited) }
+    public private(set) var isRevisingConfirmed = false
+    public var canCreateRevision: Bool { !isGenerating && version?.state == .confirmed }
+    public func beginConfirmedRevision() {
+        guard canCreateRevision else { return }
+        isRevisingConfirmed = true
+        statusMessage = "확정본의 본문과 근거로 새 수정본을 만듭니다. 저장 전에는 버전이 생성되지 않습니다."
+    }
+    public var canEdit: Bool { !isGenerating && (version?.state == .draft || version?.state == .edited || (version?.state == .confirmed && isRevisingConfirmed)) }
     public var hasChanges: Bool { canEdit && content != version?.content }
     /// 대기 중인 새 초안이 있으면 현재 화면 본문과의 줄 단위 차이.
     public var pendingDiff: [DiffLine] {
@@ -54,7 +61,7 @@ import Observation
     public var readOnlyReason: String? {
         guard !canEdit, !isGenerating else { return nil }
         switch version?.state {
-        case .confirmed: return "확정본은 수정할 수 없습니다. 수정하면 새 버전으로 남습니다."
+        case .confirmed: return "이 본문으로 새 수정본을 만들면 기존 근거를 유지합니다. 재생성은 최신 기록을 다시 반영합니다."
         case .superseded: return "이전 버전은 수정할 수 없습니다."
         default: return nil
         }
@@ -252,7 +259,7 @@ import Observation
         do { try refreshVersion(environment.reports.edit(versionId: version.id, content: content)); errorMessage = nil }
         catch { errorMessage = "본문을 저장하지 못했습니다. 입력은 유지됩니다. 다시 저장하세요." }
     }
-    public func discardEdits() { content = version?.content ?? "" }
+    public func discardEdits() { content = version?.content ?? ""; isRevisingConfirmed = false }
     public func applySubmissionSelection() {
         guard canEdit, !hasChanges, version?.state == .draft, var draft = submissionDraft else { return }
         draft.groups = draft.groups.compactMap { group in
@@ -263,7 +270,7 @@ import Observation
         content = SubmissionComposer.render(draft)
     }
     public func confirm() {
-        guard canEdit, !hasChanges, let version else { return }
+        guard canEdit, !hasChanges, let version, version.state != .confirmed else { return }
         do {
             let confirmed = try environment.reports.confirm(versionId: version.id)
             try refreshVersion(confirmed)
@@ -316,6 +323,7 @@ import Observation
         try showVersion(saved)
     }
     private func showVersion(_ selected: ReportVersion) throws {
+        isRevisingConfirmed = false
         let rows = try environment.repo.reportEvidence(versionId: selected.id)
         let snapshot = try environment.repo.sourceSnapshot(id: selected.sourceSnapshotId)
         let facts = try snapshot.map { try StableJSON.decode(ReportFacts.self, from: $0.frozenFactsJSON) }

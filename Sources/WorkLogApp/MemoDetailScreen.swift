@@ -5,17 +5,25 @@ import WorkLogCore
 @MainActor struct MemoDetailScreen: View {
     @Bindable var model: MemoDetailModel
     let onClose: () -> Void
-    var onSaveBody: ((String) throws -> Void)? = nil
+    var onSaved: (() -> Void)? = nil
     var initiallyEditing = false
     @State private var isEditing = false
     @State private var draft = ""
     @State private var originalBody = ""
+    @State private var draftDate = WorkDate(year: 1970, month: 1, day: 1)
+    @State private var draftProjects: Set<String> = []
+    @State private var draftTags = ""
+    @State private var originalTags = ""
+    @State private var editingRevision = 0
+    @State private var taskQuery = ""
+    @State private var pendingTask: WorkTask?
     @State private var saveError: String?
     @State private var showsUnsavedChanges = false
     @FocusState private var editorFocused: Bool
     @FocusState private var editButtonFocused: Bool
 
-    private var hasChanges: Bool { isEditing && draft != originalBody }
+    private var hasChanges: Bool { isEditing && (draft != originalBody || draftDate != model.memo?.workDate
+        || draftProjects != Set(model.memo?.projectIds ?? []) || draftTags != originalTags) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -23,7 +31,7 @@ import WorkLogCore
                 Text(isEditing ? "\(model.recordLabel) 편집" :
                     (model.importedActivity == nil ? "메모와 업무 연결" : "\(model.recordLabel) · 업무 연결")).font(.title2)
                 Spacer()
-                if onSaveBody != nil, model.memo != nil {
+                if onSaved != nil, model.memo != nil {
                     if isEditing {
                         Button("저장 ⌘S") { save() }
                             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasChanges)
@@ -37,6 +45,19 @@ import WorkLogCore
             }
             if let saveError { InlineNotice(message: saveError) }
             if isEditing {
+                DatePicker("실제 업무일", selection: Binding(get: { model.workCalendar.startOfDay(draftDate) },
+                    set: { draftDate = model.workCalendar.workDate(of: $0) }), displayedComponents: .date)
+                    .environment(\.calendar, model.workCalendar.calendar)
+                    .environment(\.timeZone, model.workCalendar.timeZone)
+                DisclosureGroup("프로젝트 다중 선택 · \(draftProjects.count)개") {
+                    ScrollView {
+                        ForEach(model.projects) { project in
+                            Toggle(project.name, isOn: Binding(get: { draftProjects.contains(project.id) },
+                                set: { if $0 { draftProjects.insert(project.id) } else { draftProjects.remove(project.id) } }))
+                        }
+                    }.frame(maxHeight: 120)
+                }
+                TextField("태그 (쉼표로 구분)", text: $draftTags)
                 TextEditor(text: $draft)
                     .font(.body).focused($editorFocused)
                     .accessibilityLabel("\(model.recordLabel) 본문 편집")
@@ -51,6 +72,37 @@ import WorkLogCore
                     if let memo = model.memo {
                         Text(memo.workDate.iso).font(.caption).foregroundStyle(.secondary)
                         Text(memo.body).textSelection(.enabled)
+                        Text("원래 기록: \(timestamp(memo.recordedAt)) · revision \(memo.revision)")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let updatedAt = model.updatedAt {
+                            Text("마지막 수정: \(timestamp(updatedAt))").font(.caption)
+                        }
+                        Text("프로젝트: " + model.projects.filter { memo.projectIds.contains($0.id) }.map(\.name).joined(separator: ", "))
+                        Text("태그: " + model.tags.filter { memo.tagIds.contains($0.id) }.map(\.name).joined(separator: ", "))
+                        DisclosureGroup("변경 이력 · \(model.history.count)개") {
+                            ForEach(model.history) { entry in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("revision \(entry.memo.revision) · 업무일 \(entry.memo.workDate.iso)").font(.headline)
+                                    Text(entry.memo.body).textSelection(.enabled)
+                                    if let supersededAt = entry.supersededAt {
+                                        Text("수정 시각: \(timestamp(supersededAt))").font(.caption)
+                                    }
+                                    if entry.classificationRecorded {
+                                        Text("프로젝트: " + entry.memo.projectIds.map { id in model.projects.first { $0.id == id }?.name ?? "삭제된 프로젝트" }.joined(separator: ", "))
+                                        Text("태그: " + entry.memo.tagIds.map { id in model.tags.first { $0.id == id }?.name ?? "삭제된 태그" }.joined(separator: ", "))
+                                    } else { Text("이전 버전에서 분류 이력을 기록하지 않았습니다.").foregroundStyle(.secondary) }
+                                }
+                                Divider()
+                            }
+                        }
+                    }
+                    Text("일반 관련 기록 \(model.relatedLinkCount)개 · 아래 업무 연결은 보고서 근거 승인입니다.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    TextField("근거로 연결할 기존 업무 검색", text: $taskQuery)
+                    if !taskQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        ForEach(model.tasks.filter { $0.title.localizedCaseInsensitiveContains(taskQuery) }) { task in
+                            Button("보고서 근거 연결: \(task.title)") { pendingTask = task }
+                        }
                     }
                     Text("제안은 승인 후 연결됩니다. 원문과 업무 상태는 유지됩니다.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -71,10 +123,14 @@ import WorkLogCore
                             Text(model.tasks.first { $0.id == link.taskId }?.title ?? "찾을 수 없는 업무").font(.headline)
                             Text(link.reason)
                             Text(label(link.status)).font(.callout)
-                            if link.status != .accepted && link.status != .rejected {
+                            if link.sourceRevision != model.memo?.revision {
+                                Text("연결 당시 revision \(link.sourceRevision) · 현재 revision \(model.memo?.revision ?? 0). 최신 원문을 확인하고 다시 승인하세요.")
+                                    .foregroundStyle(.orange)
+                            }
+                            DisclosureGroup(link.status == .accepted || link.status == .rejected ? "근거 연결 다시 검토 / 해제" : "연결 결정") {
                                 HStack {
-                                    Button("승인") { model.decide(linkId: link.id, status: .accepted) }
-                                    Button("거절") { model.decide(linkId: link.id, status: .rejected) }
+                                    Button("현재 원문 승인") { model.decide(linkId: link.id, status: .accepted) }
+                                    Button(link.status == .accepted ? "근거 연결 해제" : "거절") { model.decide(linkId: link.id, status: .rejected) }
                                     Button("나중에") { model.decide(linkId: link.id, status: .deferred) }
                                 }
                             }
@@ -93,7 +149,7 @@ import WorkLogCore
                 if !event.isARepeat { requestClose() }
                 return true
             }
-            if event.keyCode == 14, onSaveBody != nil {
+            if event.keyCode == 14, onSaved != nil {
                 if !event.isARepeat { beginEditing() }
                 return true
             }
@@ -105,8 +161,16 @@ import WorkLogCore
         })
         .onAppear {
             if initiallyEditing { beginEditing() }
-            else if onSaveBody != nil { editButtonFocused = true }
+            else if onSaved != nil { editButtonFocused = true }
         }
+        .confirmationDialog("선택한 업무의 보고서 근거로 연결할까요?", isPresented: Binding(
+            get: { pendingTask != nil }, set: { if !$0 { pendingTask = nil } })) {
+            Button("근거 연결 승인") {
+                if let task = pendingTask { model.connect(taskId: task.id) }
+                pendingTask = nil; taskQuery = ""
+            }
+            Button("취소", role: .cancel) { pendingTask = nil }
+        } message: { Text(pendingTask?.title ?? "") }
         .alert("\(model.recordLabel) 수정을 저장할까요?", isPresented: $showsUnsavedChanges) {
             Button("저장하고 닫기") { if save() { onClose() } }.keyboardShortcut(.defaultAction)
             Button("수정 버리고 닫기", role: .destructive) { onClose() }
@@ -118,19 +182,28 @@ import WorkLogCore
     }
 
     private func beginEditing() {
-        guard !worklogHasMarkedText, onSaveBody != nil, let memo = model.memo else { return }
-        if !isEditing { draft = memo.body; originalBody = memo.body; saveError = nil }
+        guard !worklogHasMarkedText, onSaved != nil, let memo = model.memo else { return }
+        if !isEditing {
+            draft = memo.body; originalBody = memo.body; draftDate = memo.workDate
+            draftProjects = Set(memo.projectIds)
+            draftTags = model.tags.filter { memo.tagIds.contains($0.id) }.map(\.name).joined(separator: ", ")
+            originalTags = draftTags; editingRevision = memo.revision; saveError = nil
+        }
         isEditing = true
         editorFocused = true
     }
 
     @discardableResult private func save() -> Bool {
-        guard !worklogHasMarkedText, let onSaveBody, isEditing else { return false }
+        guard !worklogHasMarkedText, let onSaved, isEditing else { return false }
         guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             saveError = "메모 내용을 입력하세요."; editorFocused = true; return false
         }
         do {
-            if hasChanges { try onSaveBody(draft) }
+            if hasChanges {
+                try model.save(body: draft, workDate: draftDate, projectIds: Array(draftProjects),
+                    tagNames: draftTags.components(separatedBy: ","), expectedRevision: editingRevision)
+                onSaved()
+            }
             isEditing = false; saveError = nil
             editButtonFocused = true
             return true
@@ -145,6 +218,14 @@ import WorkLogCore
         guard !worklogHasMarkedText else { return }
         if hasChanges { showsUnsavedChanges = true }
         else { onClose() }
+    }
+    private func timestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.calendar = model.workCalendar.calendar
+        formatter.timeZone = model.workCalendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm z"
+        return formatter.string(from: date)
     }
     private func label(_ status: MemoTaskLinkStatus) -> String {
         switch status { case .proposed: return "검토 대기"; case .accepted: return "연결 승인"; case .rejected: return "연결 거절"; case .deferred: return "나중에 검토" }

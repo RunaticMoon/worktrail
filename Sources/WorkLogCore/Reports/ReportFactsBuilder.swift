@@ -30,24 +30,25 @@ public final class ReportFactsBuilder: @unchecked Sendable {
         let through = calendar.adding(days: -1, to: range.endExclusive)
         let beforeStart = calendar.adding(days: -1, to: range.start)
 
-        let allEvents = try repo.allEvents()
+        let protected = try TaskDisclosurePolicy(repo: repo).protectedTaskIDs()
+        let allEvents = try repo.allEvents().filter { !protected.contains($0.taskId) }
         let cutoffReplay = StateReplay.replay(allEvents, through: through, knownAt: knownAt)
         let startReplay = StateReplay.replay(allEvents, through: beforeStart, knownAt: knownAt)
         let effective = StateReplay.effectiveEvents(allEvents, knownAt: knownAt)
 
         let confirmedPlans: [FactPlanItem]
         if let planRange {
-            confirmedPlans = try planService.confirmedFacts(weekStart: planRange.start, knownAt: knownAt)
+            confirmedPlans = try planService.confirmedFacts(weekStart: planRange.start, knownAt: knownAt).filter { !protected.contains($0.taskId) }
         } else {
             confirmedPlans = []
         }
         let plannedTaskIds = Set(confirmedPlans.map(\.taskId))
 
-        let rangeActivities = try repo.activities(in: range).filter { $0.recordedAt <= knownAt }
+        let rangeActivities = try repo.activities(in: range).filter { $0.recordedAt <= knownAt && !protected.contains($0.taskId) }
         let activityTaskIds = Set(rangeActivities.map(\.taskId))
 
         var factTasks: [FactTask] = []
-        for task in try repo.tasks() {
+        for task in try repo.tasks() where !protected.contains(task.id) {
             guard createdByKnownAt(task, effective: effective, knownAt: knownAt) else { continue }
 
             let statusAtCutoff = cutoffReplay.taskStatus(task.id)
@@ -79,7 +80,7 @@ public final class ReportFactsBuilder: @unchecked Sendable {
         let memoLinksAccepted = try repo.memoTaskLinks(status: .accepted)
             .filter { link in
                 let decided = link.decidedAt ?? link.createdAt
-                guard decided <= knownAt else { return false }
+                guard decided <= knownAt, !protected.contains(link.taskId) else { return false }
                 return sourceIds.contains(FactSource.memoId(link.memoId)) || taskIds.contains(link.taskId)
             }
             .map { AcceptedMemoLink(memoId: $0.memoId, taskId: $0.taskId) }
@@ -200,6 +201,7 @@ public final class ReportFactsBuilder: @unchecked Sendable {
     private func makeSources(range: DateRange, rangeActivities: [Activity],
                              knownAt: Date) throws -> [FactSource] {
         var sources: [FactSource] = []
+        let protected = try TaskDisclosurePolicy(repo: repo).protectedTaskIDs()
 
         for activity in rangeActivities {
             let urls = try repo.links(ownerType: .activity, ownerId: activity.id).map(\.url)
@@ -221,7 +223,7 @@ public final class ReportFactsBuilder: @unchecked Sendable {
         }
 
         let supplements = try repo.supplements(overlapping: range)
-            .filter { $0.recordedAt <= knownAt && $0.outcome == .answered }
+            .filter { $0.recordedAt <= knownAt && $0.outcome == .answered && !protected.contains($0.taskId) }
         for supplement in supplements {
             let text = "Q: \(supplement.question)\nA: \(supplement.answer ?? "")"
             sources.append(FactSource(id: FactSource.supplementId(supplement.id), kind: .supplement,

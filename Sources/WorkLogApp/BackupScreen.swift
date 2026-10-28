@@ -31,7 +31,7 @@ struct BackupScreen: View {
                 }
                 Text(BackupManifest.standardNote).font(.callout).foregroundStyle(WorkLogTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("회의 전사·메모·화자·버전은 DB 백업에 포함됩니다. 원본 음성·모델은 포함되지 않습니다. 원본은 회의의 ‘원본 내보내기’로 별도 보관하세요. 복원 후 없는 음성은 ‘원본 없음’으로 표시합니다.")
+                Text("회의 전사·메모·화자·버전은 DB 백업에 포함됩니다. 원본 음성·모델은 포함되지 않습니다. 회의의 ‘회의 아카이브’에서 원본 포함을 선택하면 텍스트·전사 버전·수정 이력·음성을 함께 내보내고 가져올 수 있습니다. 복원 후 없는 음성은 ‘원본 없음’으로 표시합니다.")
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
                 BackupFeedback(model: model, retryTitle: retryTitle, retry: { retry() }, canRetry: !model.isBusy)

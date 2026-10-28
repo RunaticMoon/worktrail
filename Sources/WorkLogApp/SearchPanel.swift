@@ -10,13 +10,15 @@ import WorkLogCore
     private var environment: AppEnvironment?
     private var secrets: SecretsModel?
     private var onOpenSecrets: (() -> Void)?
+    private var onOpenMeeting: ((MeetingLocalSearchHit) -> Void)?
     private var previousApp: NSRunningApplication?
 
-    init(model: SearchModel, environment: AppEnvironment, secrets: SecretsModel?, onOpenSecrets: @escaping () -> Void) {
+    init(model: SearchModel, environment: AppEnvironment, secrets: SecretsModel?, onOpenSecrets: @escaping () -> Void, onOpenMeeting: ((MeetingLocalSearchHit) -> Void)? = nil) {
         self.model = model
         self.environment = environment
         self.secrets = secrets
         self.onOpenSecrets = onOpenSecrets
+        self.onOpenMeeting = onOpenMeeting
         // .nonactivatingPanel must be set at construction: a hotkey panel receives key
         // input without activating WorkLog, so the main window never rises from behind.
         panel = SearchKeyboardPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 640),
@@ -74,6 +76,11 @@ import WorkLogCore
             model: model, surface: surface, environment: environment, secrets: secrets, onOpenSecrets: { [weak self] in
                 self?.dismiss(restorePreviousApp: false)
                 self?.onOpenSecrets?()
+            }, onOpenMeeting: { [weak self] hit in
+                guard let self else { return }
+                if let sheet = panel.attachedSheet { panel.endSheet(sheet); sheet.orderOut(nil) }
+                hidePanel()
+                onOpenMeeting?(hit)
             }, onClose: { [weak self] in self?.dismiss() })))
         hosting.sizingOptions = []
         panel.contentView = hosting
@@ -105,6 +112,7 @@ import WorkLogCore
         environment = nil
         secrets = nil
         onOpenSecrets = nil
+        onOpenMeeting = nil
         previousApp = nil
     }
 
@@ -127,6 +135,7 @@ import WorkLogCore
     let environment: AppEnvironment
     let secrets: SecretsModel?
     let onOpenSecrets: () -> Void
+    let onOpenMeeting: (MeetingLocalSearchHit) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -155,7 +164,7 @@ import WorkLogCore
             .padding(.horizontal, 16)
             .padding(.top, 8)
             SearchScreen(model: model, surface: surface, environment: environment, secrets: secrets,
-                onOpenSecrets: onOpenSecrets, isPanel: true)
+                onOpenSecrets: onOpenSecrets, onOpenMeeting: onOpenMeeting, isPanel: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(WorkLogTheme.canvas)
         }

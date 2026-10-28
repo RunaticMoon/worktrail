@@ -530,6 +530,23 @@ extension View {
 
             VStack(alignment: .leading, spacing: 10) {
                 if let draft = session.activeDraft {
+                    if session.recoveredKinds.contains(session.tab) {
+                        HStack {
+                            Text("이전 실행에서 작성하던 초안을 복구했습니다.")
+                            Button("이어 쓰기") { session.continueRecoveredDraft() }
+                            Button("폐기…") { requestNewDraft() }
+                        }
+                    }
+                    if let warning = draft.missingReferenceMessage {
+                        Text(warning).foregroundStyle(.orange)
+                        Button("사용할 수 없는 프로젝트·태그 선택 해제") { draft.removeUnavailableClassifications() }
+                    }
+                    if let status = session.checkpointMessage {
+                        HStack {
+                            Text(status).font(.caption).foregroundStyle(.secondary)
+                            if session.checkpointFailed { Button("초안 저장 재시도") { session.flushCheckpoints() } }
+                        }
+                    }
                     HStack(spacing: 12) {
                         workDate(draft: draft)
                         Spacer(minLength: 0)
@@ -853,6 +870,7 @@ extension View {
     let onConfirmCompletion: () -> Void
     @State private var highlighted = "new"
     @State private var choosingTask = true
+    @State private var dueExpanded = false
     @Environment(CaptureKeyboardNavigation.self) private var navigation
 
     private var keys: [String] { ["new"] + model.filteredTasks.map { "task:\($0.id)" } }
@@ -915,10 +933,13 @@ extension View {
                         CaptureDraftEditor(model: model,
                             label: isNewTask ? "첫 줄은 업무명, 다음 줄은 진행 내용" : "진행 내용", showsTokens: true)
                         if isNewTask {
-                            TaskDueFields(dueOn: $model.dueOn, daysBefore: $model.dueReminderDaysBefore,
-                                          calendar: model.workCalendar, defaultDate: model.workDate,
-                                          isCapture: true)
-                                .disabled(isLocked)
+                            DisclosureGroup("마감·알림 (선택)", isExpanded: $dueExpanded) {
+                                TaskDueFields(dueOn: $model.dueOn, daysBefore: $model.dueReminderDaysBefore,
+                                              calendar: model.workCalendar, defaultDate: model.workDate,
+                                              isCapture: true)
+                                    .disabled(isLocked)
+                            }
+                            .captureFocus("dueDisclosure", order: 640, action: { dueExpanded.toggle() })
                             VStack(alignment: .leading, spacing: 6) {
                                 Toggle("프로젝트별로 진행·완료를 따로 관리", isOn: Binding(
                                     get: { model.projectTrackingMode == .perProject },
@@ -947,8 +968,10 @@ extension View {
         }
         .onAppear {
             highlighted = selectedTaskKey
+            dueExpanded = model.dueOn != nil
             navigation.onTaskSearch = changeTask
         }
+        .onChange(of: model.dueOn) { _, value in if value != nil { dueExpanded = true } }
         .onDisappear { navigation.onTaskSearch = nil }
         .onChange(of: model.taskSelection) { _, _ in highlighted = selectedTaskKey }
         .onChange(of: model.pendingCompletion != nil) { _, pending in

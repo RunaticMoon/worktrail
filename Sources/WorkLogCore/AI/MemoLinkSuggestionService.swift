@@ -71,7 +71,12 @@ public final class MemoLinkSuggestionService {
                                    instructions: instructions,
                                    payloadJSON: prepared.payloadJSON,
                                    templateVersionId: versionId)
-        let result = try await runner.submit(request)
+        let candidateIDs = prepared.candidateTaskIds
+        let result = try await runner.submit(request, preflight: { [repo] in
+            guard try TaskDisclosurePolicy(repo: repo).protectedTaskIDs().isDisjoint(with: candidateIDs) else {
+                throw WorkLogError.policyBlocked("연결 후보에 로컬 전용 업무가 포함되었습니다. 다시 시도하세요.")
+            }
+        })
 
         // 8) AI가 성공하지 않았으면 저장하지 않고 상태만 전달한다.
         guard result.job.status == .succeeded else {
@@ -88,16 +93,7 @@ public final class MemoLinkSuggestionService {
     /// proposed 외 상태로의 변경만 허용(accepted→rejected 같은 재결정도 허용).
     /// Task·Memo는 변경하지 않는다.
     public func decide(linkId: String, status: MemoTaskLinkStatus) throws -> MemoTaskLink {
-        guard status != .proposed else {
-            throw WorkLogError.validation("제안 상태로 되돌릴 수 없습니다.")
-        }
-        guard var link = try memoTaskLink(id: linkId) else {
-            throw WorkLogError.notFound("memo_task_link \(linkId)")
-        }
-        link.status = status
-        link.decidedAt = repo.clock.now()
-        try repo.upsertMemoTaskLink(link)
-        return link
+        try MemoEvidenceLinkService(repo: repo).decide(linkId: linkId, status: status)
     }
 
     /// 테스트·미리보기용: payload JSON 생성(결정적, StableJSON).
@@ -182,7 +178,8 @@ public final class MemoLinkSuggestionService {
     private func candidateTasks() throws -> [Candidate] {
         let taskService = TaskService(repo: repo)
         var candidates: [Candidate] = []
-        for task in try repo.tasks() {
+        let protected = try TaskDisclosurePolicy(repo: repo).protectedTaskIDs()
+        for task in try repo.tasks() where !protected.contains(task.id) {
             let status: TaskStatus?
             if let cached = task.cachedStatus {
                 status = cached

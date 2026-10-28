@@ -38,6 +38,7 @@ struct PlanScreen: View {
                 RecoveryNotice(failed: error, preserved: "저장한 계획과 실제 업무 상태는 유지됩니다.",
                                retryTitle: "계획 다시 불러오기", retry: { model.load() })
             }
+            if let notice = model.noticeMessage { Text(notice).font(.callout).accessibilityIdentifier("plan-change-notice") }
             if model.isLoading {
                 StateView(kind: .loading, title: "계획 불러오는 중…", detail: "저장한 계획을 확인합니다.")
             }
@@ -72,9 +73,14 @@ struct PlanScreen: View {
             if !model.excluded.isEmpty {
                 DisclosureGroup("제외한 항목 \(model.excluded.count)개") {
                     ForEach(model.excluded) { item in
-                        Label("\(model.title(for: item)) · \(item.label ?? scopeTitle(item))", systemImage: "minus.circle")
-                            .foregroundStyle(WorkLogTheme.muted).fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+                        HStack {
+                            Label("\(model.title(for: item)) · \(item.label ?? scopeTitle(item))", systemImage: "minus.circle")
+                                .foregroundStyle(WorkLogTheme.muted).fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("후보로 되돌리기") { model.restore(item.id); candidatesExpanded = true }
+                                .accessibilityLabel("\(model.title(for: item)) \(scopeTitle(item)) 후보로 되돌리기")
+                                .accessibilityIdentifier("plan-restore-\(item.id)")
+                        }.padding(.vertical, 4)
                     }
                 }
             }

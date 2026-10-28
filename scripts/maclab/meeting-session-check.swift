@@ -29,10 +29,13 @@ private actor FakeFileTranscriber: MeetingFileTranscribing {
 private actor FakeFileDiarizer: MeetingFileDiarizing {
     let order: FakeInferenceOrder
     let fails: Bool
-    init(_ order: FakeInferenceOrder, fails: Bool) { self.order = order; self.fails = fails }
+    let cancelled: Bool
+    init(_ order: FakeInferenceOrder, fails: Bool, cancelled: Bool = false) { self.order = order; self.fails = fails; self.cancelled = cancelled }
     func diarize(samples: [Float], progress: (@Sendable (Double) -> Void)?) async throws -> MeetingDiarizationResult {
-        guard await order.steps.last == "unload-transcriber" else { throw SessionCheckError("Diarizer started before transcriber unload") }
+        let steps = await order.steps
+        guard steps.isEmpty || steps.last == "unload-transcriber" else { throw SessionCheckError("Diarizer started before transcriber unload") }
         await order.add("diarize")
+        if cancelled { throw CancellationError() }
         if fails { throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOMEM)) }
         return .init(turns: [.init(start: 0, end: Double(samples.count) / 16_000, speakerID: 1)], centroids: [1: [1, 0, 0]])
     }
@@ -310,7 +313,42 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         try check(runs.contains { $0.stage == .diarized && $0.status == .failed }, "Diarization failure must retain a failed, independent version")
         let originalSegment = try session.store.segments(runID: refined.id).first!
         try check(originalSegment.isFinal && originalSegment.originalText == "가짜 정밀 전사 원문", "Completed refined text must survive speaker failure")
+        let reuseOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
+            transcriber: FakeFileTranscriber(reuseOrder), speakerEngine: FakeFileDiarizer(reuseOrder, fails: false), progress: { _ in })
+        let reuseSteps = await reuseOrder.steps
+        try check(reuseSteps == ["diarize", "unload-speaker"], "Unchanged failed-stage retry must not call or unload Whisper")
+        try check(try session.store.runs(meetingID: second.id).filter { $0.stage == .refined }.count == 1,
+            "Diarization-only retry must reuse the completed refined run")
+        try check(try meetings.meeting(id: second.id)?.activeTranscriptRunID == nil,
+            "Independent processing must never activate a transcript without review")
+        var changedPreferences = session.preferences; changedPreferences.vadEnabled.toggle()
+        let mismatchOrder = FakeInferenceOrder()
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: changedPreferences, mode: .diarizationOnly, sourceRunID: refined.id,
+                transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
+            throw SessionCheckError("Changed settings must not reuse a refined result")
+        } catch is WorkLogError { }
+        let mismatchSteps = await mismatchOrder.steps
+        try check(mismatchSteps.isEmpty, "Incompatible settings must fail before inference")
+        try (sourceBytes + Data([0])).write(to: secondURL)
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
+                transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
+            throw SessionCheckError("Changed original bytes must not reuse a refined result")
+        } catch is WorkLogError { }
+        try sourceBytes.write(to: secondURL)
+        print("PASS: diarization retry calls no Whisper; changed settings/original SHA256 reject reuse before inference; active transcript unchanged")
         let edited = try session.store.editSegment(id: originalSegment.id, expectedRevision: originalSegment.revision, text: "사용자 검토 수정")
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
+                transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
+            throw SessionCheckError("User-edited refined transcript must require an explicit new run")
+        } catch is WorkLogError { }
         let successfulOrder = FakeInferenceOrder()
         try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
             models: session.modelStore, preferences: session.preferences,
@@ -322,6 +360,114 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         try check(try session.store.segment(id: edited.id)?.text == "사용자 검토 수정", "Retry must preserve edits in the older refined version")
         try check(try Data(contentsOf: secondURL) == sourceBytes, "Post-processing must never alter original PCM")
         print("PASS: sequential inference unload, refined result retained on diarization failure and retry preserves user edits/original bytes")
+
+        let refinedOnlyOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .refinedOnly,
+            transcriber: FakeFileTranscriber(refinedOnlyOrder), speakerEngine: FakeFileDiarizer(refinedOnlyOrder, fails: true), progress: { _ in })
+        let refinedOnlySteps = await refinedOnlyOrder.steps
+        try check(refinedOnlySteps == ["transcribe", "unload-transcriber"], "Refined-only mode must not load or invoke a speaker model")
+        print("PASS: refined-only produces completed output without invoking diarization or requiring speaker model files")
+
+        let cancelOrder = FakeInferenceOrder()
+        let completedBeforeCancel = try session.store.runs(meetingID: second.id).first { $0.stage == .refined && $0.status == .completed }!
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: completedBeforeCancel.id,
+                transcriber: FakeFileTranscriber(cancelOrder), speakerEngine: FakeFileDiarizer(cancelOrder, fails: false, cancelled: true), progress: { _ in })
+            throw SessionCheckError("Injected speaker cancellation must escape")
+        } catch is CancellationError { }
+        try check(try session.store.run(id: completedBeforeCancel.id)?.status == .completed,
+            "Cancelling speaker stage must preserve its completed refined source")
+        try check(try session.store.runs(meetingID: second.id).first?.status == .cancelled,
+            "Cancelled stage must be independently marked cancelled")
+        try check(try Data(contentsOf: secondURL) == sourceBytes, "Stage cancellation must preserve original bytes")
+        print("PASS: stage cancellation preserves completed refined result/original and marks only the cancelled stage")
+
+        let importedMeeting = try meetings.create(title: "가짜 왕복 아카이브 회의")
+        let importedRecording = try session.store.createRecording(meetingID: importedMeeting.id)
+        let importedFolder = session.archive.root.appendingPathComponent("import-fixture-safe")
+        try FileManager.default.createDirectory(at: importedFolder, withIntermediateDirectories: false)
+        let importedURL = importedFolder.appendingPathComponent("track-1.caf")
+        try sourceBytes.write(to: importedURL)
+        let importedTrack = try session.store.addTrack(recordingID: importedRecording.id, kind: .imported,
+            relativePath: "import-fixture-safe/track-1.caf", sampleRate: 48_000, channels: 1)
+        _ = try session.store.updateTrack(id: importedTrack.id, expectedRevision: importedTrack.revision, fileState: .available, duration: 0.2)
+        _ = try session.store.updateRecordingState(id: importedRecording.id, expectedRevision: importedRecording.revision, state: .completed)
+        let importedOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: importedRecording.id, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .refinedOnly,
+            transcriber: FakeFileTranscriber(importedOrder), speakerEngine: FakeFileDiarizer(importedOrder, fails: true), progress: { _ in })
+        let importedRun = try session.store.runs(meetingID: importedMeeting.id).first!
+        let importedSegment = try session.store.segments(runID: importedRun.id).first!
+        session.play(importedSegment)
+        try check(session.playingSegmentID == importedSegment.id && session.playbackMessage == nil,
+            "Imported relative-path PCM must load through actual playback, not native microphone.caf convention")
+        session.stopPlayback()
+        let outside = root.appendingPathComponent("outside-fixture.caf")
+        try sourceBytes.write(to: outside)
+        let linked = importedFolder.appendingPathComponent("linked.caf")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: outside)
+        do { _ = try session.archive.resolveTrackURL(relativePath: "import-fixture-safe/linked.caf"); throw SessionCheckError("Symlink audio must be rejected") }
+        catch is MeetingAudioArchiveError { }
+        do { _ = try session.archive.resolveTrackURL(relativePath: "../outside-fixture.caf"); throw SessionCheckError("Escaping audio path must be rejected") }
+        catch is MeetingAudioArchiveError { }
+        print("PASS: restored import-folder PCM reprocesses and loads playback; symlink/path escape rejected")
+
+        let siblingRecording = try session.store.createRecording(meetingID: importedMeeting.id)
+        let siblingURL = importedFolder.appendingPathComponent("track-2.caf")
+        try sourceBytes.write(to: siblingURL)
+        let siblingTrack = try session.store.addTrack(recordingID: siblingRecording.id, kind: .imported,
+            relativePath: "import-fixture-safe/track-2.caf", sampleRate: 48_000, channels: 1)
+        _ = try session.store.updateTrack(id: siblingTrack.id, expectedRevision: siblingTrack.revision, fileState: .available, duration: 0.2)
+        _ = try session.store.updateRecordingState(id: siblingRecording.id, expectedRevision: siblingRecording.revision, state: .completed)
+        let importedExport = root.appendingPathComponent("restored-original-export")
+        session.exportOriginal(importedRecording.id, to: importedExport)
+        try check(try Data(contentsOf: importedExport.appendingPathComponent("track-1.caf")) == sourceBytes,
+            "Exporting a restored original must preserve PCM bytes")
+        let originalsMetadata = try JSONSerialization.jsonObject(with: Data(contentsOf: importedExport.appendingPathComponent("originals.json"))) as! [String: Any]
+        try check(originalsMetadata["version"] as? Int == 1 && originalsMetadata["localOnly"] as? Bool == true,
+            "Restored-original metadata must be versioned and retain local-only policy")
+        try check((originalsMetadata["tracks"] as? [[String: Any]])?.count == 1,
+            "Export must include only the selected recording's track references")
+        let exportBeforeRetry = try Data(contentsOf: importedExport.appendingPathComponent("originals.json"))
+        session.exportOriginal(importedRecording.id, to: importedExport)
+        try check(try Data(contentsOf: importedExport.appendingPathComponent("originals.json")) == exportBeforeRetry,
+            "Export must refuse an existing destination instead of silently replacing it")
+        try check(try session.archive.recoverAvailable().unavailableCount == 0,
+            "DB-owned import directories must not be mistaken for broken recovery journals")
+        session.deleteOriginal(importedRecording.id)
+        try check(!FileManager.default.fileExists(atPath: importedURL.path), "Explicit deletion must remove the selected restored track")
+        try check(try Data(contentsOf: siblingURL) == sourceBytes && session.store.track(id: siblingTrack.id)?.fileState == .available,
+            "Deleting one restored recording must preserve another recording in the same import directory")
+        try check(try session.store.track(id: importedTrack.id)?.fileState == .deleted && session.store.recording(id: importedRecording.id)?.state == .discarded,
+            "Restored-original deletion must update only the selected DB references")
+        try check(try session.store.segments(runID: importedRun.id).first?.text == importedSegment.text,
+            "Deleting restored audio must retain its transcript")
+        print("PASS: DB-backed original export preserves bytes/localOnly and refuses overwrite; deleting one recording preserves sibling files/transcripts; recovery skips import folders")
+
+        model.select(second.id)
+        model.manualSummary = "직접 작성한 가짜 요약"
+        model.manualDecisions = "가짜 결정"
+        try environment.repo.db.run("CREATE TRIGGER fixture_summary_failure BEFORE INSERT ON meeting_summary BEGIN SELECT RAISE(ABORT, 'fake summary failure'); END")
+        try check(!model.save() && model.manualSummary == "직접 작성한 가짜 요약", "Failed autosave must preserve manual input")
+        try environment.repo.db.run("DROP TRIGGER fixture_summary_failure")
+        try check(model.save(), "Manual summary must retry successfully after a transient storage failure")
+        let manual = try meetings.meeting(id: second.id)!.summary!
+        model.manualSummary = "경쟁 수정 중인 내 초안"
+        _ = try meetings.saveManualSummary(meetingID: second.id, expectedMeetingRevision: model.selected!.revision,
+            expectedSummaryRevision: manual.revision, output: .init(summary: [.init(text: "다른 창의 최신 내용", citations: [])]))
+        model.refreshAudio()
+        try check(!model.save() && model.manualSummary == "경쟁 수정 중인 내 초안" && model.conflictingSummary != nil,
+            "Background refresh must not silently rebase an unsaved summary; stale save preserves input and exposes latest version")
+        model.retrySummaryAfterReview()
+        try check(try meetings.meeting(id: second.id)?.summary?.structuredOutput.summary.first?.text == "경쟁 수정 중인 내 초안",
+            "Explicit conflict review permits saving the draft as another preserved version")
+        let reopenedModel = MeetingsModel(environment: environment, audio: session)
+        reopenedModel.select(second.id)
+        try check(reopenedModel.manualSummary == "경쟁 수정 중인 내 초안", "Recreating the meeting model must restore persisted manual sections")
+        try check(try environment.repo.db.scalarInt("SELECT COUNT(*) FROM ai_job") == 0, "Manual authoring must create zero AI jobs")
+        print("PASS: actual manual summary model preserves input on storage failure and concurrent change, retries after review, and creates no AI jobs")
 
         let cancelledCapture = FakeMeetingCapture()
         let cancelledSession = MeetingRecordingSession(environment: environment, capture: cancelledCapture)
@@ -336,7 +482,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
-        print("9 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
+        print("15 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
     }
 }
 #endif

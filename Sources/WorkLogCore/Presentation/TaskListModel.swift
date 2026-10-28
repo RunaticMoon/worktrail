@@ -11,9 +11,10 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
     public let dueLabel: String?
     public let isOverdue: Bool
     public let isInThisWeekPlan: Bool
+    public let planScopeSummary: String?
 
     public init(id: String, title: String, status: TaskStatus?, projectNames: [String],
-                dueOn: WorkDate?, dueLabel: String?, isOverdue: Bool, isInThisWeekPlan: Bool) {
+                dueOn: WorkDate?, dueLabel: String?, isOverdue: Bool, isInThisWeekPlan: Bool, planScopeSummary: String? = nil) {
         self.id = id
         self.title = title
         self.status = status
@@ -22,6 +23,7 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
         self.dueLabel = dueLabel
         self.isOverdue = isOverdue
         self.isInThisWeekPlan = isInThisWeekPlan
+        self.planScopeSummary = planScopeSummary
     }
 }
 
@@ -29,6 +31,9 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
 @Observable @MainActor public final class TaskListModel {
     public var query: String = ""
     public var isClosedExpanded = false
+    public var executionFilter: TaskExecutionFilter = .all
+    public var stateFilter: TaskStateFilter = .all
+    public var today: WorkDate { environment.calendar.workDate(of: environment.options.clock.now()) }
     public private(set) var rows: [TaskListRow] = []
     public private(set) var errorMessage: String?
     @ObservationIgnored private let environment: AppEnvironment
@@ -40,10 +45,8 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
             let today = environment.calendar.workDate(of: environment.options.clock.now())
             let weekStart = environment.periods.weekStart(containing: today)
             let confirmed = (try? environment.plans.plan(weekStart: weekStart))?.items ?? []
-            let plannedTaskIds = Set(confirmed.filter { item in
-                item.state == .confirmed
-                    && (item.scopeType == .wholeTask || item.scopeType == .taskProject)
-            }.map(\.taskId))
+            let plansByTask = Dictionary(grouping: confirmed.filter { $0.state == .confirmed }, by: \.taskId)
+
 
             var entries: [(task: WorkTask, status: TaskStatus?)] = []
             for task in try environment.repo.tasks() {
@@ -76,7 +79,8 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
                     .sorted()
                 return TaskListRow(id: task.id, title: task.title, status: entry.status,
                                    projectNames: projectNames, dueOn: task.dueOn, dueLabel: dueLabel,
-                                   isOverdue: overdue, isInThisWeekPlan: plannedTaskIds.contains(task.id))
+                                   isOverdue: overdue, isInThisWeekPlan: plansByTask[task.id] != nil,
+                                   planScopeSummary: Self.planSummary(plansByTask[task.id] ?? []))
             }
             errorMessage = nil
         } catch {
@@ -87,9 +91,31 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
 
     /// 업무명 대소문자 무시 포함 검색. 빈 검색어면 전체.
     public var filteredRows: [TaskListRow] {
+        matchingRows(execution: executionFilter, state: stateFilter)
+    }
+
+    public func matchingRows(execution: TaskExecutionFilter, state: TaskStateFilter) -> [TaskListRow] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return rows }
-        return rows.filter { $0.title.lowercased().contains(trimmed) }
+        return rows.filter { row in
+            (trimmed.isEmpty || row.title.lowercased().contains(trimmed))
+                && state.includes(row.status)
+                && (execution == .all || state != .all || Self.isUnfinished(row.status))
+                && execution.includes(row, today: today)
+        }
+    }
+
+    public var hasExecutionFilters: Bool { executionFilter != .all || stateFilter != .all }
+    public func clearFilters() { query = ""; executionFilter = .all; stateFilter = .all }
+
+    private static func planSummary(_ items: [WeekPlanItem]) -> String? {
+        guard !items.isEmpty else { return nil }
+        if items.contains(where: { $0.scopeType == .wholeTask }) { return "이번 주 계획 · 업무 전체" }
+        let projects = items.filter { $0.scopeType == .taskProject }.count
+        let checklist = items.filter { $0.scopeType == .checklistItem }.count
+        var parts: [String] = []
+        if projects > 0 { parts.append("프로젝트 \(projects)개") }
+        if checklist > 0 { parts.append("체크리스트 \(checklist)개") }
+        return "이번 주 계획 · 일부 범위 (" + parts.joined(separator: ", ") + ")"
     }
 
     public var isSearching: Bool {
@@ -105,7 +131,7 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
     }
 
     /// 종료 업무는 기본으로 접되, 검색에서는 과거 기록도 바로 찾을 수 있다.
-    public var showsClosedRows: Bool { isSearching || isClosedExpanded }
+    public var showsClosedRows: Bool { isSearching || hasExecutionFilters || isClosedExpanded }
 
     /// 화면과 키보드 이동이 같은 행 순서를 사용한다.
     public var visibleRows: [TaskListRow] {
@@ -117,6 +143,34 @@ public struct TaskListRow: Identifiable, Equatable, Sendable {
         switch status {
         case .completed, .cancelled: return false
         default: return true
+        }
+    }
+}
+
+public enum TaskExecutionFilter: String, CaseIterable, Sendable {
+    case all = "전체", dueToday = "오늘 마감", overdue = "마감 지남", thisWeek = "이번 주 계획", noDueDate = "마감 없음"
+    public func includes(_ row: TaskListRow, today: WorkDate) -> Bool {
+        switch self {
+        case .all: return true
+        case .dueToday: return row.dueOn == today
+        case .overdue: return row.dueOn.map { $0 < today } ?? false
+        case .thisWeek: return row.isInThisWeekPlan
+        case .noDueDate: return row.dueOn == nil
+        }
+    }
+}
+
+public enum TaskStateFilter: String, CaseIterable, Sendable {
+    case all = "모든 상태", active = "예정·진행", planned = "예정", inProgress = "진행 중", onHold = "보류", completed = "완료", cancelled = "취소"
+    public func includes(_ status: TaskStatus?) -> Bool {
+        switch self {
+        case .all: return true
+        case .active: return status == .planned || status == .inProgress
+        case .planned: return status == .planned
+        case .inProgress: return status == .inProgress
+        case .onHold: return status == .onHold
+        case .completed: return status == .completed
+        case .cancelled: return status == .cancelled
         }
     }
 }

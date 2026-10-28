@@ -115,24 +115,10 @@ extension WorkRepository {
     /// 본문을 바꾸고 이전 본문을 memo_revision에 보존한다. revision은 +1.
     @discardableResult
     public func updateMemoBody(id: String, body: String, workDate: WorkDate) throws -> Memo {
-        let updated: Memo = try db.transaction {
-            guard let previous = try memo(id: id) else {
-                throw WorkLogError.notFound("memo \(id)")
-            }
-            try db.runV("""
-                INSERT OR REPLACE INTO memo_revision (memo_id, revision, body, work_date, recorded_at)
-                VALUES (?, ?, ?, ?, ?)
-                """, previous.id, previous.revision, previous.body, previous.workDate, previous.recordedAt)
-            let nextRevision = previous.revision + 1
-            try db.runV("UPDATE memo SET body = ?, work_date = ?, revision = ? WHERE id = ?",
-                       body, workDate, nextRevision, id)
-            guard let result = try memo(id: id) else {
-                throw WorkLogError.storage("memo \(id) 갱신 후 조회 실패")
-            }
-            return result
-        }
-        onSourceChanged?("memo", id)
-        return updated
+        guard let previous = try memo(id: id) else { throw WorkLogError.notFound("memo \(id)") }
+        let tagNames = try tags().filter { previous.tagIds.contains($0.id) }.map(\.name)
+        return try updateMemo(id: id, body: body, workDate: workDate,
+                              projectIds: previous.projectIds, tagNames: tagNames)
     }
 
     public func memo(id: String, includeDeleted: Bool = false) throws -> Memo? {
@@ -161,15 +147,7 @@ extension WorkRepository {
 
     /// 보존된 과거 revision (오래된 순). 조인 정보는 담지 않는다.
     public func memoRevisions(id: String) throws -> [Memo] {
-        try db.queryV("""
-            SELECT * FROM memo_revision WHERE memo_id = ? ORDER BY revision ASC
-            """, id).map { row in
-            Memo(id: row.string("memo_id") ?? id,
-                 body: row.string("body") ?? "",
-                 workDate: row.workDate("work_date") ?? WorkDate(year: 1970, month: 1, day: 1),
-                 recordedAt: row.date("recorded_at") ?? Date(timeIntervalSince1970: 0),
-                 revision: row.int("revision") ?? 1)
-        }
+        try memoHistory(id: id).map(\.memo).sorted { $0.revision < $1.revision }
     }
 
     public func softDeleteMemo(id: String) throws {

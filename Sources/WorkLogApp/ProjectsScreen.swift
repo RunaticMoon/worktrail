@@ -10,6 +10,8 @@ import WorkLogCore
     let onOpen: (String) -> Void
     let onCapture: () -> Void
     let onProjectCreated: () -> Void
+    var relatedMeetings: [Meeting] = []
+    var onOpenMeetings: ((String) -> Void)? = nil
     var detailDismissalRevision: Int = 0
     @State private var taskSelection: String?
     @State private var showsProjectTasks = false
@@ -26,6 +28,10 @@ import WorkLogCore
                 Button(action: onCreateProject) { ShortcutLabel(title: "프로젝트 추가", keys: "⌘N") }
                     .worklogKeyboardActivation(onCreateProject)
                     .worklogHelp("새 프로젝트 만들기", keys: "⌘N")
+            }
+            if let projectID = model.selectedProjectId, let onOpenMeetings {
+                let count = relatedMeetings.filter { $0.deletedAt == nil && ($0.metadata?.projectIDs.contains(projectID) ?? false) }.count
+                Button("연결된 회의 \(count)개", systemImage: "waveform") { onOpenMeetings(projectID) }
             }
             if let error = model.errorMessage {
                 RecoveryNotice(failed: error, preserved: "저장된 프로젝트와 업무는 그대로입니다.", retry: { model.load() })

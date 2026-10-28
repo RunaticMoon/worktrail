@@ -208,6 +208,33 @@ import WorkLogCore
         selectedTaskId = id
         taskDetail?.load(taskId: id, asOf: asOf)
     }
+    func openMeeting(_ hit: MeetingLocalSearchHit) {
+        guard meetings?.save() == true else { showMeetingsWindow(); return }
+        meetings?.openLocalSearchHit(hit)
+        showMeetingsWindow()
+    }
+    private func showMeetingsWindow() {
+        route = .meetings
+        NSApp.activate()
+        if let window = (NSApp.orderedWindows + NSApp.windows).first(where: {
+            $0.accessibilityIdentifier() == Self.mainWindowAccessibilityIdentifier
+        }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else { openMainWindow?() }
+    }
+    static let mainWindowAccessibilityIdentifier = "worklog.main.window"
+    func openProjectMeetings(_ projectID: String) {
+        guard meetings?.save() == true else { showMeetingsWindow(); return }
+        meetings?.query = ""
+        meetings?.showingDeleted = false
+        meetings?.filterTagID = ""
+        meetings?.filterStart = nil
+        meetings?.filterEnd = nil
+        meetings?.filterProjectID = projectID
+        meetings?.reload()
+        showMeetingsWindow()
+    }
     func openMemo(_ id: String) { selectedMemoId = id; memoDetail?.load(id: id) }
     func openGraphNode(_ node: GraphNode) {
         switch node.id.kind {
@@ -335,7 +362,7 @@ import WorkLogCore
                     // bringing the main window forward.
                     NSApp.activate()
                     self?.openMainWindow?()
-                })
+                }, onOpenMeeting: { [weak self] hit in self?.openMeeting(hit) })
         }
         searchPanel?.show()
     }
@@ -359,6 +386,11 @@ import WorkLogCore
     }
     func beginHotkeyRecording() { hotkeyCoordinator?.beginRecording() }
     func prepareToTerminate() -> Bool {
+        guard captureSession?.flushCheckpoints() != false else {
+            notice = "빠른 입력 초안을 보존하지 못해 종료를 취소했습니다. 저장 공간을 확인하고 다시 종료하세요."
+            showCapture()
+            return false
+        }
         guard meetings?.leaveScreen() != false else {
             route = .meetings
             notice = "회의록을 저장하지 못해 종료를 취소했습니다. 입력 오류를 수정하고 저장한 뒤 다시 종료하세요."

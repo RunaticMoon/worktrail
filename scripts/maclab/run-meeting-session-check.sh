@@ -27,7 +27,7 @@ trap cleanup EXIT
 mkdir "$check_dir/sources"
 # Snapshot sources before compiling so another implementation worker cannot alter
 # a Swift input halfway through this independent verification process.
-for source in MeetingAudioArchive MeetingAudioCapture MeetingPCMReader MeetingLocalModels \
+for source in MeetingAudioArchive MeetingImportedAudioArchive MeetingAudioCapture MeetingPCMReader MeetingLocalModels \
               MeetingModelRegistry MeetingWhisperEngine MeetingDiarizationEngine \
               MeetingPostProcessing MeetingRecordingSession MeetingsModel MeetingAudioRecorder; do
     cp "$repo_root/Sources/WorkLogApp/$source.swift" "$check_dir/sources/$source.swift"

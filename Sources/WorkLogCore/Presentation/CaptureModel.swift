@@ -30,17 +30,17 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
 /// Ordinary record draft only. No Secret, network or AI path.
 @Observable @MainActor public final class CaptureModel {
-    public var text = "" { didSet { selectionRange = nil; highlightOverride = nil; dismissedTokenKey = nil } }
+    public var text = "" { didSet { selectionRange = nil; highlightOverride = nil; dismissedTokenKey = nil; onDraftChanged?() } }
     /// UTF-16 selection from the native editor; nil uses existing-name prefix matching.
     public var selectionRange: NSRange?
     public var kind: RecordCaptureKind = .memo
-    public var workDate: WorkDate
-    public var dueOn: WorkDate?
-    public var dueReminderDaysBefore: Int?
+    public var workDate: WorkDate { didSet { onDraftChanged?() } }
+    public var dueOn: WorkDate? { didSet { onDraftChanged?() } }
+    public var dueReminderDaysBefore: Int? { didSet { onDraftChanged?() } }
     public var workCalendar: WorkCalendar { environment?.calendar ?? WorkCalendar() }
-    public var targetTaskId: String?
-    public var initialStatus: TaskStatus = .planned
-    public var projectTrackingMode: ProjectTrackingMode = .shared
+    public var targetTaskId: String? { didSet { onDraftChanged?() } }
+    public var initialStatus: TaskStatus = .planned { didSet { onDraftChanged?() } }
+    public var projectTrackingMode: ProjectTrackingMode = .shared { didSet { onDraftChanged?() } }
 
     /// `initialStatus`를 완료로 등록할지 여부. 새 업무 저장 시 완료 상태로 만든다.
     public var registersAsCompleted: Bool {
@@ -54,28 +54,31 @@ public enum CaptureTaskAction: Equatable, Sendable {
     private var dismissedTokenKey: String?
 
     /// 업무 탭 검색어. 제목 부분 일치(대소문자 무시).
-    public var taskQuery: String = ""
+    public var taskQuery: String = "" { didSet { onDraftChanged?() } }
     /// 업무 탭 대상: 새 업무 또는 기존 업무 id.
-    public var taskSelection: CaptureTaskSelection = .newTask
+    public var taskSelection: CaptureTaskSelection = .newTask { didSet { onDraftChanged?() } }
     /// 기존 업무에 수행할 동작: 진행기록 추가 또는 상태 변경.
-    public var taskAction: CaptureTaskAction = .addActivity
+    public var taskAction: CaptureTaskAction = .addActivity { didSet { onDraftChanged?() } }
     /// `taskAction == .changeStatus`일 때 목표 상태.
-    public var statusTarget: TaskStatus?
+    public var statusTarget: TaskStatus? { didSet { onDraftChanged?() } }
     /// 완료 시 남은 체크리스트·프로젝트 확인이 필요하면 `completeTask`가 돌려준 값.
     public private(set) var pendingCompletion: CompletionCheck?
     /// 생성·진행기록과 함께 수동 관련 링크로 저장할 후보. 상태 변경에는 쓰지 않는다.
-    public var relatedRecords: [RelatedRecordCandidate] = []
+    public var relatedRecords: [RelatedRecordCandidate] = [] { didSet { onDraftChanged?() } }
 
     public private(set) var projects: [Project] = []
     public private(set) var tags: [Tag] = []
     public private(set) var tasks: [WorkTask] = []
-    public private(set) var selectedProjectIds: [String] = []
-    public private(set) var selectedTagIds: [String] = []
+    public private(set) var selectedProjectIds: [String] = [] { didSet { onDraftChanged?() } }
+    public private(set) var selectedTagIds: [String] = [] { didSet { onDraftChanged?() } }
     public private(set) var errorMessage: String?
     public private(set) var isSubmitting = false
     public private(set) var lastSavedId: String?
     /// Deprecated: 설정 기본값으로 일반 제출을 막던 정책은 제거됐다. 활성 탭 판단은 입력 세션이 담당한다.
     public var requiresSecretEditor: Bool { environment?.settings.defaultCaptureKind == .secret }
+    @ObservationIgnored var onDraftChanged: (() -> Void)?
+    @ObservationIgnored var onSubmissionCommitted: (() -> Void)?
+    @ObservationIgnored private var checkpointDraftID: String?
     @ObservationIgnored private var environment: AppEnvironment?
     @ObservationIgnored private var linkedCapture: LinkedCaptureService?
     @ObservationIgnored private var linkStore: RecordLinkStore?
@@ -123,6 +126,47 @@ public enum CaptureTaskAction: Equatable, Sendable {
         reloadCandidates()
     }
 
+    public var missingReferenceMessage: String? {
+        if case let .existing(id) = taskSelection, !tasks.contains(where: { $0.id == id }) {
+            return "선택했던 업무가 삭제되었습니다. 본문은 유지됩니다. 기존 업무를 다시 선택하거나 새 업무를 명시적으로 선택하세요."
+        }
+        if let targetTaskId, !tasks.contains(where: { $0.id == targetTaskId }) {
+            return "진행 기록의 대상 업무가 없습니다. 다시 선택하세요."
+        }
+        if selectedProjectIds.contains(where: { id in !projects.contains { $0.id == id } }) {
+            return "선택했던 프로젝트를 사용할 수 없습니다. 해당 선택을 해제하고 다시 선택하세요."
+        }
+        if selectedTagIds.contains(where: { id in !tags.contains { $0.id == id } }) {
+            return "선택했던 태그가 삭제되었습니다. 해당 선택을 해제하고 다시 선택하세요."
+        }
+        return nil
+    }
+    public func removeUnavailableClassifications() {
+        selectedProjectIds.removeAll { id in !projects.contains { $0.id == id } }
+        selectedTagIds.removeAll { id in !tags.contains { $0.id == id } }
+    }
+    public func checkpoint() -> CaptureDraftCheckpoint {
+        if checkpointDraftID == nil { checkpointDraftID = environment?.options.ids.make() }
+        let existing: String?
+        if case let .existing(id) = taskSelection { existing = id } else { existing = nil }
+        return CaptureDraftCheckpoint(draftID: checkpointDraftID, text: text, workDate: workDate, dueOn: dueOn,
+            dueReminderDaysBefore: dueReminderDaysBefore, targetTaskId: targetTaskId,
+            initialStatus: initialStatus, projectTrackingMode: projectTrackingMode, taskQuery: taskQuery,
+            existingTaskId: existing, changesStatus: taskAction == .changeStatus, statusTarget: statusTarget,
+            relatedRecords: relatedRecords, selectedProjectIds: selectedProjectIds, selectedTagIds: selectedTagIds)
+    }
+    public func restore(_ value: CaptureDraftCheckpoint) {
+        checkpointDraftID = value.draftID
+        text = value.text; workDate = value.workDate; dueOn = value.dueOn
+        dueReminderDaysBefore = value.dueReminderDaysBefore; targetTaskId = value.targetTaskId
+        initialStatus = value.initialStatus; projectTrackingMode = value.projectTrackingMode
+        taskQuery = value.taskQuery; taskSelection = value.existingTaskId.map(CaptureTaskSelection.existing) ?? .newTask
+        taskAction = value.changesStatus ? .changeStatus : .addActivity; statusTarget = value.statusTarget
+        relatedRecords = value.relatedRecords; selectedProjectIds = value.selectedProjectIds; selectedTagIds = value.selectedTagIds
+        pendingCompletion = nil; pendingCompletionTaskId = nil
+        reloadCandidates()
+    }
+
     /// Applied only to a fresh draft; opening an existing draft preserves it.
     public func resetDefaults() {
         guard let environment else { return }
@@ -138,6 +182,7 @@ public enum CaptureTaskAction: Equatable, Sendable {
     /// 저장·완료 확인 중에는 진행 중인 작업을 버리지 않는다. 저장소에는 쓰지 않는다.
     @discardableResult public func startNewDraft() -> Bool {
         guard environment != nil, !isSubmitting, pendingCompletion == nil else { return false }
+        checkpointDraftID = nil
         text = ""
         selectedProjectIds = []
         selectedTagIds = []
@@ -488,6 +533,10 @@ public enum CaptureTaskAction: Equatable, Sendable {
 
     /// 완료 확인이 필요한 경우 `confirmRemaining: true`로 재시도한다. 성공하면 true.
     @discardableResult public func confirmCompletion() -> Bool {
+        performWithReceipt { confirmCompletionWithoutReceipt() }
+    }
+
+    private func confirmCompletionWithoutReceipt() -> Bool {
         guard let taskId = pendingCompletionTaskId, pendingCompletion != nil else { return false }
         guard !isSubmitting, let environment else { return false }
         isSubmitting = true
@@ -521,10 +570,16 @@ public enum CaptureTaskAction: Equatable, Sendable {
     // MARK: - 저장
 
     @discardableResult public func submit() -> Bool {
+        performWithReceipt { submitWithoutReceipt() }
+    }
+
+    private func submitWithoutReceipt() -> Bool {
         guard !isSubmitting, let environment, let linkedCapture else { return false }
         isSubmitting = true
         defer { isSubmitting = false }
         do {
+            reloadCandidates()
+            guard missingReferenceMessage == nil else { errorMessage = missingReferenceMessage; return false }
             switch kind {
             case .memo:
                 guard hasBody else { errorMessage = "저장할 내용을 입력하세요."; return false }
@@ -584,6 +639,59 @@ public enum CaptureTaskAction: Equatable, Sendable {
     }
 
     // MARK: - 저장 내부
+
+    /// Record creation and receipt commit together. Filesystem cleanup can safely
+    /// fail after this point without restoring the submitted action on next launch.
+    private func performWithReceipt(_ operation: () -> Bool) -> Bool {
+        guard !isSubmitting, let environment else { return false }
+        let snapshot = checkpoint(), originalKind = kind
+        let completion = pendingCompletion, completionTaskId = pendingCompletionTaskId
+        let savedId = lastSavedId, selection = selectionRange
+        let highlight = highlightOverride, dismissed = dismissedTokenKey
+        let receipts = CaptureDraftReceipts(repo: environment.repo)
+        enum NotSubmitted: Error { case unchanged }
+        do {
+            let identified = try receipts.identified(snapshot, kind: originalKind)
+            try environment.repo.db.transaction {
+                guard let draftID = identified.draftID, try !receipts.contains(draftID) else {
+                    throw WorkLogError.validation("이미 저장된 초안입니다.")
+                }
+                guard operation() else { throw NotSubmitted.unchanged }
+                checkpointDraftID = environment.options.ids.make()
+                let remaining = hasPersistentDraft(kind: originalKind) ? checkpoint() : nil
+                try receipts.record(draftID, remaining: remaining)
+            }
+            onSubmissionCommitted?()
+            return true
+        } catch NotSubmitted.unchanged {
+            // Completion confirmation is a deliberate non-submission and retains
+            // its pending prompt. Validation errors retain their specific message.
+            return false
+        } catch {
+            kind = originalKind
+            restore(snapshot)
+            pendingCompletion = completion; pendingCompletionTaskId = completionTaskId
+            lastSavedId = savedId; selectionRange = selection
+            highlightOverride = highlight; dismissedTokenKey = dismissed
+            errorMessage = "저장을 완료하지 못했습니다. 입력은 유지됩니다. 다시 시도하세요."
+            return false
+        }
+    }
+
+    /// Dates alone do not make an empty draft. Used for both file checkpoints and
+    /// the unused draft preserved by a successful status-only submission.
+    func hasPersistentDraft(kind: RecordCaptureKind) -> Bool {
+        let blankBody = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let noLinks = relatedRecords.isEmpty && selectedProjectIds.isEmpty
+            && selectedTagIds.isEmpty && targetTaskId == nil
+        if kind == .task {
+            return !(blankBody && noLinks && taskQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && dueOn == nil && dueReminderDaysBefore == nil && taskSelection == .newTask
+                && taskAction == .addActivity && statusTarget == nil && pendingCompletion == nil
+                && initialStatus == .planned && projectTrackingMode == .shared)
+        }
+        return !(blankBody && noLinks)
+    }
 
     /// 기존 업무에 진행 기록을 추가하고 관련 링크를 함께 저장한다.
     private func submitActivityToExisting(taskId: String) throws -> Bool {

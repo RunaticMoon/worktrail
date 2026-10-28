@@ -65,6 +65,16 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     private var previewGaps: [MeetingPreviewGap] = []
     private var lastCheckpoint: Double = 0
     private var player: AVAudioPlayer?
+    private var playbackTask: Task<Void, Never>?
+    private var playbackTrack: MeetingAudioTrack?
+    private var playbackEnd: Double?
+    private var playbackStart: Double = 0
+    private(set) var playingSegmentID: String?
+    private(set) var isPlaying = false
+    private(set) var playbackPosition: Double = 0
+    private(set) var playbackDuration: Double = 0
+    private(set) var playbackMessage: String?
+    var playbackRate: Float = 1 { didSet { player?.rate = playbackRate } }
     private var recoveryTask: Task<Void, Never>?
     private let monotonic: any MeetingMonotonicClock
 
@@ -363,28 +373,32 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     }
     func dismissCaptureIssue() { if !isSavePending { captureIssue = false } }
     func cancelFinalization() { finalTask?.cancel(); finalMessage = "정밀 전사 중지 요청 · 원본과 저장된 구간을 보존합니다." }
-    func retryFinalization(_ id: String) {
+    func retryFinalization(_ id: String, mode: MeetingProcessingMode = .refinedAndDiarized, sourceRunID: String? = nil) {
         guard !isRecovering, !isSavePending, !isCapturing, finalTask == nil, !models.isPreparing else { return }
         finalGeneration += 1; let job = finalGeneration
         finalTask = Task { [weak self] in
-            guard let self else { return }; await finalize(id)
+            guard let self else { return }; await finalize(id, mode: mode, sourceRunID: sourceRunID)
             if finalGeneration == job { finalTask = nil }
         }
     }
 
-    private func finalize(_ id: String) async {
+    private func finalize(_ id: String, mode: MeetingProcessingMode = .refinedAndDiarized, sourceRunID: String? = nil) async {
         finalRecordingID = id
         defer { finalRecordingID = nil; contentRevision += 1 }
-        guard await modelStore.isInstalled(.final), await modelStore.isInstalled(.diarization) else {
-            finalMessage = "정밀 전사 대기 · large-v3와 화자 분리 모델을 준비한 뒤 재시도하세요."; return
+        if mode != .diarizationOnly, !(await modelStore.isInstalled(.final)) {
+            finalMessage = "정밀 전사 대기 · large-v3 모델을 준비해 주세요."; return
+        }
+        if mode != .refinedOnly, !(await modelStore.isInstalled(.diarization)) {
+            finalMessage = "화자 분리 모델을 준비하거나 ‘정밀 전사만’ 실행하세요."; return
         }
         do {
             finalMessage = "원본으로 정밀 전사 중…"
             try await MeetingPostProcessing.run(recordingID: id, store: store, archive: archive, models: modelStore,
-                preferences: preferences) { [weak self] message in await self?.setFinalMessage(message) }
+                preferences: preferences, mode: mode, sourceRunID: sourceRunID) { [weak self] message in await self?.setFinalMessage(message) }
             finalMessage = "정밀 전사 버전을 저장했습니다. 검토 후 활성 전사본으로 선택하세요."
         } catch is CancellationError { finalMessage = "정밀 전사 대기 · 원본과 완료된 구간을 보존했습니다. 재시도할 수 있습니다." }
-        catch { finalMessage = "정밀 처리 일부를 완료하지 못했습니다. 저장된 전사와 원본을 보존했습니다. 모델·원본 상태를 확인해 재시도하세요." }
+        catch let error as WorkLogError { finalMessage = error.localizedDescription + " 원본과 완료된 전사는 보존했습니다." }
+        catch { finalMessage = "처리 단계 실패 · 원본과 완료된 정밀 전사는 보존했습니다. 화자 분리만 재시도할 수 있습니다." }
     }
     private func setFinalMessage(_ message: String) { finalMessage = message }
 
@@ -440,15 +454,51 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
 
     func play(_ segment: MeetingTranscriptSegment) {
         do {
-            guard let track = try store.track(id: segment.trackID), track.fileState == .available,
-                  let kind = MeetingAudioTrackID(rawValue: track.kind == .systemAudio ? "system" : "microphone") else { return }
-            let url = try archive.audioURL(recordingID: track.recordingID, track: kind)
-            player?.stop(); player = try AVAudioPlayer(contentsOf: url)
-            player?.currentTime = MeetingAudioTimeline.fileTime(sessionTime: segment.start, startOffset: track.startOffset, interruptions: track.interruptions)
-            player?.play()
-        } catch { captureMessage = "원본을 재생하지 못했습니다. 백업에는 음성이 포함되지 않으므로 원본 폴더도 확인하세요." }
+            guard let track = try store.track(id: segment.trackID), track.fileState == .available else {
+                playbackMessage = "원본이 없거나 삭제되어 재생할 수 없습니다. 전사 읽기·수정은 가능합니다."; return
+            }
+            let url = try archive.resolveTrackURL(relativePath: track.relativePath)
+            stopPlayback()
+            let next = try AVAudioPlayer(contentsOf: url)
+            next.enableRate = true; next.rate = playbackRate
+            next.currentTime = MeetingAudioTimeline.fileTime(sessionTime: segment.start, startOffset: track.startOffset, interruptions: track.interruptions)
+            playbackStart = next.currentTime
+            playbackEnd = min(next.duration, MeetingAudioTimeline.fileTime(sessionTime: segment.end, startOffset: track.startOffset, interruptions: track.interruptions))
+            player = next; playbackTrack = track; playingSegmentID = segment.id
+            playbackDuration = MeetingAudioTimeline.sessionTime(fileTime: next.duration, startOffset: track.startOffset, interruptions: track.interruptions)
+            playbackPosition = segment.start; playbackMessage = nil; isPlaying = next.play()
+            playbackTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                    guard let self, let player = self.player, let track = self.playbackTrack else { return }
+                    if let end = self.playbackEnd, player.currentTime >= end { player.pause(); player.currentTime = end }
+                    self.isPlaying = player.isPlaying
+                    self.playbackPosition = MeetingAudioTimeline.sessionTime(fileTime: player.currentTime,
+                        startOffset: track.startOffset, interruptions: track.interruptions)
+                }
+            }
+        } catch { playbackMessage = "원본을 재생하지 못했습니다. 원본 파일과 보관 폴더를 확인하세요. 전사는 계속 편집할 수 있습니다." }
     }
-    func stopPlayback() { player?.stop() }
+    func togglePlayback() {
+        guard let player else { return }
+        if player.isPlaying { player.pause(); isPlaying = false }
+        else {
+            if let end = playbackEnd, player.currentTime >= end { player.currentTime = playbackStart }
+            isPlaying = player.play()
+        }
+    }
+    func seekPlayback(to sessionTime: Double) {
+        guard let player, let track = playbackTrack else { return }
+        player.currentTime = min(player.duration, max(0, MeetingAudioTimeline.fileTime(sessionTime: sessionTime,
+            startOffset: track.startOffset, interruptions: track.interruptions)))
+        playbackPosition = MeetingAudioTimeline.sessionTime(fileTime: player.currentTime, startOffset: track.startOffset, interruptions: track.interruptions)
+    }
+    func skipPlayback(_ seconds: Double) { seekPlayback(to: playbackPosition + seconds) }
+    func stopPlayback() {
+        playbackTask?.cancel(); playbackTask = nil; player?.stop(); player = nil
+        playbackTrack = nil; playingSegmentID = nil; isPlaying = false; playbackEnd = nil
+        playbackPosition = 0; playbackDuration = 0
+    }
     func isPastRetention(_ recording: MeetingRecording) -> Bool {
         preferences.retentionDays > 0 &&
         clock.now().timeIntervalSince(recording.endedAt ?? recording.startedAt) >= Double(preferences.retentionDays) * 86_400
@@ -457,9 +507,14 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         guard !isRecovering, !isSavePending else { return }
         guard id != recordingID || !isCapturing, id != finalRecordingID else { return }
         do {
-            _ = try archive.acknowledgeRecovery(recordingID: id)
-            try archive.delete(recordingID: id)
-            for track in try store.tracks(recordingID: id) {
+            let tracks = try store.tracks(recordingID: id)
+            if tracks.contains(where: MeetingImportedAudioArchive.owns) {
+                try MeetingImportedAudioArchive(archive: archive, ids: ids).delete(recordingID: id, tracks: tracks)
+            } else {
+                _ = try archive.acknowledgeRecovery(recordingID: id)
+                try archive.delete(recordingID: id)
+            }
+            for track in tracks {
                 _ = try store.updateTrack(id: track.id, expectedRevision: track.revision, fileState: .deleted)
             }
             if let recording = try store.recording(id: id) {
@@ -470,8 +525,17 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     }
     func exportOriginal(_ id: String, to url: URL) {
         guard !isRecovering else { return }
-        do { _ = try archive.acknowledgeRecovery(recordingID: id); try archive.export(recordingID: id, to: url) }
-        catch { captureMessage = "원본 내보내기를 완료하지 못했습니다. 대상 폴더와 권한을 확인하세요." }
+        do {
+            let tracks = try store.tracks(recordingID: id)
+            if tracks.contains(where: MeetingImportedAudioArchive.owns) {
+                guard let recording = try store.recording(id: id) else { throw WorkLogError.notFound("녹음") }
+                let localOnly = try MeetingService(repo: store.repo).meeting(id: recording.meetingID, includeDeleted: true)?.localOnly ?? true
+                try MeetingImportedAudioArchive(archive: archive, ids: ids).export(recording: recording, tracks: tracks, localOnly: localOnly, to: url)
+            } else {
+                _ = try archive.acknowledgeRecovery(recordingID: id)
+                try archive.export(recordingID: id, to: url)
+            }
+        } catch { captureMessage = "원본 내보내기를 완료하지 못했습니다. 대상 폴더와 권한을 확인하세요." }
     }
     func importAudio(_ url: URL, meetingID: String) async throws {
         guard !isRecovering, !isSavePending, !isCapturing, !isFinalizing else { throw MeetingLocalModelError.busy }

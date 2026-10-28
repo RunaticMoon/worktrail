@@ -148,6 +148,7 @@ public final class GroundedAnswerService {
                                                     projectIds: scope.projectIds,
                                                     range: scope.range, limit: maxEvidence))
             for hit in hits {
+                guard try index.allowsExternalAI(sourceType: hit.sourceType, sourceID: hit.sourceId) else { continue }
                 if refs.count >= maxEvidence { break }
                 let id = Self.evidenceId(sourceType: hit.sourceType, sourceId: hit.sourceId)
                 guard seen.insert(id).inserted else { continue }
@@ -166,7 +167,7 @@ public final class GroundedAnswerService {
         let payload = Payload(
             jobType: AIJobType.groundedAnswer.rawValue,
             question: trimmed,
-            sources: evidence.map {
+            sources: try evidence.filter { try index.allowsExternalAI(sourceType: $0.sourceType, sourceID: $0.sourceId) }.map {
                 Payload.Source(id: $0.id, sourceType: $0.sourceType.rawValue,
                                workDate: $0.workDate, text: $0.snippet)
             }
@@ -198,7 +199,13 @@ public final class GroundedAnswerService {
                                    payloadJSON: payload, templateVersionId: template.versionId,
                                    regenerationNonce: nil)
 
-        let result = try await runner.submit(request)
+        let result = try await runner.submit(request, preflight: { [index] in
+            for item in pool {
+                guard try index.allowsExternalAI(sourceType: item.sourceType, sourceID: item.sourceId) else {
+                    throw WorkLogError.policyBlocked("검색 근거의 로컬 전용 정책이 변경되었습니다. 다시 검색하세요.")
+                }
+            }
+        })
         return Self.interpret(result: result, question: trimmed, pool: pool)
     }
 

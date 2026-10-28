@@ -99,7 +99,9 @@ public final class EvidenceQuizService: @unchecked Sendable {
                                    instructions: instructions,
                                    payloadJSON: payloadJSON,
                                    templateVersionId: versionId)
-        let result = try await runner.submit(request)
+        let result = try await runner.submit(request, preflight: { [repo] in
+            try TaskDisclosurePolicy(repo: repo).requireDisclosable(facts)
+        })
 
         // AI 실패·차단은 예외가 아니라 상태로 환원한다.
         guard result.job.status == .succeeded else {
@@ -185,6 +187,7 @@ public final class EvidenceQuizService: @unchecked Sendable {
     }
 
     private func payload(facts: ReportFacts, excludedTopics: [TopicKeyPair]) throws -> String {
+        try TaskDisclosurePolicy(repo: repo).requireDisclosable(facts)
         let tasks = facts.tasks.map { task in
             QuizPayload.Task(id: task.id, title: task.title,
                              statusAtCutoff: task.statusAtCutoff?.rawValue,

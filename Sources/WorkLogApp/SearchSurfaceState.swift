@@ -7,6 +7,9 @@ import WorkLogCore
 @Observable @MainActor final class SearchSurfaceState {
     var scope: SearchScope = .all
     var recordQuery = ""
+    var loadedLimit = 50
+    var recordRequest: SearchState?
+    var hasMore = false
     var recordResults: [SearchHit] = []
     var recordSearchError: String?
     var selectedKey: SearchHitKey?

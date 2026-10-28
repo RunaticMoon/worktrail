@@ -29,10 +29,12 @@ struct MeetingsScreen: View {
             }.frame(minWidth: 380)
         }
         .toolbar {
+            ToolbarItem { MeetingArchiveControls(model: model) }
             ToolbarItem {
                 Button("새 회의", systemImage: "plus") { model.create() }
             }
         }
+        .sheet(item: $model.taskReview) { MeetingTaskReviewSheet(model: model, review: $0) }
         .sheet(isPresented: $showingMemoPicker) { memoPicker }
         .confirmationDialog("회의록을 휴지통으로 이동할까요?", isPresented: $confirmingDelete) {
             Button("휴지통으로 이동", role: .destructive) { model.deleteSelected() }
@@ -49,6 +51,11 @@ struct MeetingsScreen: View {
         .onChange(of: model.transcript) { _, _ in model.scheduleAutosave() }
         .onChange(of: model.notes) { _, _ in model.scheduleAutosave() }
         .onChange(of: model.summaryDraft) { _, _ in model.scheduleAutosave() }
+        .onChange(of: model.manualSummary) { _, _ in model.scheduleAutosave() }
+        .onChange(of: model.manualDecisions) { _, _ in model.scheduleAutosave() }
+        .onChange(of: model.manualActions) { _, _ in model.scheduleAutosave() }
+        .onChange(of: model.manualQuestions) { _, _ in model.scheduleAutosave() }
+        .onChange(of: model.metadataDraft) { _, _ in model.scheduleAutosave() }
         .onDisappear { model.leaveScreen() }
     }
 
@@ -59,6 +66,24 @@ struct MeetingsScreen: View {
                 Text("회의록").tag(false)
                 Text("휴지통").tag(true)
             }.pickerStyle(.segmented)
+            DisclosureGroup("분류·기간·정렬") {
+                Picker("프로젝트", selection: $model.filterProjectID) {
+                    Text("모든 프로젝트").tag("")
+                    ForEach(model.projects) { Text($0.name + ($0.archivedAt == nil ? "" : " · 보관됨")).tag($0.id) }
+                }
+                Picker("태그", selection: $model.filterTagID) {
+                    Text("모든 태그").tag("")
+                    ForEach(model.tags) { Text($0.name).tag($0.id) }
+                }
+                Toggle("날짜 범위", isOn: Binding(get: { model.filterStart != nil }, set: {
+                    model.filterStart = $0 ? model.workDate : nil; model.filterEnd = $0 ? model.workDate : nil
+                }))
+                if let start = model.filterStart, let end = model.filterEnd {
+                    WorkDatePicker(title: "시작", value: Binding(get: { model.filterStart ?? start }, set: { model.filterStart = $0 }), calendar: model.calendar)
+                    WorkDatePicker(title: "종료", value: Binding(get: { model.filterEnd ?? end }, set: { model.filterEnd = $0 }), calendar: model.calendar)
+                }
+                Toggle("오래된 날짜부터", isOn: $model.oldestFirst)
+            }
             List(selection: Binding<String?>(get: { model.selected?.id }, set: { if let id = $0 { model.select(id) } })) {
                 ForEach(model.visibleRows, id: \.id) { meeting in
                     VStack(alignment: .leading, spacing: 4) {
@@ -89,6 +114,7 @@ struct MeetingsScreen: View {
                 TextField("회의 제목", text: $model.title).font(.title2).textFieldStyle(.roundedBorder)
                 WorkDatePicker(title: "회의 날짜", value: $model.workDate, calendar: model.calendar)
             }.disabled(model.isSummarizing)
+            MeetingMetadataView(model: model)
             MeetingAudioControlsView(model: model)
             if model.audio.isCapturing || !model.audio.visible.isEmpty { MeetingLiveTranscriptView(audio: model.audio) }
             legacyAudioControls
@@ -105,7 +131,11 @@ struct MeetingsScreen: View {
                 TextEditor(text: $model.notes).frame(minHeight: 140).padding(6)
                     .accessibilityLabel("회의 메모").disabled(model.isSummarizing)
             }
-            DisclosureGroup("보관한 녹음과 전사 버전") {
+            if !model.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button("메모에서 업무 연결 검토…") { model.reviewTask(text: model.notes, key: "notes:\(meeting.revision)") }
+            }
+            MeetingManualSummaryView(model: model)
+            DisclosureGroup("보관한 녹음과 전사 버전", isExpanded: $model.transcriptExpanded) {
                 MeetingRecordingLibraryView(model: model)
                 MeetingTranscriptVersionsView(model: model)
             }
@@ -125,11 +155,13 @@ struct MeetingsScreen: View {
             }
             HStack {
                 Button("저장") { _ = model.save() }.keyboardShortcut("s", modifiers: .command)
-                    .disabled(model.isSummarizing || (!model.hasEdits && !model.hasSummaryEdits))
-                Button(meeting.summary == nil ? "전사와 메모 요약" : "요약 다시 생성") { model.summarize() }
-                    .disabled(model.isBusy || !model.canSummarize)
+                    .disabled(model.isSummarizing || (!model.hasEdits && !model.hasSummaryEdits && !model.hasMetadataEdits))
+                if !meeting.localOnly {
+                    Button(meeting.summary == nil ? "전사와 메모 요약" : "요약 다시 생성") { model.summarize() }
+                        .disabled(model.isBusy || !model.canSummarize)
+                }
                 if model.isSummarizing { ProgressView().controlSize(.small); Text("요약 중…") }
-                Text(model.hasEdits || model.hasSummaryEdits ? "저장 대기" : "저장됨").font(.caption).foregroundStyle(.secondary)
+                Text(model.hasEdits || model.hasSummaryEdits || model.hasMetadataEdits ? "저장 대기" : "저장됨").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("내보내기…") { exportMeeting() }.disabled(model.isSummarizing)
                 Button("삭제", role: .destructive) { confirmingDelete = true }
@@ -143,7 +175,7 @@ struct MeetingsScreen: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if !model.canSummarize { Text("외부 AI 요약은 설정의 AI 사용 및 ChatGPT 연결 상태를 확인해 주세요.").font(.caption) }
             }
-            if let summary = meeting.summary {
+            if let summary = meeting.summary, !summary.isManual {
                 GroupBox("요약 초안 · 버전 \(summary.version)") {
                     VStack(alignment: .leading, spacing: 8) {
                         if meeting.isSummaryStale || model.hasEdits {

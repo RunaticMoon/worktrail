@@ -99,7 +99,11 @@ struct AppRootView: View {
                     set: { if !$0 { controller.selectedTaskId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                     if let detail = controller.taskDetail {
                         TaskDetailScreen(model: detail, onClose: { controller.selectedTaskId = nil },
-                            taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) })
+                            taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) },
+                            meetingRepository: environment.repo, onOpenMeeting: { hit in
+                                controller.selectedTaskId = nil
+                                controller.openMeeting(hit)
+                            })
                             .buttonStyle(.bordered)
                             .frame(minWidth: 560, minHeight: 480)
                     }
@@ -108,10 +112,7 @@ struct AppRootView: View {
                     set: { if !$0 { controller.selectedMemoId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                     if let memo = controller.memoDetail {
                         SourceActivityDetailSheet(model: memo, calendar: environment.calendar,
-                            onClose: { controller.selectedMemoId = nil }, onSaveBody: { body in
-                            guard let record = memo.memo else { throw WorkLogError.validation("메모를 찾을 수 없습니다.") }
-                            try environment.repo.updateMemoBody(id: record.id, body: body, workDate: record.workDate)
-                            memo.load(id: record.id)
+                            onClose: { controller.selectedMemoId = nil }, onSaved: {
                             controller.refresh()
                         })
                             .buttonStyle(.bordered)
@@ -125,6 +126,7 @@ struct AppRootView: View {
         .onChange(of: controller.reportModel?.versions) { _, _ in controller.reportLibrary?.load() }
         .onChange(of: controller.performanceReports?.versions) { _, _ in controller.reportLibrary?.load() }
         .tint(WorkLogTheme.accent)
+        .background(MainWindowIdentity())
         .focusedSceneValue(\.worklogFocusSidebar, focusSidebar)
         .onAppear {
             let action = openWindow
@@ -261,14 +263,20 @@ struct AppRootView: View {
                 ProjectsScreen(model: projects, calendar: environment.calendar,
                     onOpen: { controller.openTask($0) }, onCapture: { controller.showTaskCapture() },
                     onProjectCreated: { controller.refresh() },
+                    relatedMeetings: controller.meetings?.rows ?? [],
+                    onOpenMeetings: { controller.openProjectMeetings($0) },
                     detailDismissalRevision: detailDismissalRevision)
             }
         case .meetings:
-            if let meetings = controller.meetings { MeetingsScreen(model: meetings) }
+            if let meetings = controller.meetings {
+                MeetingsScreen(model: meetings).onAppear {
+                    meetings.onOpenTask = { controller.openTask($0) }
+                }
+            }
         case .search:
             if let search = controller.search, let surface = controller.searchSurface {
                 SearchScreen(model: search, surface: surface, environment: environment, secrets: controller.secrets,
-                    onOpenSecrets: { controller.route = .secrets })
+                    onOpenSecrets: { controller.route = .secrets }, onOpenMeeting: { controller.openMeeting($0) })
             }
         case .graph:
             if let graph = controller.graph { GraphScreen(model: graph, onOpen: { controller.openGraphNode($0) }) }
@@ -306,6 +314,18 @@ struct AppRootView: View {
                     Task { await controller.restoreBackup(backup, includeVault: include) }
                 })
             }
+        }
+    }
+}
+
+/// Identifies main windows without changing SwiftUI's scene/restoration identifier.
+@MainActor private struct MainWindowIdentity: NSViewRepresentable {
+    func makeNSView(context: Context) -> IdentityView { IdentityView() }
+    func updateNSView(_ view: IdentityView, context: Context) {}
+    final class IdentityView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.setAccessibilityIdentifier(AppController.mainWindowAccessibilityIdentifier)
         }
     }
 }
