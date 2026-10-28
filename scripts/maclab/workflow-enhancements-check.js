@@ -1,16 +1,16 @@
 /* Native UI checks for a disposable DEBUG fixture only.
- * osascript -l JavaScript scripts/maclab/workflow-enhancements-check.js --pid PID --action inspect|settings|due|secret|reports|windows
+ * osascript -l JavaScript scripts/maclab/workflow-enhancements-check.js --pid PID --action inspect|settings|integrations|due|secret|secretLibrary|reports|windows|screenshot
  * Requires a /tmp/WorkLogUIReview- directory, dev.worklog.UIReview.Workflow013,
  * verified --ui-test-fixture many, and the exact PID.
- * Never launches OAuth, stores credentials, starts recording, or targets production.
- * The fixture guard, locked-session refusal, and due-date flow were executed on
- * macOS. Remaining actions require validation in an unlocked console session.
+ * Never launches OAuth, saves credentials, starts recording, or targets production.
+ * Integration input uses synthetic values only and does not save or import.
  */
 ObjC.import('AppKit');
 ObjC.import('ApplicationServices');
 ObjC.import('CoreGraphics');
 
 function read(node, attribute) {
+    if (!node) return null;
     var output = Ref();
     if (Number($.AXUIElementCopyAttributeValue(node, $(attribute), output)) !== 0) return null;
     return ObjC.castRefToObject(output[0]);
@@ -29,7 +29,7 @@ function array(value) {
 
 function run(args) {
     var start = Number($.NSProcessInfo.processInfo.systemUptime), stage = 'guard';
-    var result = {ok: false, checks: {}, realMicrophoneOpened: false, credentialsEntered: false};
+    var result = {ok: false, checks: {}, realMicrophoneOpened: false, realCredentialsEntered: false, settingsSaved: false};
     function need(value, code) { if (!value) throw new Error(code); return value; }
     function check(name, value) { result.checks[name] = Boolean(value); need(value, 'ASSERT_' + name); }
     function tick() { need(Number($.NSProcessInfo.processInfo.systemUptime) - start < 55, 'DEADLINE'); }
@@ -81,7 +81,8 @@ function run(args) {
             for (var window of windows()) {
                 var match = walk(window, function (node, actualRole) {
                     if (role && role !== actualRole) return false;
-                    var values = [text(node, 'AXTitle'), text(node, 'AXDescription'), text(node, 'AXIdentifier')];
+                    var values = [text(node, 'AXTitle'), text(node, 'AXDescription'), text(node, 'AXIdentifier'),
+                        text(read(node, 'AXTitleUIElement'), 'AXValue'), text(node, 'AXPlaceholderValue')];
                     if (actualRole === 'AXStaticText') values.push(text(node, 'AXValue'));
                     return values.some(function (value) { return exact ? value === label : value.indexOf(label) >= 0; });
                 });
@@ -106,8 +107,9 @@ function run(args) {
             inputAllowed();
             var info = array(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID)));
             var owned = info.filter(function (item) {
+                var bounds = ObjC.deepUnwrap(item.objectForKey('kCGWindowBounds'));
                 return Number(ObjC.unwrap(item.objectForKey('kCGWindowOwnerPID'))) === pid &&
-                    Number(ObjC.unwrap(item.objectForKey('kCGWindowLayer'))) === 0;
+                    bounds.Width >= 300 && bounds.Height >= 200;
             });
             if (!owned.length) { result.screenshotUnavailable = true; return; }
             var id = Number(ObjC.unwrap(owned[0].objectForKey('kCGWindowNumber')));
@@ -123,8 +125,34 @@ function run(args) {
         function focus(node) { inputAllowed(); need(Number($.AXUIElementSetAttributeValue(node, $('AXFocused'), $.kCFBooleanTrue)) === 0, 'FOCUS'); pause(); }
         function input(node, value) {
             focus(node); key(0, ['command down']);
-            need(/^[A-Za-z0-9 ]*$/.test(value), 'SYNTHETIC_ASCII_INPUT');
+            need(/^[\x20-\x7E]*$/.test(value), 'SYNTHETIC_ASCII_INPUT');
             inputAllowed(); events.keystroke(value); pause();
+        }
+        function clickNode(node) {
+            function coordinate(attribute, component) {
+                var native = need(read(node, attribute), 'BOUNDS_MISSING');
+                var description = string(ObjC.castRefToObject($.CFCopyDescription(native)));
+                var names = component === 'width' ? '(?:width|w)' : component === 'height' ? '(?:height|h)' : component;
+                var match = description.match(new RegExp('\\b' + names + '\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)'));
+                return Number(need(match, 'BOUNDS_UNREADABLE')[1]);
+            }
+            var x = coordinate('AXPosition', 'x'), y = coordinate('AXPosition', 'y');
+            var width = coordinate('AXSize', 'width'), height = coordinate('AXSize', 'height');
+            need(width > 0 && height > 0, 'BOUNDS_EMPTY');
+            inputAllowed();
+            var point = $.CGPointMake(x + width / 2, y + height / 2);
+            var down = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft);
+            var up = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, point, $.kCGMouseButtonLeft);
+            $.CGEventSetIntegerValueField(down, $.kCGMouseEventClickState, 1);
+            $.CGEventSetIntegerValueField(up, $.kCGMouseEventClickState, 1);
+            $.CGEventPost($.kCGHIDEventTap, down);
+            $.CGEventPost($.kCGHIDEventTap, up);
+            pause();
+        }
+        function selectSettingsRow(label) {
+            var button = find('AXButton', label, true);
+            if (button) { press(button); return; }
+            clickNode(wait(function () { return find('AXStaticText', label, true); }, 'SETTINGS_ROW_' + label));
         }
         function activate() {
             if (!windows().length) {
@@ -143,6 +171,10 @@ function run(args) {
             wait(front, 'ACTIVATE');
         }
         if (action !== 'inspect' && action !== 'windows') activate();
+        if (['settings', 'integrations', 'due', 'secret', 'reports', 'secretLibrary'].indexOf(action) >= 0) {
+            var existingPanelClose = find('AXButton', '빠른 입력 닫기', true);
+            if (existingPanelClose) press(existingPanelClose);
+        }
         stage = action;
         result.windowCount = windows().length;
         result.foreground = front();
@@ -154,6 +186,8 @@ function run(args) {
                 }
                 return false;
             });
+        } else if (action === 'screenshot') {
+            capture('workflow-current');
         } else if (action === 'windows') {
             ObjC.import('CoreGraphics');
             var info = array(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID)));
@@ -162,25 +196,50 @@ function run(args) {
             });
         } else if (action === 'settings') {
             key(43, ['command down']);
-            press(wait(function () { return find('AXButton', 'AI 연결', true); }, 'AI_NAV'));
-            check('cliPathField', find('AXTextField', 'Codex CLI 실행 파일') !== null);
+            selectSettingsRow('AI 연결');
+            if (!find('AXTextField', 'Codex CLI 실행 파일')) {
+                press(control('AXPopUpButton', 'AI 연결 방식'));
+                press(wait(function () { return find('AXMenuItem', 'Codex CLI', false); }, 'CLI_OPTION'));
+            }
+            check('cliPathField', wait(function () { return find('AXTextField', 'Codex CLI 실행 파일'); }, 'CLI_PATH_FIELD') !== null);
             var picker = control('AXPopUpButton', 'AI 연결 방식'); press(picker);
             press(wait(function () { return find('AXMenuItem', 'OpenAI 호환 API', false); }, 'COMPATIBLE_OPTION'));
-            check('compatibleBaseURL', find('AXTextField', 'API 기본 URL') !== null);
+            check('compatibleBaseURL', wait(function () { return find('AXTextField', 'API 기본 URL'); }, 'COMPATIBLE_BASE_URL') !== null);
             check('deepSeekPreset', find('AXButton', 'DeepSeek 기본값 사용', true) !== null);
             press(control('AXButton', 'DeepSeek 기본값 사용', true));
             check('deepSeekURL', text(control('AXTextField', 'API 기본 URL'), 'AXValue') === 'https://api.deepseek.com');
             capture('compatible-settings');
             press(control('AXPopUpButton', 'AI 연결 방식'));
             press(wait(function () { return find('AXMenuItem', 'Codex CLI', false); }, 'CLI_OPTION'));
-            press(control('AXButton', '활동 수집', true));
-            press(control('AXDisclosureTriangle', 'GitHub Enterprise', false));
-            press(control('AXDisclosureTriangle', 'Jira Cloud', false));
-            check('githubHost', find('AXTextField', 'https://github.company.com') !== null);
-            check('jiraHost', find('AXTextField', 'https://company.atlassian.net') !== null);
-            check('jiraJQL', find('AXTextField', '수집할 이슈 JQL') !== null || find('AXTextArea', '수집할 이슈 JQL') !== null);
-            check('manualImport', find('AXButton', '지금 가져오기', true) !== null);
+        } else if (action === 'integrations') {
+            key(43, ['command down']);
+            selectSettingsRow('활동 수집');
+            var fields = [
+                {id: 'activity-github-base-url', value: 'https://github.example.invalid'},
+                {id: 'activity-github-account', value: 'fixture-user'},
+                {id: 'activity-github-token', value: 'fixturegithubtoken', secure: true},
+                {id: 'activity-jira-base-url', value: 'https://jira.example.invalid'},
+                {id: 'activity-jira-account', value: 'fixture@example.invalid'},
+                {id: 'activity-jira-token', value: 'fixturejiratoken', secure: true},
+                {id: 'activity-jira-jql', value: 'assignee = currentUser()'}
+            ];
+            fields.forEach(function (field) {
+                var node = wait(function () { return find(null, field.id, true); }, 'FIELD_' + field.id);
+                check(field.id + '-visible', node !== null && Boolean(ObjC.unwrap(read(node, 'AXEnabled'))));
+                if (field.secure) check(field.id + '-secure', text(node, 'AXSubrole') === 'AXSecureTextField');
+            });
             capture('activity-integrations');
+            fields.forEach(function (field) {
+                input(control(null, field.id, true), field.value);
+                check(field.id + '-editable', wait(function () {
+                    var current = control(null, field.id, true);
+                    var value = text(current, 'AXValue');
+                    return field.secure ? value.length > 0 : value === field.value;
+                }, 'INPUT_' + field.id));
+            });
+            result.syntheticCredentialsEntered = true;
+            check('manualImport', find('AXButton', '지금 가져오기', true) !== null);
+            capture('activity-integrations-input');
         } else if (action === 'due') {
             key(19, ['command down']); key(45, ['command down']);
             wait(function () { return find(null, 'task-due-enabled', true); }, 'DUE_TOGGLE');
@@ -200,6 +259,7 @@ function run(args) {
             // Main navigation releases shared Secret editor ownership before the panel opens.
             key(18, ['command down']); key(45, ['command down']); key(20, ['command down']);
             var unlock = find('AXButton', '잠금 해제', true); if (unlock) press(unlock);
+            var resume = find('AXButton', '이어서 편집', true); if (resume) press(resume);
             var group = wait(function () { return find('AXTextField', '그룹 (선택 사항)', true); }, 'SECRET_GROUP');
             check('groupInitiallyFocused', focused(group));
             input(group, 'UI');
@@ -211,6 +271,11 @@ function run(args) {
             check('tabMovesToName', focused(control('AXTextField', 'Secret 제목', true)));
             capture('secret-name-focus');
             key(53);
+        } else if (action === 'secretLibrary') {
+            key(26, ['command down']); // Command-7: Secret library.
+            var unlockLibrary = find('AXButton', '잠금 해제', true); if (unlockLibrary) press(unlockLibrary);
+            check('secretGroupSection', wait(function () { return find(null, 'UI 검증 전용'); }, 'SECRET_GROUP_SECTION') !== null);
+            capture('secret-group-library');
         } else if (action === 'reports') {
             key(22, ['command down']); // Command-6: report library.
             press(wait(function () { return find(null, 'report-library-period-weekly', true); }, 'WEEKLY_FILTER'));

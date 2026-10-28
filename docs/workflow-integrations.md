@@ -20,7 +20,7 @@
 
 ## GitHub Enterprise / Atlassian Cloud Jira
 
-설정 → 활동 수집에서 서비스를 켜고 HTTPS 주소·계정·API 토큰을 저장한다. 토큰은 서버와 계정별 별도 Keychain 항목이다. 다른 서버로 주소를 바꿔도 기존 토큰을 자동 전송하지 않는다. 리디렉션을 따라 인증을 전송하지 않고 시스템 TLS 검증을 사용한다. 사내 서버 연결에는 Mac의 VPN·사내 DNS·인증서 설정이 필요하다.
+설정 → 활동 수집에서 서비스를 켜고 HTTPS 주소·계정·API 토큰을 저장한다. GitHub와 Jira 입력란은 각각 기본 GroupBox에 항상 표시한다. 토큰은 서버와 계정별 별도 Keychain 항목이다. 다른 서버로 주소를 바꿔도 기존 토큰을 자동 전송하지 않는다. 리디렉션을 따라 인증을 전송하지 않고 시스템 TLS 검증을 사용한다. 사내 서버 연결에는 Mac의 VPN·사내 DNS·인증서 설정이 필요하다.
 
 | 서비스 | 설정 | 가져오는 활동 |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ GitHub Events API는 서버 보존 기간과 최대 300개 제한이 있어 전�
 - 배포 도구 Python 검사: 60개 중 55개 통과, 조건부 검사 5개 생략.
 - 합성 PCM 기반 native 회의 세션 검사: 9개 통과. 실제 마이크는 열지 않았다.
 - 실제 Codex 0.163.0 + localhost 가짜 API: 인증 헤더 없음, 노출 도구 `[]`, 가짜 MCP 실행 없음, 임시 HOME 정리 확인. 재실행: `python3 scripts/maclab/run-codex-isolation-check.py --codex /path/to/codex`.
-- 화면·키보드: 전용 fixture에서 오늘 화면 렌더링과 Cmd2 → CmdN → 마감일 설정 → 알림 시작 3일/4일 변경 → 마감일 해제 시 알림 제거 → Escape 동선을 통과했다. 설정·Secret·리포트 동선은 Mac의 반복 잠금으로 확인이 제한되었다. `scripts/maclab/workflow-enhancements-check.js`는 입력 전에 소유 PID·fixture 경로·foreground·화면 잠금을 검사한다. 잠금 해제 후 추가 검사 결과는 PR에 기록하며 기존 사용자의 fixture 프로세스는 보존한다.
+- 화면·키보드: 전용 fixture에서 오늘 화면 렌더링과 Cmd2 → CmdN → 마감일 설정 → 알림 시작 3일/4일 변경 → 마감일 해제 시 알림 제거 → Escape 동선을 통과했다. CLI/API 전환·DeepSeek 기본값, Secret 그룹별 목록·그룹 초기 포커스·자동완성 선택·Tab으로 제목 이동, 리포트 목록의 두 계열 아이콘 구분도 확인했다. `scripts/maclab/workflow-enhancements-check.js`는 입력 전에 소유 PID·fixture 경로·foreground·화면 잠금을 검사하고 사용자 클립보드를 조작하지 않는다. 기존 사용자의 fixture 프로세스는 보존한다.
 
 실제 Enterprise 로그인, DeepSeek 유료 호출, 사내 GitHub/Jira 접근, 마이크 녹음과 OS 알림 전달은 별도 사용자 환경 확인 대상이다. 녹음 시작 코드의 결함을 수정했지만, 사용자가 겪은 마이크 실패의 실제 권한·장치 상태까지 확인한 것은 아니다.
 
