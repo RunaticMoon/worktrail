@@ -126,6 +126,7 @@ struct AppRootView: View {
         .onChange(of: controller.reportModel?.versions) { _, _ in controller.reportLibrary?.load() }
         .onChange(of: controller.performanceReports?.versions) { _, _ in controller.reportLibrary?.load() }
         .tint(WorkLogTheme.accent)
+        .background(MainWindowIdentity())
         .focusedSceneValue(\.worklogFocusSidebar, focusSidebar)
         .onAppear {
             let action = openWindow
@@ -313,6 +314,18 @@ struct AppRootView: View {
                     Task { await controller.restoreBackup(backup, includeVault: include) }
                 })
             }
+        }
+    }
+}
+
+/// Identifies main windows without changing SwiftUI's scene/restoration identifier.
+@MainActor private struct MainWindowIdentity: NSViewRepresentable {
+    func makeNSView(context: Context) -> IdentityView { IdentityView() }
+    func updateNSView(_ view: IdentityView, context: Context) {}
+    final class IdentityView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.setAccessibilityIdentifier(AppController.mainWindowAccessibilityIdentifier)
         }
     }
 }

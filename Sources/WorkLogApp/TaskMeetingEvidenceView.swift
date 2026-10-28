@@ -9,7 +9,7 @@ struct TaskMeetingEvidenceView: View {
     @State private var links: [MeetingTaskLink] = []
     @State private var error: String?
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 8) {
             if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
             if !links.isEmpty {
                 DisclosureGroup("회의 근거 (\(links.count))") {

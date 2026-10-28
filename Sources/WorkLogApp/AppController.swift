@@ -216,8 +216,14 @@ import WorkLogCore
     private func showMeetingsWindow() {
         route = .meetings
         NSApp.activate()
-        openMainWindow?()
+        if let window = (NSApp.orderedWindows + NSApp.windows).first(where: {
+            $0.accessibilityIdentifier() == Self.mainWindowAccessibilityIdentifier
+        }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else { openMainWindow?() }
     }
+    static let mainWindowAccessibilityIdentifier = "worklog.main.window"
     func openProjectMeetings(_ projectID: String) {
         guard meetings?.save() == true else { showMeetingsWindow(); return }
         meetings?.query = ""
