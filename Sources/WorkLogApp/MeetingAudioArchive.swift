@@ -135,6 +135,27 @@ struct MeetingAudioArchive: Sendable {
         return result
     }
 
+    /// DB-owned relative paths cover native recordings and imported meeting archives.
+    /// Validate every component, including the final file, before any audio reader opens it.
+    func resolveTrackURL(relativePath: String) throws -> URL {
+        try validateRoot()
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !relativePath.hasPrefix("/"), !relativePath.contains("\\"), !relativePath.contains("\0"),
+              !components.isEmpty, components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw MeetingAudioArchiveError.invalidPath
+        }
+        var result = root
+        for (index, component) in components.enumerated() {
+            result.appendPathComponent(String(component))
+            guard result.standardizedFileURL == result.resolvingSymlinksInPath().standardizedFileURL else {
+                throw MeetingAudioArchiveError.invalidPath
+            }
+            if index == components.count - 1 { try requireRegularFile(result) }
+            else { try requireDirectory(result) }
+        }
+        return result
+    }
+
     /// Explicit user deletion only; unknown entries block deletion before any write.
     func delete(recordingID: String) throws {
         let snapshot = try read(recordingID: recordingID)

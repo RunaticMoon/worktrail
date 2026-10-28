@@ -457,8 +457,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             guard let track = try store.track(id: segment.trackID), track.fileState == .available else {
                 playbackMessage = "원본이 없거나 삭제되어 재생할 수 없습니다. 전사 읽기·수정은 가능합니다."; return
             }
-            let url = archive.root.appendingPathComponent(track.relativePath).standardizedFileURL
-            guard url.path.hasPrefix(archive.root.standardizedFileURL.path + "/") else { throw MeetingAudioArchiveError.invalidPath }
+            let url = try archive.resolveTrackURL(relativePath: track.relativePath)
             stopPlayback()
             let next = try AVAudioPlayer(contentsOf: url)
             next.enableRate = true; next.rate = playbackRate

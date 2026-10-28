@@ -158,13 +158,9 @@ enum MeetingPostProcessing {
     }
 
     static func audioURL(_ track: MeetingAudioTrack, archive: MeetingAudioArchive) throws -> URL {
-        let kind: MeetingAudioTrackID = track.kind == .systemAudio ? .system : .microphone
-        let url = try archive.audioURL(recordingID: track.recordingID, track: kind)
-        guard url.standardizedFileURL.path == archive.root.appendingPathComponent(track.relativePath).standardizedFileURL.path else {
-            throw MeetingAudioArchiveError.invalidPath
-        }
-        return url
+        try archive.resolveTrackURL(relativePath: track.relativePath)
     }
+
 }
 
 private actor MeetingFinalWindowAccumulator {

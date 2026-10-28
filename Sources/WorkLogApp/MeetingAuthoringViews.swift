@@ -78,7 +78,7 @@ struct MeetingMetadataView: View {
                 if model.metadataDraft.occurredAt != nil {
                     DatePicker("실제 회의 시각", selection: Binding(get: { model.metadataDraft.occurredAt ?? model.selected!.createdAt }, set: { model.metadataDraft.occurredAt = $0 }))
                 }
-                TextField("참석자 (쉼표로 구분, 미지정 가능)", text: Binding(get: { model.metadataDraft.participants.joined(separator: ", ") }, set: {
+                TextField("참석자 (쉼표로 구분, 미지정 가능)", text: Binding(get: { model.metadataDraft.participants.joined(separator: ",") }, set: {
                     model.metadataDraft.participants = $0.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
                 }))
                 TextField("안건 (선택)", text: $model.metadataDraft.agenda, axis: .vertical)

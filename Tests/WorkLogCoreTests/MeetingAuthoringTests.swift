@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(Darwin)
+import Darwin
+#endif
 @testable import WorkLogCore
 
 final class MeetingAuthoringTests: XCTestCase {
@@ -103,7 +106,16 @@ final class MeetingAuthoringTests: XCTestCase {
         XCTAssertEqual(hits.count, 50); XCTAssertNotNil(hits.first?.runID); XCTAssertNotNil(hits.first?.segmentID)
         print("MEETING_FIXTURE segments=6000 searchResults=50 searchSeconds=\(elapsed)")
         var filter = MeetingSegmentFilter(); filter.unconfirmedOnly = true; filter.unknownSpeakerOnly = true
+        let loadStarted = ProcessInfo.processInfo.systemUptime
         let segments = try store.segments(runID: run.id)
+        let loadElapsed = ProcessInfo.processInfo.systemUptime - loadStarted
+        #if canImport(Darwin)
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        print("MEETING_FIXTURE loadSeconds=\(loadElapsed) processPeakRSSBytes=\(usage.ru_maxrss)")
+        #else
+        print("MEETING_FIXTURE loadSeconds=\(loadElapsed) processPeakRSS=unmeasured")
+        #endif
         XCTAssertEqual(segments.filter(filter.matches).count, 2000)
     }
 }

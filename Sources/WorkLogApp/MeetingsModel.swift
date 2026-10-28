@@ -39,6 +39,7 @@ struct MeetingTaskReview: Identifiable {
     var filterEnd: WorkDate?
     var oldestFirst = false
     var segmentFilter = MeetingSegmentFilter()
+    var transcriptExpanded = false
     var selectedSegmentID: String?
     var taskReview: MeetingTaskReview?
     var summaryHistory: [MeetingSummary] = []
@@ -120,7 +121,11 @@ struct MeetingTaskReview: Identifiable {
     func openLocalSearchHit(_ hit: MeetingLocalSearchHit) {
         select(hit.meetingID)
         guard selected?.id == hit.meetingID else { return }
-        if let runID = hit.runID { viewedRunID = runID; refreshRun() }
+        if let runID = hit.runID { viewedRunID = runID; refreshRun(); transcriptExpanded = true }
+        if let segment = segments.first(where: { $0.id == hit.segmentID }), !segmentFilter.matches(segment) {
+            segmentFilter = MeetingSegmentFilter()
+            message = "검색한 구간을 표시하기 위해 전사 필터를 해제했습니다."
+        }
         selectedSegmentID = hit.segmentID
         if let segment = segments.first(where: { $0.id == hit.segmentID }) { audio.play(segment) }
     }

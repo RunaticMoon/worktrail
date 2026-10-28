@@ -135,7 +135,7 @@ struct MeetingsScreen: View {
                 Button("메모에서 업무 연결 검토…") { model.reviewTask(text: model.notes, key: "notes:\(meeting.revision)") }
             }
             MeetingManualSummaryView(model: model)
-            DisclosureGroup("보관한 녹음과 전사 버전") {
+            DisclosureGroup("보관한 녹음과 전사 버전", isExpanded: $model.transcriptExpanded) {
                 MeetingRecordingLibraryView(model: model)
                 MeetingTranscriptVersionsView(model: model)
             }

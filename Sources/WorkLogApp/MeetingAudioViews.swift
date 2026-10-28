@@ -216,7 +216,8 @@ struct MeetingRecordingLibraryView: View {
             HStack {
                 Text(recording.startedAt, format: .dateTime.month().day().hour().minute())
                 Text(recording.state.meetingLabel).foregroundStyle(.secondary)
-                Spacer()
+            }
+            HStack {
                 Menu("정밀 처리") {
                     Button("정밀 전사만 새로 실행") { model.audio.retryFinalization(recording.id, mode: .refinedOnly) }
                     Button("정밀 전사 + 화자 분리 (완료 결과 재사용)") { model.audio.retryFinalization(recording.id) }
@@ -300,13 +301,20 @@ struct MeetingTranscriptVersionsView: View {
         .sheet(item: $editingSpeaker) { MeetingSpeakerEditor(model: model, speaker: $0) }
     }
     private var versionControls: some View {
-        HStack {
+        VStack(alignment: .leading, spacing: 8) {
             Picker("전사 버전", selection: $model.viewedRunID) {
                 Text("버전 선택").tag(Optional<String>.none)
                 ForEach(model.runs) { run in
                     Text("v\(run.version) · \(run.stage.meetingLabel) · \(run.status.meetingLabel)").tag(Optional(run.id))
                 }
             }
+            ViewThatFits(in: .horizontal) {
+                HStack { versionActions }
+                VStack(alignment: .leading, spacing: 8) { versionActions }
+            }
+        }
+    }
+    @ViewBuilder private var versionActions: some View {
             Button("활성 전사본으로 사용…") {
                 activationMeetingID = model.selected?.id; activationRunID = model.viewedRunID
                 confirmingActivation = true
@@ -317,7 +325,6 @@ struct MeetingTranscriptVersionsView: View {
                     .disabled(model.audio.isFinalizing || model.audio.isCapturing || model.selected?.deletedAt != nil)
             }
             Button("전사 내보내기…") { exportTranscript() }.disabled(model.viewedRun == nil)
-        }
     }
     private var speakerControls: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -342,7 +349,8 @@ struct MeetingTranscriptVersionsView: View {
                 Text(name).font(.caption)
                 if !segment.isFinal { Text("미확정 구간").font(.caption).foregroundStyle(.secondary) }
                 if segment.isUserEdited { Text("수정됨").font(.caption).foregroundStyle(.secondary) }
-                Spacer()
+            }
+            HStack {
                 Button("업무 연결…") { model.reviewTask(text: segment.text, key: "segment:\(segment.id)", segment: segment) }
                     .disabled(model.selected?.deletedAt != nil)
                 Button("수정…") { model.selectedSegmentID = segment.id; editingSegment = segment }.disabled(model.selected?.deletedAt != nil || model.isSummarizing || model.viewedRun?.status == .running)
@@ -360,6 +368,8 @@ struct MeetingTranscriptVersionsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 TextField("전사에서 찾기 (⌘F)", text: $model.segmentFilter.query).focused($searchFocused)
+            }
+            HStack {
                 Button("찾기") { searchFocused = true }.keyboardShortcut("f", modifiers: .command)
                 Button("이전") { moveResult(-1) }.keyboardShortcut("g", modifiers: [.command, .shift])
                 Button("다음") { moveResult(1) }.keyboardShortcut("g", modifiers: .command)
@@ -389,6 +399,8 @@ struct MeetingTranscriptVersionsView: View {
                 Button("정지") { model.audio.stopPlayback() }
                 Button("−5초") { model.audio.skipPlayback(-5) }
                 Button("+5초") { model.audio.skipPlayback(5) }
+            }
+            HStack {
                 Picker("배속", selection: Binding(get: { model.audio.playbackRate }, set: { model.audio.playbackRate = $0 })) {
                     Text("0.75×").tag(Float(0.75)); Text("1×").tag(Float(1)); Text("1.25×").tag(Float(1.25)); Text("1.5×").tag(Float(1.5)); Text("2×").tag(Float(2))
                 }.frame(maxWidth: 100)
