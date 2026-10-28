@@ -71,6 +71,11 @@ public final class MeetingService: @unchecked Sendable {
     public func setLocalOnly(id: String, expectedRevision: Int, localOnly: Bool) throws -> Meeting {
         try repo.db.transaction {
             let current = try requireMeeting(id, expectedRevision: expectedRevision)
+            // Tightening a source policy also protects its existing derived tasks.
+            // Protection is sticky and must survive later policy changes or deletion.
+            if localOnly {
+                try repo.db.runV("UPDATE meeting_task_link SET local_only = 1 WHERE meeting_id = ? AND local_only = 0", id)
+            }
             if current.localOnly == localOnly { return current }
             try repo.db.runV("UPDATE meeting SET local_only = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
                 localOnly, repo.clock.now(), id, expectedRevision)

@@ -209,17 +209,25 @@ import WorkLogCore
         taskDetail?.load(taskId: id, asOf: asOf)
     }
     func openMeeting(_ hit: MeetingLocalSearchHit) {
-        guard meetings?.save() == true else { return }
+        guard meetings?.save() == true else { showMeetingsWindow(); return }
         meetings?.openLocalSearchHit(hit)
+        showMeetingsWindow()
+    }
+    private func showMeetingsWindow() {
         route = .meetings
         NSApp.activate()
         openMainWindow?()
     }
     func openProjectMeetings(_ projectID: String) {
-        guard meetings?.save() == true else { return }
+        guard meetings?.save() == true else { showMeetingsWindow(); return }
+        meetings?.query = ""
+        meetings?.showingDeleted = false
+        meetings?.filterTagID = ""
+        meetings?.filterStart = nil
+        meetings?.filterEnd = nil
         meetings?.filterProjectID = projectID
         meetings?.reload()
-        route = .meetings
+        showMeetingsWindow()
     }
     func openMemo(_ id: String) { selectedMemoId = id; memoDetail?.load(id: id) }
     func openGraphNode(_ node: GraphNode) {

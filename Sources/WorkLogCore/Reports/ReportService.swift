@@ -209,6 +209,9 @@ public final class ReportService {
         let result = try await runner.submit(request, preflight: { [repo] in
             try TaskDisclosurePolicy(repo: repo).requireDisclosable(facts)
         })
+        // A source can become local-only while the provider is running. Neither
+        // its response nor the deterministic fallback may persist the old facts.
+        try TaskDisclosurePolicy(repo: repo).requireDisclosable(facts)
         let aiJobStatus = result.job.status
 
         // AI 실패·차단 → 기록 기반 초안으로 대체(REP-T18).
