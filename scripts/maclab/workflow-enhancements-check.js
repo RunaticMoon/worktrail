@@ -124,21 +124,29 @@ function run(args) {
         function focused(node) { var value = read(node, 'AXFocused'); return value !== null && Boolean(ObjC.unwrap(value)); }
         function focus(node) { inputAllowed(); need(Number($.AXUIElementSetAttributeValue(node, $('AXFocused'), $.kCFBooleanTrue)) === 0, 'FOCUS'); pause(); }
         function input(node, value) {
-            focus(node); key(0, ['command down']);
+            inputAllowed();
+            $.AXUIElementPerformAction(node, $('AXScrollToVisible'));
+            pause();
+            clickNode(node); key(0, ['command down']);
             need(/^[\x20-\x7E]*$/.test(value), 'SYNTHETIC_ASCII_INPUT');
             inputAllowed(); events.keystroke(value); pause();
         }
         function clickNode(node) {
-            function coordinate(attribute, component) {
-                var native = need(read(node, attribute), 'BOUNDS_MISSING');
+            function coordinate(target, attribute, component) {
+                var native = need(read(target, attribute), 'BOUNDS_MISSING');
                 var description = string(ObjC.castRefToObject($.CFCopyDescription(native)));
                 var names = component === 'width' ? '(?:width|w)' : component === 'height' ? '(?:height|h)' : component;
                 var match = description.match(new RegExp('\\b' + names + '\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)'));
                 return Number(need(match, 'BOUNDS_UNREADABLE')[1]);
             }
-            var x = coordinate('AXPosition', 'x'), y = coordinate('AXPosition', 'y');
-            var width = coordinate('AXSize', 'width'), height = coordinate('AXSize', 'height');
+            var x = coordinate(node, 'AXPosition', 'x'), y = coordinate(node, 'AXPosition', 'y');
+            var width = coordinate(node, 'AXSize', 'width'), height = coordinate(node, 'AXSize', 'height');
             need(width > 0 && height > 0, 'BOUNDS_EMPTY');
+            var window = need(read(node, 'AXWindow'), 'OWN_WINDOW_MISSING');
+            var windowX = coordinate(window, 'AXPosition', 'x'), windowY = coordinate(window, 'AXPosition', 'y');
+            var windowWidth = coordinate(window, 'AXSize', 'width'), windowHeight = coordinate(window, 'AXSize', 'height');
+            need(x + width / 2 >= windowX && x + width / 2 < windowX + windowWidth &&
+                 y + height / 2 >= windowY && y + height / 2 < windowY + windowHeight, 'FIELD_OUTSIDE_WINDOW');
             inputAllowed();
             var point = $.CGPointMake(x + width / 2, y + height / 2);
             var down = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft);
@@ -224,15 +232,15 @@ function run(args) {
                 {id: 'activity-jira-jql', value: 'assignee = currentUser()'}
             ];
             fields.forEach(function (field) {
-                var node = wait(function () { return find(null, field.id, true); }, 'FIELD_' + field.id);
+                var node = wait(function () { return find('AXTextField', field.id, true); }, 'FIELD_' + field.id);
                 check(field.id + '-visible', node !== null && Boolean(ObjC.unwrap(read(node, 'AXEnabled'))));
                 if (field.secure) check(field.id + '-secure', text(node, 'AXSubrole') === 'AXSecureTextField');
             });
             capture('activity-integrations');
             fields.forEach(function (field) {
-                input(control(null, field.id, true), field.value);
+                input(control('AXTextField', field.id, true), field.value);
                 check(field.id + '-editable', wait(function () {
-                    var current = control(null, field.id, true);
+                    var current = control('AXTextField', field.id, true);
                     var value = text(current, 'AXValue');
                     return field.secure ? value.length > 0 : value === field.value;
                 }, 'INPUT_' + field.id));

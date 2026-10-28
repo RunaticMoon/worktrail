@@ -59,7 +59,8 @@ GitHub Events API는 서버 보존 기간과 최대 300개 제한이 있어 전�
 - 배포 도구 Python 검사: 60개 중 55개 통과, 조건부 검사 5개 생략.
 - 합성 PCM 기반 native 회의 세션 검사: 9개 통과. 실제 마이크는 열지 않았다.
 - 실제 Codex 0.163.0 + localhost 가짜 API: 인증 헤더 없음, 노출 도구 `[]`, 가짜 MCP 실행 없음, 임시 HOME 정리 확인. 재실행: `python3 scripts/maclab/run-codex-isolation-check.py --codex /path/to/codex`.
-- 화면·키보드: 전용 fixture에서 오늘 화면 렌더링과 Cmd2 → CmdN → 마감일 설정 → 알림 시작 3일/4일 변경 → 마감일 해제 시 알림 제거 → Escape 동선을 통과했다. CLI/API 전환·DeepSeek 기본값, Secret 그룹별 목록·그룹 초기 포커스·자동완성 선택·Tab으로 제목 이동, 리포트 목록의 두 계열 아이콘 구분도 확인했다. `scripts/maclab/workflow-enhancements-check.js`는 입력 전에 소유 PID·fixture 경로·foreground·화면 잠금을 검사하고 사용자 클립보드를 조작하지 않는다. 기존 사용자의 fixture 프로세스는 보존한다.
+- 화면·키보드: 전용 fixture에서 오늘 화면 렌더링과 Cmd2 → CmdN → 마감일 설정 → 알림 시작 3일/4일 변경 → 마감일 해제 시 알림 제거 → Escape 동선을 통과했다. CLI/API 전환·DeepSeek 기본값, Secret 그룹별 목록·그룹 초기 포커스·자동완성 선택·Tab으로 제목 이동, 리포트 목록의 두 계열 아이콘 구분도 확인했다. GitHub/Jira의 주소·계정·토큰·JQL 7개 필드 표시와 가짜 값 입력, 두 토큰 필드의 마스킹도 통과했다. 설정 저장·실제 API 호출은 하지 않았다.
+- `scripts/maclab/workflow-enhancements-check.js`는 입력 전에 소유 PID·fixture 경로·foreground·화면 잠금·클릭 위치를 검사하고 사용자 클립보드를 조작하지 않는다. 기존 사용자의 fixture 프로세스는 보존한다. 비밀번호를 요구하지 않는 화면 보호 상태에서는 `caffeinate -du osascript -l JavaScript scripts/maclab/workflow-enhancements-check.js --pid <fixture PID> --action integrations`로 검증하는 동안만 화면을 깨워 둘 수 있다. 비밀번호가 필요한 잠금 화면은 사용자가 해제해야 한다.
 
 실제 Enterprise 로그인, DeepSeek 유료 호출, 사내 GitHub/Jira 접근, 마이크 녹음과 OS 알림 전달은 별도 사용자 환경 확인 대상이다. 녹음 시작 코드의 결함을 수정했지만, 사용자가 겪은 마이크 실패의 실제 권한·장치 상태까지 확인한 것은 아니다.
 
