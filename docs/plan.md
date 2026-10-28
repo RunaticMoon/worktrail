@@ -1,5 +1,9 @@
 # 구현 계획 (WLOG-45A3)
 
+## GitHub·Jira 기록 분리와 전용 목록 (0.14.0)
+
+날짜 화면에서 수집 기록을 일반 메모와 분리한다. GitHub는 저장소·PR 번호·동작·브랜치, Jira는 이슈 키·상태 전환·작업 시간 중심으로 표시하고 긴 원문은 상세에서 확인한다. 기존 기록 ID·본문 수정·업무 연결·보고서 근거는 유지하며 v9는 표시용 JSON만 추가한다. 검색에도 GitHub/Jira 유형을 제공한다. 상세 동작과 검증은 [source-activities.md](source-activities.md)에 기록한다.
+
 ## 업무 연결과 입력 개선 (0.13.0)
 
 Codex CLI 기본 연결·DeepSeek/OpenAI 호환 API, 업무 마감일/사전 알림, 리포트 유형 아이콘, GitHub Enterprise/Jira Cloud 일별 활동 수집, Mac 내장 마이크 우선 및 녹음 시작 보완, Secret 그룹 목록·빠른 입력 자동완성을 추가한다. 저장은 additive migration v7/v8과 인증 없는 별도 설정 파일을 사용한다. 범위·설정·제약·배포 경로는 [workflow-integrations.md](workflow-integrations.md)에 기록한다.

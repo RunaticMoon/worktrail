@@ -75,7 +75,10 @@ public struct FactTask: Codable, Hashable, Sendable {
 }
 
 public enum FactSourceKind: String, Codable, Sendable {
-    case activity, memo, supplement, report
+    case activity, memo, supplement, report, github, jira
+
+    /// Imported activities retain memo:<id> citations and the existing explicit task links.
+    var usesMemoIdentity: Bool { self == .memo || self == .github || self == .jira }
 }
 
 /// AI와 검증기가 참조하는 근거 원문. id 형식: "activity:<id>", "memo:<id>", "supplement:<id>", "report:<versionId>"

@@ -46,7 +46,9 @@ final class ActivityAPIClientTests: XCTestCase {
         XCTAssertEqual(result.activities[0].title, "org/repo PR #42")
         XCTAssertEqual(result.activities[0].detail, "PR merged")
         XCTAssertEqual(result.activities[0].url, "https://git.example.test/org/repo/pull/42")
+        XCTAssertEqual(result.activities[0].display, .init(kind: .githubPullRequest, repository: "org/repo", number: 42, action: "merged"))
         XCTAssertEqual(result.activities[1].url, "https://git.example.test/org/repo/commit/fake-sha")
+        XCTAssertEqual(result.activities[1].display, .init(kind: .githubPush, repository: "org/repo", action: "push", branch: "main"))
         let requests = await transport.requests
         XCTAssertEqual(requests.count, 3)
         XCTAssertEqual(requests[0].url?.path, "/api/v3/user")
@@ -77,6 +79,35 @@ final class ActivityAPIClientTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
     }
 
+    func testGitHubDisplayMetadataUsesExplicitMergeReviewAndPushFactsOnly() async throws {
+        let events = [
+            event("merged", type: "PullRequestEvent", payload: ["action": "closed", "pull_request": ["number": 77, "title": "가짜 개선", "merged": true]]),
+            event("closed", type: "PullRequestEvent", payload: ["action": "closed", "number": 78]),
+            event("unknown-action", type: "PullRequestEvent", payload: ["number": 79]),
+            event("review", type: "PullRequestReviewEvent", payload: ["action": "submitted", "pull_request": ["number": 77, "merged": true]]),
+            event("push", type: "PushEvent", payload: ["ref": "refs/heads/feature/test", "size": 25, "commits": [["message": "첫 커밋"], ["message": "다음 커밋"]]]),
+            event("sparse-push", type: "PushEvent", payload: ["commits": [["message": "일부 메시지만 제공"]]])
+        ]
+        let transport = ActivityAPIFixtureTransport(try [response(["login": "fixture"]), response(events)])
+        let result = try await ActivityAPIClient(transport: transport).fetch(connection: connection(.github, url: "https://git.example.test"),
+            token: "fake-token", range: range, calendar: calendar)
+        XCTAssertEqual(result.activities.count, 6)
+        XCTAssertEqual(result.activities[0].display, .init(kind: .githubPullRequest, repository: "org/repo", title: "가짜 개선", number: 77, action: "merged"))
+        XCTAssertEqual(result.activities[0].detail, "PR merged")
+        XCTAssertEqual(result.activities[1].display?.action, "closed")
+        XCTAssertNil(result.activities[1].display?.title)
+        XCTAssertNil(result.activities[2].display?.action, "Missing action is not an observed review")
+        XCTAssertEqual(result.activities[2].detail, "PR review", "Keep the existing original body")
+        XCTAssertEqual(result.activities[3].display?.kind, .githubReview)
+        XCTAssertEqual(result.activities[3].display?.action, "submitted", "Review on a merged PR is still a review")
+        XCTAssertEqual(result.activities[4].display?.branch, "feature/test")
+        XCTAssertEqual(result.activities[4].display?.commitCount, 25, "Payload commits can be truncated")
+        XCTAssertNil(result.activities[5].display?.branch)
+        XCTAssertNil(result.activities[5].display?.commitCount, "Available messages do not establish total count")
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "Display metadata requires no extra network calls")
+    }
+
     func testJiraScopedGatewayAuthorshipWorklogsAndAllPagination() async throws {
         let issue: [String: Any] = ["id": "100", "key": "TEST-1", "fields": ["summary": "가짜 업무", "created": "2026-10-27T15:00:00.000+0000", "creator": ["accountId": "me"]]]
         func change(_ id: String, author: String, at: String) -> [String: Any] {
@@ -97,6 +128,10 @@ final class ActivityAPIClientTests: XCTestCase {
         let c = connection(.jira, url: "https://api.atlassian.com/ex/jira/fake-cloud/rest/api/3/")
         let result = try await ActivityAPIClient(transport: transport).fetch(connection: c, token: "fake-token", range: range, calendar: calendar)
         XCTAssertEqual(result.activities.map(\.id), ["100:created", "100:change:mine", "100:worklog:mine"])
+        XCTAssertEqual(result.activities[0].display, .init(kind: .jiraCreated, title: "가짜 업무", issueKey: "TEST-1"))
+        XCTAssertEqual(result.activities[1].display, .init(kind: .jiraTransition, title: "가짜 업무", issueKey: "TEST-1",
+            statusFrom: "Open", statusTo: "Done", changedFields: ["status"]))
+        XCTAssertEqual(result.activities[2].display, .init(kind: .jiraWorklog, title: "가짜 업무", issueKey: "TEST-1", durationSeconds: 3600))
         XCTAssertTrue(result.activities.allSatisfy { $0.url == "https://jira.example.test/browse/TEST-1" })
         let requests = await transport.requests
         XCTAssertEqual(requests.count, 8)
@@ -109,6 +144,36 @@ final class ActivityAPIClientTests: XCTestCase {
         XCTAssertEqual(lastBody["nextPageToken"] as? String, "page-2")
         XCTAssertEqual(URLComponents(url: requests[4].url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "startAt" }?.value, "2")
         XCTAssertEqual(URLComponents(url: requests[6].url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "startAt" }?.value, "1")
+    }
+
+    func testJiraDisplayUsesStatusFieldIDAndPreservesUnknownStateNames() async throws {
+        let issue: [String: Any] = ["id": "100", "key": "PROJECT-77", "fields": ["summary": "가짜 이슈"]]
+        func change(_ id: String, _ items: [[String: Any]]) -> [String: Any] {
+            ["id": id, "author": ["accountId": "me"], "created": "2026-10-28T01:00:00Z", "items": items]
+        }
+        let changes = [
+            change("localized", [["field": "상태", "fieldId": "status", "fromString": "검토 대기", "toString": "QA / 보류"],
+                                 ["field": "담당자", "fieldId": "assignee", "fromString": "A", "toString": "B"]]),
+            change("missing", [["field": "status", "fieldId": "status", "from": "1", "to": "2"]]),
+            change("custom", [["field": "status", "fieldId": "customfield_123", "fromString": "A", "toString": "B"]]),
+            change("updated", [["field": "summary", "fromString": "이전 제목", "toString": "새 제목"]])
+        ]
+        let transport = ActivityAPIFixtureTransport(try [response(["accountId": "me"]), response(["issues": [issue], "isLast": true]),
+            response(["total": changes.count, "isLast": true, "values": changes]), response(["total": 0, "worklogs": []])])
+        let result = try await ActivityAPIClient(transport: transport).fetch(connection: connection(.jira, url: "https://jira.example.test"),
+            token: "fake-token", range: range, calendar: calendar)
+        XCTAssertEqual(result.activities.count, 4)
+        XCTAssertEqual(result.activities[0].display, .init(kind: .jiraTransition, title: "가짜 이슈", issueKey: "PROJECT-77",
+            statusFrom: "검토 대기", statusTo: "QA / 보류", changedFields: ["상태", "담당자"]))
+        XCTAssertEqual(result.activities[0].detail, "상태: 검토 대기 → QA / 보류\n담당자: A → B")
+        XCTAssertEqual(result.activities[1].display?.kind, .jiraTransition)
+        XCTAssertNil(result.activities[1].display?.statusFrom); XCTAssertNil(result.activities[1].display?.statusTo)
+        XCTAssertEqual(result.activities[1].detail, "status: — → —", "Do not present opaque IDs as state names")
+        XCTAssertEqual(result.activities[2].display?.kind, .jiraUpdated, "An explicit custom field ID takes precedence over its label")
+        XCTAssertNil(result.activities[2].display?.statusFrom); XCTAssertNil(result.activities[2].display?.statusTo)
+        XCTAssertEqual(result.activities[3].display?.changedFields, ["summary"])
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 4, "Display metadata requires no extra network calls")
     }
 
     func testJiraRejectsIncompleteAndRepeatedSearchCursors() async throws {

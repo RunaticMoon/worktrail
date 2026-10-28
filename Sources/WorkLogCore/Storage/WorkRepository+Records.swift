@@ -143,18 +143,20 @@ extension WorkRepository {
     }
 
     /// work_date 기준, recorded_at 오름차순.
-    public func memos(on date: WorkDate) throws -> [Memo] {
+    public func memos(on date: WorkDate, includingImported: Bool = false) throws -> [Memo] {
         try db.queryV("""
             SELECT * FROM memo WHERE work_date = ? AND deleted_at IS NULL
+              AND (? OR NOT EXISTS (SELECT 1 FROM imported_activity a WHERE a.memo_id = memo.id))
             ORDER BY recorded_at ASC, id ASC
-            """, date).map { try memoRow($0) }
+            """, date, includingImported).map { try memoRow($0) }
     }
 
-    public func memos(in range: DateRange) throws -> [Memo] {
+    public func memos(in range: DateRange, includingImported: Bool = false) throws -> [Memo] {
         try db.queryV("""
             SELECT * FROM memo WHERE work_date >= ? AND work_date < ? AND deleted_at IS NULL
+              AND (? OR NOT EXISTS (SELECT 1 FROM imported_activity a WHERE a.memo_id = memo.id))
             ORDER BY work_date ASC, recorded_at ASC, id ASC
-            """, range.start, range.endExclusive).map { try memoRow($0) }
+            """, range.start, range.endExclusive, includingImported).map { try memoRow($0) }
     }
 
     /// 보존된 과거 revision (오래된 순). 조인 정보는 담지 않는다.

@@ -18,9 +18,12 @@ import WorkLogCore
     @State private var timelineScrollID: String?
     @State private var taskScrollID: String?
     @State private var memoScrollID: String?
+    @State private var githubScrollID: String?
+    @State private var jiraScrollID: String?
     @State private var selectedRows: [String: String] = [:]
     @FocusState private var focusedRegion: String?
     @Environment(\.colorSchemeContrast) private var contrast
+    private let regions = ["timeline", "tasks", "memos", "github", "jira"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -44,19 +47,27 @@ import WorkLogCore
                                             accessibilityIdentifier: "day.region.tasks", shortcutHint: "⌘⌥2"),
                         SegmentedFilterItem(value: "memos", label: "메모", systemImage: "text.alignleft",
                                             count: box.memos.count,
-                                            accessibilityIdentifier: "day.region.memos", shortcutHint: "⌘⌥3")
+                                            accessibilityIdentifier: "day.region.memos", shortcutHint: "⌘⌥3"),
+                        SegmentedFilterItem(value: "github", label: "GitHub", systemImage: "arrow.triangle.branch",
+                                            count: sourceActivities(in: box, source: .github).count,
+                                            accessibilityIdentifier: "day.region.github", shortcutHint: "⌘⌥4"),
+                        SegmentedFilterItem(value: "jira", label: "Jira", systemImage: "ticket",
+                                            count: sourceActivities(in: box, source: .jira).count,
+                                            accessibilityIdentifier: "day.region.jira", shortcutHint: "⌘⌥5")
                     ], reservesShortcutHintSpace: false)
                     .accessibilityIdentifier("day.region.filter")
-                    .worklogHelp("활동 기록 ⌘⌥1 · 업무 상태 ⌘⌥2 · 메모 ⌘⌥3 · 다음 영역 ⌃Tab")
+                    .worklogHelp("활동 기록 ⌘⌥1 · 업무 상태 ⌘⌥2 · 메모 ⌘⌥3 · GitHub ⌘⌥4 · Jira ⌘⌥5 · 다음 영역 ⌃Tab")
                     switch selectedRegion {
                     case "tasks": taskColumn(box)
                     case "memos": memos(box)
+                    case "github": sourceActivitiesColumn(box, source: .github)
+                    case "jira": sourceActivitiesColumn(box, source: .jira)
                     default: timeline(box)
                     }
                     Text("⌃Tab 영역 전환 · ↑↓ 선택 · Return 열기")
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
             } else if model.errorMessage == nil {
-                StateView(kind: .empty, title: "날짜를 선택하세요", detail: "기록을 불러오면 타임라인·업무·메모를 보여드립니다.")
+                StateView(kind: .empty, title: "날짜를 선택하세요", detail: "기록을 불러오면 활동·업무·메모와 GitHub·Jira 기록을 보여드립니다.")
             }
         }
         .padding(WorkLogTheme.contentInset)
@@ -76,12 +87,13 @@ import WorkLogCore
         .onChange(of: model.selectedDate) { _, _ in
             lastOpened = [:]; selectedRows = [:]
             timelineScrollID = nil; taskScrollID = nil; memoScrollID = nil
+            githubScrollID = nil; jiraScrollID = nil
             model.load()
             ensureSelection(in: selectedRegion)
         }
         .onChange(of: model.includeHeldAndCancelled) { _, _ in model.load() }
         .onChange(of: model.box) { _, _ in
-            for region in ["timeline", "tasks", "memos"] { ensureSelection(in: region) }
+            for region in regions { ensureSelection(in: region) }
         }
         .onChange(of: focusedRegion) { _, region in
             if let region { ensureSelection(in: region) }
@@ -134,7 +146,7 @@ import WorkLogCore
                                       actionTitle: "기록 추가 ⌘N", action: onCapture)
                         }
                         ForEach(box.timeline) { entry in
-                            timelineRow(entry).padding(.vertical, 12).padding(.horizontal, 8)
+                            timelineRow(entry, in: box).padding(.vertical, 12).padding(.horizontal, 8)
                                 .background(rowBackground(entry.id, region: "timeline"))
                                 .overlay(rowOutline(entry.id, region: "timeline"))
                                 .contentShape(Rectangle())
@@ -159,37 +171,116 @@ import WorkLogCore
         }
     }
 
-    private func timelineRow(_ entry: TimelineEntry) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: timelineIcon(entry.kind)).foregroundStyle(WorkLogTheme.muted).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(label(entry))
-                    Spacer(minLength: 0)
-                    if let time = entry.effectiveTime {
-                        Text(time, style: .time).monospacedDigit().environment(\.timeZone, calendar.timeZone)
+    @ViewBuilder private func timelineRow(_ entry: TimelineEntry, in box: DayBox) -> some View {
+        if (entry.kind == .github || entry.kind == .jira), entry.id.hasPrefix("memo:"),
+           let record = box.sourceActivities.first(where: { $0.id == String(entry.id.dropFirst(5)) }) {
+            sourceActivityRow(record, region: "timeline", rowID: entry.id)
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: timelineIcon(entry.kind)).foregroundStyle(WorkLogTheme.muted).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(label(entry))
+                        Spacer(minLength: 0)
+                        if let time = entry.effectiveTime {
+                            Text(time, style: .time).monospacedDigit().environment(\.timeZone, calendar.timeZone)
+                        }
+                    }.font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    if let id = entry.taskId {
+                        Button {
+                            selectRow(entry.id, region: "timeline")
+                            lastOpened["timeline"] = entry.id
+                            onTask(id)
+                        } label: { Text(entry.title).font(.body.weight(.medium)).multilineTextAlignment(.leading) }
+                        .buttonStyle(.plain).focusable(false).accessibilityHint("업무 상세 열기")
+                    } else if [TimelineEntryKind.memo, .github, .jira].contains(entry.kind), entry.id.hasPrefix("memo:") {
+                        Button {
+                            selectRow(entry.id, region: "timeline")
+                            lastOpened["timeline"] = entry.id
+                            onMemo(String(entry.id.dropFirst(5)))
+                        } label: { Text(entry.title).font(.body.weight(.medium)).multilineTextAlignment(.leading) }
+                        .buttonStyle(.plain).focusable(false).accessibilityHint("메모 상세 열기")
+                    } else { Text(entry.title).font(.body.weight(.medium)) }
+                    if let detail = entry.detail, detail != entry.title, !detail.isEmpty {
+                        Text(detail).font(.body).foregroundStyle(WorkLogTheme.muted).textSelection(.enabled)
                     }
-                }.font(.callout).foregroundStyle(WorkLogTheme.muted)
-                if let id = entry.taskId {
-                    Button {
-                        selectRow(entry.id, region: "timeline")
-                        lastOpened["timeline"] = entry.id
-                        onTask(id)
-                    } label: { Text(entry.title).font(.body.weight(.medium)).multilineTextAlignment(.leading) }
-                    .buttonStyle(.plain).focusable(false).accessibilityHint("업무 상세 열기")
-                } else if entry.kind == .memo, entry.id.hasPrefix("memo:") {
-                    Button {
-                        selectRow(entry.id, region: "timeline")
-                        lastOpened["timeline"] = entry.id
-                        onMemo(String(entry.id.dropFirst(5)))
-                    } label: { Text(entry.title).font(.body.weight(.medium)).multilineTextAlignment(.leading) }
-                    .buttonStyle(.plain).focusable(false).accessibilityHint("메모 상세 열기")
-                } else { Text(entry.title).font(.body.weight(.medium)) }
-                if let detail = entry.detail, detail != entry.title, !detail.isEmpty {
-                    Text(detail).font(.body).foregroundStyle(WorkLogTheme.muted).textSelection(.enabled)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func sourceActivities(in box: DayBox, source: ActivitySource) -> [ImportedActivityRecord] {
+        box.sourceActivities.filter { $0.source == source }
+    }
+
+    private func sourceActivitiesColumn(_ box: DayBox, source: ActivitySource) -> some View {
+        let region = source.rawValue
+        let records = sourceActivities(in: box, source: source)
+        let sourceName = source == .github ? "GitHub" : "Jira"
+        return VStack(alignment: .leading, spacing: 0) {
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if records.isEmpty {
+                            StateView(kind: .empty, title: "\(sourceName) 활동이 없습니다",
+                                      detail: "이 날짜에 수집한 \(sourceName) 기록이 여기에 표시됩니다. 연결은 설정의 활동 수집에서 관리합니다.")
+                        }
+                        ForEach(records) { record in
+                            sourceActivityRow(record, region: region, rowID: record.id)
+                                .padding(.vertical, 12).padding(.horizontal, 8)
+                                .background(rowBackground(record.id, region: region))
+                                .overlay(rowOutline(record.id, region: region))
+                                .accessibilityAddTraits(selectedRows[region] == record.id ? .isSelected : [])
+                                .id(record.id)
+                            Divider()
+                        }
+                    }.scrollTargetLayout().frame(maxWidth: 1120, alignment: .leading).padding(.trailing, 8)
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        }.fixedSize(horizontal: false, vertical: true)
+                .focusable().focusEffectDisabled().focused($focusedRegion, equals: region)
+                .accessibilityLabel("\(sourceName) 활동 목록")
+                .accessibilityIdentifier("day.source-list.\(region)")
+                .onKeyPress(keys: [.upArrow, .downArrow, .return], phases: [.down, .repeat]) { press in
+                    handleListKey(press, region: region)
+                }
+                .scrollPosition(id: source == .github ? $githubScrollID : $jiraScrollID)
+                .onChange(of: selectedRows[region]) { _, id in if let id { proxy.scrollTo(id) } }
+                .onChange(of: detailDismissalRevision) { _, _ in
+                    if let id = lastOpened[region] { proxy.scrollTo(id) }
+                }
+            }
+        }
+    }
+
+    private func sourceActivityRow(_ record: ImportedActivityRecord, region: String, rowID: String) -> some View {
+        let presentation = SourceActivityPresentation(record: record)
+        return Button {
+            selectRow(rowID, region: region)
+            lastOpened[region] = rowID
+            onMemo(record.id)
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: presentation.symbol).foregroundStyle(WorkLogTheme.muted).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(presentation.sourceName)
+                        Spacer(minLength: 8)
+                        Text(record.occurredAt, style: .time).monospacedDigit()
+                            .environment(\.timeZone, calendar.timeZone)
+                    }.font(.callout).foregroundStyle(WorkLogTheme.muted)
+                    Text(presentation.headline).font(.body.weight(.medium)).lineLimit(2)
+                    if let subtitle = presentation.subtitle {
+                        Text(subtitle).font(.callout).foregroundStyle(WorkLogTheme.muted).lineLimit(1)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .multilineTextAlignment(.leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).focusable(false)
+        .accessibilityLabel("\(presentation.sourceName) 활동, \(presentation.headline)" + (presentation.subtitle.map { ", \($0)" } ?? ""))
+        .accessibilityValue(selectedRows[region] == rowID ? "선택됨" : "")
+        .accessibilityHint("Return으로 수집 활동 상세 열기")
+        .accessibilityIdentifier("day.source.\(record.source.rawValue).\(record.id)")
     }
 
     private func taskColumn(_ box: DayBox) -> some View {
@@ -318,6 +409,8 @@ import WorkLogCore
         switch region {
         case "tasks": return box.tasks.map(\.id)
         case "memos": return box.memos.map(\.id)
+        case "github": return sourceActivities(in: box, source: .github).map(\.id)
+        case "jira": return sourceActivities(in: box, source: .jira).map(\.id)
         default: return box.timeline.map(\.id)
         }
     }
@@ -352,7 +445,14 @@ import WorkLogCore
     }
 
     private func handleListKey(_ press: KeyPress, region: String) -> KeyPress.Result {
-        guard focusedRegion == region, press.modifiers.isEmpty,
+        // onKeyPress is scoped to this focused list. SwiftUI may clear the shared
+        // FocusState during a source-tab transition while keeping native focus here.
+        // Arrow keys carry numeric-pad/function flags even without a shortcut chord.
+        let isSource = ["github", "jira"].contains(region)
+        let plainKey = isSource
+            ? press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty
+            : press.modifiers.isEmpty
+        guard (isSource || focusedRegion == region), plainKey,
               !(NSApp.keyWindow?.firstResponder is NSTextView),
               (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return .ignored }
         let ids = rowIDs(in: region)
@@ -360,12 +460,17 @@ import WorkLogCore
         if press.key == .return {
             if press.phase == .down { openSelectedRow(in: region) }
         } else {
-            let offset = press.key == .upArrow ? -1 : 1
-            if let id = selectedRows[region], let index = ids.firstIndex(of: id) {
-                selectedRows[region] = ids[min(max(index + offset, 0), ids.count - 1)]
-            } else { selectedRows[region] = offset < 0 ? ids.last : ids.first }
+            moveSelectedRow(in: region, by: press.key == .upArrow ? -1 : 1)
         }
         return .handled
+    }
+
+    private func moveSelectedRow(in region: String, by offset: Int) {
+        let ids = rowIDs(in: region)
+        guard !ids.isEmpty else { return }
+        if let id = selectedRows[region], let index = ids.firstIndex(of: id) {
+            selectedRows[region] = ids[min(max(index + offset, 0), ids.count - 1)]
+        } else { selectedRows[region] = offset < 0 ? ids.last : ids.first }
     }
 
     private func openSelectedRow(in region: String) {
@@ -378,12 +483,16 @@ import WorkLogCore
         case "memos":
             lastOpened[region] = id
             onMemo(id)
+        case "github", "jira":
+            guard box.sourceActivities.contains(where: { $0.id == id && $0.source.rawValue == region }) else { return }
+            lastOpened[region] = id
+            onMemo(id)
         default:
             guard let entry = box.timeline.first(where: { $0.id == id }) else { return }
             if let taskId = entry.taskId {
                 lastOpened[region] = id
                 onTask(taskId)
-            } else if entry.kind == .memo, entry.id.hasPrefix("memo:") {
+            } else if [TimelineEntryKind.memo, .github, .jira].contains(entry.kind), entry.id.hasPrefix("memo:") {
                 lastOpened[region] = id
                 onMemo(String(entry.id.dropFirst(5)))
             }
@@ -392,9 +501,8 @@ import WorkLogCore
 
     private func handleKey(_ event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let regions = ["timeline", "tasks", "memos"]
         if modifiers == [.command, .option],
-           let index = [UInt16(18), 19, 20].firstIndex(of: event.keyCode) {
+           let index = [UInt16(18), 19, 20, 21, 23].firstIndex(of: event.keyCode) {
             selectedRegion = regions[index]
             focusSelectedRegion()
             return true
@@ -416,6 +524,8 @@ import WorkLogCore
     private func timelineIcon(_ kind: TimelineEntryKind) -> String {
         switch kind {
         case .memo: return "text.alignleft"
+        case .github: return "arrow.triangle.branch"
+        case .jira: return "ticket"
         case .activity: return "bolt"
         case .taskCreated: return "plus"
         case .taskStatus: return "arrow.triangle.2.circlepath"
@@ -428,6 +538,8 @@ import WorkLogCore
         let scope: String
         switch entry.kind {
         case .memo: scope = "메모"
+        case .github: scope = "GitHub"
+        case .jira: scope = "Jira"
         case .activity: scope = "진행 기록"
         case .taskCreated: scope = "업무 등록"
         case .taskStatus: scope = "업무 상태"

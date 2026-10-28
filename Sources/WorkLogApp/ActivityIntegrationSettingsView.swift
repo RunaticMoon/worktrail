@@ -8,13 +8,13 @@ struct ActivityIntegrationSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("앱 실행·복귀 시 하루 한 번 최근 기록을 가져와 실제 활동 날짜의 메모에 저장합니다. 다음 수집에서도 같은 기록을 중복 저장하지 않습니다.")
+            Text("앱 실행·Mac 잠자기 복귀 시 하루 한 번 최근 기록을 가져와 실제 활동 날짜의 GitHub·Jira 목록에 저장합니다. 다음 수집에서도 같은 기록을 중복 저장하지 않습니다.")
                 .font(.callout).foregroundStyle(.secondary)
             connectionFields($model.draft.github, token: $model.githubToken)
             connectionFields($model.draft.jira, token: $model.jiraToken)
             Text("GitHub: 본인 push·PR·리뷰 이벤트. Jira: JQL 범위 안에서 본인이 만든 이슈·변경 이력·작업 시간 기록. 업무 상태는 자동 변경하지 않습니다.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("사내망/VPN에 연결된 Mac에서 수집합니다. GitHub 이벤트는 서버 보존 기간과 최대 300개 제한이 있으며, 처음에는 최근 7일을 가져옵니다. 수집한 메모는 일반 기록과 같은 검색·보고서·AI 설정을 따릅니다.")
+            Text("사내망/VPN에 연결된 Mac에서 수집합니다. GitHub 이벤트는 서버 보존 기간과 최대 300개 제한이 있으며, 처음에는 7일 전부터 오늘까지 가져옵니다. 수집 기록은 일반 기록과 같은 검색·보고서·AI 설정을 따릅니다.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("활동 수집 설정 저장") { model.save() }

@@ -18,6 +18,12 @@ public enum ActivityImportSchema {
         completed_at TEXT
     );
     """
+
+    /// Preserve the existing record IDs, revisions and links; structured presentation is additive.
+    public static let v9 = """
+    ALTER TABLE imported_activity ADD COLUMN display_json TEXT;
+    CREATE INDEX imported_activity_memo ON imported_activity(memo_id);
+    """
 }
 
 public struct ImportedActivity: Equatable, Sendable {
@@ -26,8 +32,28 @@ public struct ImportedActivity: Equatable, Sendable {
     public let title: String
     public let detail: String
     public let url: String
-    public init(id: String, occurredAt: Date, title: String, detail: String, url: String) {
+    public let display: ActivityDisplayMetadata?
+    public init(id: String, occurredAt: Date, title: String, detail: String, url: String,
+                display: ActivityDisplayMetadata? = nil) {
         self.id = id; self.occurredAt = occurredAt; self.title = title; self.detail = detail; self.url = url
+        self.display = display
+    }
+}
+
+/// A source activity has its own presentation while retaining the original record identity.
+/// The backing record preserves edits, links, report citations, trash and backup compatibility.
+public struct ImportedActivityRecord: Codable, Hashable, Sendable, Identifiable {
+    public var id: String { memo.id }
+    public var source: ActivitySource
+    public var memo: Memo
+    public var occurredAt: Date
+    public var sourceURL: String
+    public var display: ActivityDisplayMetadata
+
+    public init(source: ActivitySource, memo: Memo, occurredAt: Date, sourceURL: String,
+                display: ActivityDisplayMetadata) {
+        self.source = source; self.memo = memo; self.occurredAt = occurredAt
+        self.sourceURL = sourceURL; self.display = display
     }
 }
 
@@ -46,20 +72,56 @@ extension WorkRepository {
         try db.transaction {
             var count = 0
             for event in activities {
-                guard try db.queryV("SELECT memo_id FROM imported_activity WHERE connection_key = ? AND external_id = ?",
-                                    connection.credentialAccount, event.id).isEmpty else { continue }
+                let displayJSON = try event.display.map { String(decoding: try StableJSON.encode($0), as: UTF8.self) }
+                if let previous = try db.queryOneV("SELECT memo_id FROM imported_activity WHERE connection_key = ? AND external_id = ?",
+                                                  connection.credentialAccount, event.id) {
+                    // Older imports gain API metadata without overwriting edited text or restoring trash.
+                    if let displayJSON {
+                        try db.runV("UPDATE imported_activity SET display_json = ? WHERE connection_key = ? AND external_id = ? AND display_json IS NULL",
+                                    displayJSON, connection.credentialAccount, event.id)
+                    }
+                    if let id = previous.string("memo_id") { onSourceChanged?("memo", id) }
+                    continue
+                }
                 let body = "[\(connection.source.title)] \(event.title)\n\(event.detail)\n\(event.url)"
                 let memo = try TaskService(repo: self).captureMemo(body: body, workDate: calendar.workDate(of: event.occurredAt))
                 try db.runV("""
                     INSERT INTO imported_activity
-                    (connection_key, external_id, source, memo_id, occurred_at, fetched_at, source_url)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (connection_key, external_id, source, memo_id, occurred_at, fetched_at, source_url, display_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, connection.credentialAccount, event.id, connection.source.rawValue,
-                    memo.id, event.occurredAt, clock.now(), event.url)
+                    memo.id, event.occurredAt, clock.now(), event.url, displayJSON)
+                onSourceChanged?("memo", memo.id)
                 count += 1
             }
             return count
         }
+    }
+
+    public func importedActivityRecord(id: String) throws -> ImportedActivityRecord? {
+        guard let memo = try memo(id: id),
+              let row = try db.queryOneV("SELECT source, occurred_at, source_url, display_json FROM imported_activity WHERE memo_id = ?", id),
+              let raw = row.string("source"), let source = ActivitySource(rawValue: raw),
+              let occurredAt = row.date("occurred_at"), let url = row.string("source_url") else { return nil }
+        let stored = row.string("display_json").flatMap { try? StableJSON.decode(ActivityDisplayMetadata.self, from: Data($0.utf8)) }
+        // Derive old-format display facts from the original import, not a user's later edits.
+        let originalBody: String
+        if stored == nil, memo.revision > 1 {
+            originalBody = try db.queryOneV("SELECT body FROM memo_revision WHERE memo_id = ? ORDER BY revision ASC LIMIT 1", id)?.string("body") ?? memo.body
+        } else { originalBody = memo.body }
+        return ImportedActivityRecord(source: source, memo: memo, occurredAt: occurredAt, sourceURL: url,
+                                      display: stored ?? .legacy(source: source, body: originalBody, url: url))
+    }
+
+    public func importedActivityRecords(on date: WorkDate) throws -> [ImportedActivityRecord] {
+        try db.queryV("""
+            SELECT m.id FROM memo m JOIN imported_activity a ON a.memo_id = m.id
+            WHERE m.work_date = ? AND m.deleted_at IS NULL
+            ORDER BY a.occurred_at ASC, m.id ASC
+            """, date).compactMap { row in
+                guard let id = row.string("id") else { return nil }
+                return try importedActivityRecord(id: id)
+            }
     }
 
     public func activitySyncAttemptedOn(connection: ActivityConnection) throws -> WorkDate? {

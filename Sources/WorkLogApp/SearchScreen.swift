@@ -213,13 +213,13 @@ import WorkLogCore
     private var includesSecrets: Bool { surface.scope == .all || surface.scope == .secret }
 
     private var availableTypes: [SearchSourceType] {
-        surface.scope == .records ? [.memo, .activity] : SearchSourceType.allCases
+        surface.scope == .records ? [.memo, .activity, .github, .jira] : SearchSourceType.allCases
     }
 
     private var scopedTypes: Set<SearchSourceType>? {
         switch surface.scope {
         case .all: return surface.typeFilter.map { Set([$0]) }
-        case .records: return surface.typeFilter.map { Set([$0]) } ?? Set([.memo, .activity])
+        case .records: return surface.typeFilter.map { Set([$0]) } ?? Set([.memo, .activity, .github, .jira])
         case .tasks: return [.task]
         case .reports: return [.report]
         case .secret: return nil
@@ -1013,7 +1013,7 @@ import WorkLogCore
     private func editSource() {
         guard let hit = source else { return }
         switch hit.sourceType {
-        case .memo:
+        case .memo, .github, .jira:
             let detail = MemoDetailModel(environment: environment)
             detail.load(id: hit.sourceId)
             sourceMemoDetail = detail
@@ -1037,7 +1037,7 @@ import WorkLogCore
         sourceMemoDetail = nil; sourceTaskDetail = nil
         do {
             switch hit.sourceType {
-            case .memo: sourceBody = try environment.repo.memo(id: hit.sourceId)?.body
+            case .memo, .github, .jira: sourceBody = try environment.repo.memo(id: hit.sourceId)?.body
             case .activity: sourceBody = try environment.repo.activity(id: hit.sourceId)?.body
             case .task:
                 let detail = try environment.tasks.detail(taskId: hit.sourceId)
@@ -1050,18 +1050,9 @@ import WorkLogCore
         if editing, sourceBody != nil { editSource() }
     }
 
-    private func sourceLabel(_ type: SearchSourceType) -> String {
-        switch type { case .memo: return "메모"; case .task: return "업무"; case .activity: return "진행 기록"; case .report: return "리포트" }
-    }
+    private func sourceLabel(_ type: SearchSourceType) -> String { type.displayLabel }
 
-    private func sourceIcon(_ type: SearchSourceType) -> String {
-        switch type {
-        case .memo: return "text.alignleft"
-        case .task: return "checklist"
-        case .activity: return "bolt"
-        case .report: return "doc.text"
-        }
-    }
+    private func sourceIcon(_ type: SearchSourceType) -> String { type.systemImage }
 }
 
 /// Observe modifiers without consuming events or involving the query field/IME.

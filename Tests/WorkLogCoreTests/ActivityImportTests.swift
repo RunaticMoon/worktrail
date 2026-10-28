@@ -19,7 +19,8 @@ final class ActivityImportTests: XCTestCase {
         let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
         let c = connection(), day = WorkDate("2026-10-28")!
         XCTAssertEqual(try repo.importActivities([event(), event()], connection: c), 1)
-        let memo = try XCTUnwrap(repo.memos(on: day).first)
+        let memo = try XCTUnwrap(repo.importedActivityRecords(on: day).first).memo
+        XCTAssertTrue(try repo.memos(on: day).isEmpty)
         XCTAssertEqual(try repo.links(ownerType: .memo, ownerId: memo.id).count, 1)
         _ = try repo.updateMemoBody(id: memo.id, body: "사용자가 고친 기록", workDate: day)
         XCTAssertEqual(try repo.importActivities([event()], connection: c), 0)

@@ -286,7 +286,7 @@ public final class GroundedAnswerService {
     }
 
     private static func evidenceId(sourceType: SearchSourceType, sourceId: String) -> String {
-        "\(sourceType.rawValue):\(sourceId)"
+        "\(sourceType.canonicalSourceType.rawValue):\(sourceId)"
     }
 
     private static func validatedQuestion(_ question: String) throws -> String {

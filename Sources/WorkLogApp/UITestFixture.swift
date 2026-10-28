@@ -103,6 +103,11 @@ enum UITestFixture: String {
                 body: "검증 메모 \(index + 1) · 업무 도중 빠르게 기록한 내용\n첫 번째 관찰: 검색 결과와 원문을 바로 연결할 수 있어야 합니다.\n두 번째 관찰: 화면 크기가 달라도 긴 한국어 문장이 잘리지 않아야 합니다.",
                 workDate: today, projectNames: [names[index % names.count]], tagNames: ["검증"])
         }
+        // Source classification must come from the import relation, never this prefix.
+        _ = try environment.tasks.captureMemo(
+            body: "[GitHub Enterprise] 사용자가 직접 작성한 메모입니다.\n출처 이름이 있어도 자동 수집 기록은 아닙니다.",
+            workDate: today)
+        try seedSourceActivities(in: environment, today: today)
         let meetingService = MeetingService(repo: environment.repo)
         _ = try meetingService.create(title: "가짜 제품 회의 · 로컬 전사 검증", workDate: today,
             transcript: "다음 주 화요일에 회의록 기능을 검토하기로 했습니다. 화면 검증과 원문 보존을 확인합니다.",
@@ -112,6 +117,41 @@ enum UITestFixture: String {
         let candidates = try environment.plans.generateCandidates(weekStart: week)
         let selected = candidates.filter { $0.scopeType == .wholeTask }.prefix(2).map(\.id)
         _ = try environment.plans.confirm(weekStart: week, itemIds: selected)
+    }
+
+    private func seedSourceActivities(in environment: AppEnvironment, today: WorkDate) throws {
+        let morning = environment.calendar.startOfDay(today).addingTimeInterval(9 * 60 * 60)
+        let detail = (1...12).map { "수집 원문 \($0): 실제 회사 기록이 아닌 화면 검증용 설명입니다. 긴 본문은 상세에서만 확인합니다." }.joined(separator: "\n")
+        var github = ActivityConnection(source: .github)
+        github.baseURL = "https://github.example.invalid"
+        github.account = "fixture-user"
+        _ = try environment.repo.importActivities([
+            ImportedActivity(id: "fixture-github-pr-77", occurredAt: morning,
+                title: "fixture-org/worktrail PR #77: 출처별 활동 화면 구분", detail: "PR merged\n\(detail)",
+                url: "https://github.example.invalid/fixture-org/worktrail/pull/77",
+                display: .init(kind: .githubPullRequest, repository: "fixture-org/worktrail",
+                    title: "출처별 활동 화면 구분", number: 77, action: "merged")),
+            ImportedActivity(id: "fixture-github-push", occurredAt: morning.addingTimeInterval(15 * 60),
+                title: "fixture-org/worktrail push", detail: "refs/heads/main · push\n\(detail)",
+                url: "https://github.example.invalid/fixture-org/worktrail/commit/fixture77",
+                display: .init(kind: .githubPush, repository: "fixture-org/worktrail", action: "push",
+                    branch: "main", commitCount: 3))
+        ], connection: github)
+        var jira = ActivityConnection(source: .jira)
+        jira.baseURL = "https://jira.example.invalid"
+        jira.account = "fixture@example.invalid"
+        _ = try environment.repo.importActivities([
+            ImportedActivity(id: "fixture-jira-transition-77", occurredAt: morning.addingTimeInterval(30 * 60),
+                title: "PROJECT-77: 처리 대기열 개선", detail: "status: 진행 중 → 완료\n\(detail)",
+                url: "https://jira.example.invalid/browse/PROJECT-77",
+                display: .init(kind: .jiraTransition, title: "처리 대기열 개선", issueKey: "PROJECT-77",
+                    statusFrom: "진행 중", statusTo: "완료", changedFields: ["status"])),
+            ImportedActivity(id: "fixture-jira-worklog-78", occurredAt: morning.addingTimeInterval(45 * 60),
+                title: "PROJECT-78: 작업 시간 정리", detail: "작업 시간 기록: 90분\n\(detail)",
+                url: "https://jira.example.invalid/browse/PROJECT-78",
+                display: .init(kind: .jiraWorklog, title: "작업 시간 정리", issueKey: "PROJECT-78",
+                    durationSeconds: 90 * 60))
+        ], connection: jira)
     }
 
     private func seedVault(in environment: AppEnvironment) async throws {

@@ -4,6 +4,11 @@ import Observation
 /// User-triggered Memo/Task proposals, separate from record capture and day loading.
 @Observable @MainActor public final class MemoDetailModel {
     public private(set) var memo: Memo?
+    public private(set) var importedActivity: ImportedActivityRecord?
+    public var recordLabel: String {
+        guard let source = importedActivity?.source else { return "메모" }
+        return source == .github ? "GitHub 기록" : "Jira 기록"
+    }
     public private(set) var links: [MemoTaskLink] = []
     public private(set) var tasks: [WorkTask] = []
     public private(set) var isSuggesting = false
@@ -14,10 +19,11 @@ import Observation
     public func load(id: String) {
         do {
             memo = try environment.repo.memo(id: id)
+            importedActivity = try environment.repo.importedActivityRecord(id: id)
             links = try environment.repo.memoTaskLinks(memoId: id)
             tasks = try environment.repo.tasks()
             message = memo == nil ? "메모를 찾을 수 없습니다." : nil
-        } catch { memo = nil; links = []; message = "메모를 불러오지 못했습니다." }
+        } catch { memo = nil; importedActivity = nil; links = []; message = "기록을 불러오지 못했습니다." }
     }
     public func suggest() async {
         guard !isSuggesting, let id = memo?.id else { return }

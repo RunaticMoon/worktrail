@@ -6,6 +6,22 @@ public enum SearchSourceType: String, Codable, Sendable, CaseIterable {
     case task
     case activity
     case report
+    case github
+    case jira
+
+    /// 출처별 검색 유형은 나누되 기존 원문·근거 식별자는 유지한다.
+    public var canonicalSourceType: SearchSourceType {
+        switch self { case .github, .jira: return .memo; default: return self }
+    }
+
+    public var recordReferenceKind: RecordReferenceKind {
+        switch self {
+        case .memo, .github, .jira: return .memo
+        case .task: return .task
+        case .activity: return .activity
+        case .report: return .reportVersion
+        }
+    }
 }
 
 /// 원문 검색 질의. text는 원문 부분 문자열(공백 분리 AND), 나머지는 구조화 필터다.
@@ -66,6 +82,7 @@ public struct SearchHitKey: Hashable, Sendable {
 
 public extension SearchHit {
     var key: SearchHitKey { SearchHitKey(sourceType: sourceType, sourceId: sourceId) }
+    var recordReference: RecordReference { RecordReference(kind: sourceType.recordReferenceKind, id: sourceId) }
 }
 
 /// 일반 기록(Memo·Task·Activity·Report 본문)의 로컬 원문 검색 인덱스.
@@ -93,6 +110,7 @@ public final class SearchIndex: @unchecked Sendable {
                 )
                 """)
         }
+        _ = try repairImportedActivityDocs()
         let previous = repo.onSourceChanged
         repo.onSourceChanged = { [weak self] sourceType, id in
             previous?(sourceType, id)
@@ -110,7 +128,7 @@ public final class SearchIndex: @unchecked Sendable {
             return
         }
         switch type {
-        case .memo: try reindexMemo(id)
+        case .memo, .github, .jira: try reindexMemo(id)
         case .task: try reindexTask(id)
         case .activity: try reindexActivity(id)
         case .report: try reindexReport(id)
@@ -186,6 +204,43 @@ public final class SearchIndex: @unchecked Sendable {
         return updates.count + removals.count
     }
 
+    /// 기존 수집 메모 색인을 출처별로 복구한다. 본문 접두사가 아닌 imported_activity 매핑만 사용한다.
+    /// 최신 문서는 그대로 두고, 오래된 memo/다른 출처 문서와 FTS 사본도 함께 정리한다.
+    @discardableResult
+    public func repairImportedActivityDocs() throws -> Int {
+        let candidates = try db.queryV("""
+            SELECT memo_id AS id FROM imported_activity
+            UNION SELECT source_id AS id FROM search_doc WHERE source_type IN (?, ?)
+            ORDER BY id
+            """, SearchSourceType.github.rawValue, SearchSourceType.jira.rawValue)
+        var updates: [String] = []
+        for candidate in candidates {
+            guard let id = candidate.string("id") else { continue }
+            let rows = try db.queryV("""
+                SELECT rowid, source_type, text, work_date FROM search_doc
+                WHERE source_id = ? AND source_type IN (?, ?, ?)
+                """, id, SearchSourceType.memo.rawValue, SearchSourceType.github.rawValue, SearchSourceType.jira.rawValue)
+            guard let memo = try repo.memo(id: id) else {
+                if !rows.isEmpty { updates.append(id) }
+                continue
+            }
+            let type = try memoSourceType(id)
+            let text = try memoText(memo)
+            if rows.count == 1, let row = rows.first, row.string("source_type") == type.rawValue,
+               row.string("text") == text, row.workDate("work_date") == memo.workDate {
+                if !usesTrigram { continue }
+                if let rowID = row.int("rowid"), let fts = try db.queryOneV(
+                    "SELECT source_type, source_id, text FROM search_fts WHERE rowid = ?", rowID),
+                   fts.string("source_type") == type.rawValue, fts.string("source_id") == id,
+                   fts.string("text") == text { continue }
+            }
+            updates.append(id)
+        }
+        if updates.isEmpty { return 0 }
+        try db.transaction { for id in updates { try reindexMemo(id) } }
+        return updates.count
+    }
+
     /// 상세 리포트 본문(및 같은 방식의 제출용 리포트) 색인. 리포트 버전 생성 시 호출한다.
     public func indexReport(versionId: String, text: String, workDate: WorkDate?) throws {
         let date: WorkDate?
@@ -200,15 +255,36 @@ public final class SearchIndex: @unchecked Sendable {
     // MARK: - 유형별 색인
 
     private func reindexMemo(_ id: String) throws {
-        guard let memo = try repo.memo(id: id) else {  // deleted_at IS NULL만 반환
-            try removeDoc(sourceType: .memo, sourceId: id)
-            return
+        try db.transaction {
+            let memo = try repo.memo(id: id)  // deleted_at IS NULL만 반환
+            let type = try memoSourceType(id)
+            for previousType in [SearchSourceType.memo, .github, .jira]
+                where memo == nil || previousType != type {
+                try removeDoc(sourceType: previousType, sourceId: id)
+            }
+            guard let memo else { return }
+            try upsertDoc(sourceType: type, sourceId: id, taskId: nil,
+                          workDate: memo.workDate, text: memoText(memo))
         }
+    }
+
+    private func memoSourceType(_ id: String) throws -> SearchSourceType {
+        let source = try db.queryOneV("""
+            SELECT source FROM imported_activity WHERE memo_id = ?
+            ORDER BY connection_key, external_id LIMIT 1
+            """, id)?.string("source")
+        switch source {
+        case "github": return .github
+        case "jira": return .jira
+        default: return .memo
+        }
+    }
+
+    private func memoText(_ memo: Memo) throws -> String {
         var parts = [memo.body]
-        parts.append(contentsOf: try memoProjectNames(id))
-        parts.append(contentsOf: try memoTagNames(id))
-        try upsertDoc(sourceType: .memo, sourceId: id, taskId: nil,
-                      workDate: memo.workDate, text: joined(parts))
+        parts.append(contentsOf: try memoProjectNames(memo.id))
+        parts.append(contentsOf: try memoTagNames(memo.id))
+        return joined(parts)
     }
 
     private func reindexTask(_ id: String) throws {
@@ -341,6 +417,11 @@ public final class SearchIndex: @unchecked Sendable {
             }
         }
 
+        // 매핑 직후 재색인에 실패했어도 수집 자료를 일반 메모로 노출하지 않는다.
+        filters.append("""
+            NOT (d.source_type = 'memo' AND EXISTS (
+                SELECT 1 FROM imported_activity imported WHERE imported.memo_id = d.source_id))
+            """)
         if let types = query.types {
             if types.isEmpty { return [] }
             let ordered = types.map(\.rawValue).sorted()
@@ -354,7 +435,7 @@ public final class SearchIndex: @unchecked Sendable {
             filters.append("""
                 EXISTS (
                     SELECT 1 FROM project p WHERE p.id IN (\(placeholders)) AND (
-                        (d.source_type = 'memo' AND EXISTS (
+                        (d.source_type IN ('memo', 'github', 'jira') AND EXISTS (
                             SELECT 1 FROM memo_project mp WHERE mp.memo_id = d.source_id AND mp.project_id = p.id))
                         OR (d.source_type = 'task' AND EXISTS (
                             SELECT 1 FROM task_project tp
@@ -375,7 +456,7 @@ public final class SearchIndex: @unchecked Sendable {
             filters.append("""
                 EXISTS (
                     SELECT 1 FROM tag t WHERE t.id IN (\(placeholders)) AND (
-                        (d.source_type = 'memo' AND EXISTS (
+                        (d.source_type IN ('memo', 'github', 'jira') AND EXISTS (
                             SELECT 1 FROM memo_tag mt WHERE mt.memo_id = d.source_id AND mt.tag_id = t.id))
                         OR (d.source_type = 'task' AND EXISTS (
                             SELECT 1 FROM task_tag tt WHERE tt.task_id = d.source_id AND tt.tag_id = t.id))
@@ -501,7 +582,7 @@ public final class SearchIndex: @unchecked Sendable {
     private func projectNames(sourceType: SearchSourceType, sourceId: String,
                               taskId: String?) throws -> [String] {
         switch sourceType {
-        case .memo:
+        case .memo, .github, .jira:
             return sortedUnique(try memoProjectNames(sourceId))
         case .task:
             return sortedUnique(try taskProjectNames(sourceId))

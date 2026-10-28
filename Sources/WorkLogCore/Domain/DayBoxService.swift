@@ -4,7 +4,7 @@ import Foundation
 
 /// 타임라인 항목의 종류. 상태를 정하지 않는 사건(활동 추가·연결·무효화 등)은 넣지 않는다.
 public enum TimelineEntryKind: String, Codable, Sendable {
-    case memo, taskCreated, taskStatus, projectStatus, checklistStatus, activity
+    case memo, taskCreated, taskStatus, projectStatus, checklistStatus, activity, github, jira
 }
 
 /// 날짜 화면 타임라인의 한 항목. 읽기 전용이며 임의의 시각·활동을 만들지 않는다.
@@ -63,11 +63,13 @@ public struct DayBox: Codable, Hashable, Sendable {
     public var timeline: [TimelineEntry]
     public var tasks: [DayTaskRow]
     public var memos: [Memo]
+    public var sourceActivities: [ImportedActivityRecord]
 
     public init(date: WorkDate, isToday: Bool, isPast: Bool, timeline: [TimelineEntry],
-                tasks: [DayTaskRow], memos: [Memo]) {
+                tasks: [DayTaskRow], memos: [Memo], sourceActivities: [ImportedActivityRecord] = []) {
         self.date = date; self.isToday = isToday; self.isPast = isPast
         self.timeline = timeline; self.tasks = tasks; self.memos = memos
+        self.sourceActivities = sourceActivities
     }
 }
 
@@ -92,6 +94,9 @@ public final class DayBoxService {
         let memos = try repo.memos(on: date).filter { memo in
             knownAt.map { memo.recordedAt <= $0 } ?? true
         }
+        let sourceActivities = try repo.importedActivityRecords(on: date).filter { record in
+            knownAt.map { record.memo.recordedAt <= $0 } ?? true
+        }
         let activities = try repo.activities(on: date).filter { activity in
             knownAt.map { activity.recordedAt <= $0 } ?? true
         }
@@ -108,6 +113,14 @@ public final class DayBoxService {
             let title = memo.preview.isEmpty ? memo.body : memo.preview
             timeline.append(TimelineEntry(id: id, kind: .memo, workDate: date, effectiveTime: nil,
                                           recordedAt: memo.recordedAt, title: title, detail: memo.body))
+            orderById[id] = 0
+        }
+
+        for record in sourceActivities {
+            let id = "memo:\(record.id)"
+            timeline.append(TimelineEntry(id: id, kind: record.source == .github ? .github : .jira,
+                workDate: date, effectiveTime: record.occurredAt, recordedAt: record.memo.recordedAt,
+                title: record.display.title ?? record.memo.preview, detail: nil))
             orderById[id] = 0
         }
 
@@ -196,7 +209,7 @@ public final class DayBoxService {
         }
 
         return DayBox(date: date, isToday: date == today, isPast: date < today,
-                      timeline: timeline, tasks: rows, memos: memos)
+                      timeline: timeline, tasks: rows, memos: memos, sourceActivities: sourceActivities)
     }
 
     // MARK: - 내부
