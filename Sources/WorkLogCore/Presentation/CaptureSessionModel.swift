@@ -25,6 +25,7 @@ import Observation
     public private(set) var checkpointFailed = false
     @ObservationIgnored private let draftStore: CaptureDraftStore
     @ObservationIgnored private var checkpointTask: Task<Void, Never>?
+    @ObservationIgnored private var submissionCleanupPending = false
     @ObservationIgnored private var environment: AppEnvironment?
     /// `markSessionCompleted()` 이후 다음 `beginSession()`이 새 세션으로 시작해야 함을 표시한다.
     @ObservationIgnored private var pendingNewSession = true
@@ -41,20 +42,32 @@ import Observation
         taskDraft.kind = .task
         for (kind, draft) in [(CaptureKind.memo, memoDraft), (.task, taskDraft)] {
             do {
-                if let value = try draftStore.load(kind == .memo ? .memo : .task) {
+                let recordKind: RecordCaptureKind = kind == .memo ? .memo : .task
+                if let saved = try draftStore.load(recordKind),
+                   let value = try CaptureDraftReceipts(repo: environment.repo).resolve(saved, kind: recordKind) {
                     draft.restore(value); recoveredKinds.insert(kind); pendingNewSession = false
                 }
             } catch { checkpointMessage = "일부 일반 초안을 읽지 못했습니다. 다른 탭의 초안은 유지됩니다."; checkpointFailed = true }
         }
         memoDraft.onDraftChanged = { [weak self] in self?.scheduleCheckpoint() }
         taskDraft.onDraftChanged = { [weak self] in self?.scheduleCheckpoint() }
+        memoDraft.onSubmissionCommitted = { [weak self] in self?.submissionCommitted(kind: .memo) }
+        taskDraft.onSubmissionCommitted = { [weak self] in self?.submissionCommitted(kind: .task) }
+    }
+
+    private func submissionCommitted(kind: CaptureKind) {
+        forceFixedKinds()
+        recoveredKinds.remove(kind)
+        submissionCleanupPending = true
+        _ = flushCheckpoints()
     }
 
     public func continueRecoveredDraft() { recoveredKinds.remove(tab) }
 
     private func scheduleCheckpoint() {
         checkpointTask?.cancel()
-        checkpointMessage = "일반 초안 저장 대기 중…"
+        checkpointMessage = submissionCleanupPending
+            ? "기록은 저장되었습니다. 일반 초안 보관 상태 갱신 대기 중…" : "일반 초안 저장 대기 중…"
         checkpointTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
             guard !Task.isCancelled else { return }
@@ -71,9 +84,12 @@ import Observation
             try draftStore.save(isEmpty(taskDraft) ? nil : taskDraft.checkpoint(), kind: .task)
             checkpointMessage = "일반 초안이 이 Mac에 저장되었습니다."
             checkpointFailed = false
+            submissionCleanupPending = false
             return true
         } catch {
-            checkpointMessage = "일반 초안을 보존하지 못했습니다. 입력은 유지됩니다. 저장을 다시 시도하세요."
+            checkpointMessage = submissionCleanupPending
+                ? "기록은 저장되었습니다. 일반 초안 보관 상태를 갱신하지 못했습니다. 입력은 유지됩니다. 다시 시도하세요."
+                : "일반 초안을 보존하지 못했습니다. 입력은 유지됩니다. 저장을 다시 시도하세요."
             checkpointFailed = true
             return false
         }
@@ -167,7 +183,6 @@ import Observation
         // `CaptureModel.submit()` 성공 시 `resetDefaults()`가 kind를 설정값으로 되돌릴 수 있다.
         // 초안 종류는 고정 계약이므로 다시 보정한다.
         forceFixedKinds()
-        if saved { recoveredKinds.remove(tab); _ = flushCheckpoints() }
         return saved
     }
 
@@ -185,6 +200,8 @@ import Observation
         checkpointTask?.cancel()
         memoDraft.onDraftChanged = nil
         taskDraft.onDraftChanged = nil
+        memoDraft.onSubmissionCommitted = nil
+        taskDraft.onSubmissionCommitted = nil
         memoDraft.detach()
         taskDraft.detach()
         environment = nil
@@ -208,17 +225,6 @@ import Observation
     private var draftsEmpty: Bool { isEmpty(memoDraft) && isEmpty(taskDraft) }
 
     private func isEmpty(_ draft: CaptureModel) -> Bool {
-        let blankBody = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let noLinks = draft.relatedRecords.isEmpty && draft.selectedProjectIds.isEmpty
-            && draft.selectedTagIds.isEmpty && draft.targetTaskId == nil
-        if draft === taskDraft {
-            return blankBody && noLinks
-                && draft.taskQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && draft.dueOn == nil && draft.dueReminderDaysBefore == nil
-                && draft.taskSelection == .newTask && draft.taskAction == .addActivity
-                && draft.statusTarget == nil && draft.pendingCompletion == nil
-                && draft.initialStatus == .planned && draft.projectTrackingMode == .shared
-        }
-        return blankBody && noLinks
+        !draft.hasPersistentDraft(kind: draft === taskDraft ? .task : .memo)
     }
 }

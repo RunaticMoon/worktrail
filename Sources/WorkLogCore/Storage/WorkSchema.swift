@@ -15,6 +15,7 @@ public enum WorkSchema {
         Migration(version: 9, sql: ActivityImportSchema.v9),
         Migration(version: 10, sql: MemoHistorySchema.v10),
         Migration(version: 11, sql: MeetingSchema.v11),
+        Migration(version: 12, sql: CaptureDraftSchema.v12),
     ]
 
     /// v4: 일반 기록 간 무방향 수동 관련 연결. Secret 종류 없음. 정규 순서는 RecordReference.canonicalPair와 동일(UTF-8/BINARY).
