@@ -10,11 +10,12 @@ public struct SearchState: Equatable, Sendable {
     public var tagIds: [String]
     public var range: DateRange?
     public var selectedKey: SearchHitKey?
+    public var loadedLimit: Int
     public var isPreviewVisible: Bool
 
     public init(text: String, types: Set<SearchSourceType>? = nil, projectIds: [String] = [],
                 tagIds: [String] = [], range: DateRange? = nil,
-                selectedKey: SearchHitKey? = nil, isPreviewVisible: Bool = false) {
+                selectedKey: SearchHitKey? = nil, isPreviewVisible: Bool = false, loadedLimit: Int = 50) {
         self.text = text
         self.types = types
         self.projectIds = projectIds
@@ -22,6 +23,7 @@ public struct SearchState: Equatable, Sendable {
         self.range = range
         self.selectedKey = selectedKey
         self.isPreviewVisible = isPreviewVisible
+        self.loadedLimit = loadedLimit
     }
 }
 
@@ -31,6 +33,8 @@ public struct SearchState: Equatable, Sendable {
     public var projectIds: [String] = [] { didSet { invalidateAnswer() } }
     public var tagIds: [String] = [] { didSet { invalidateAnswer() } }
     public var range: DateRange? { didSet { invalidateAnswer() } }
+    public private(set) var hasMore = false
+    public private(set) var loadedLimit = 50
     public private(set) var hits: [SearchHit] = []
     public private(set) var selectedKey: SearchHitKey?
     public var isPreviewVisible = false
@@ -46,7 +50,7 @@ public struct SearchState: Equatable, Sendable {
         self.environment = environment
         if environment.groundedAnswers == nil { aiMessage = "AI가 비활성화되어 있습니다. 원문 검색은 사용할 수 있습니다." }
     }
-    private func invalidateAnswer() { revision += 1; answer = nil; if isAIAvailable { aiMessage = nil } }
+    private func invalidateAnswer() { loadedLimit = 50; hasMore = false; revision += 1; answer = nil; if isAIAvailable { aiMessage = nil } }
 
     /// 현재 선택된 결과. 결과 목록에 없으면 nil.
     public var selectedHit: SearchHit? {
@@ -74,20 +78,29 @@ public struct SearchState: Equatable, Sendable {
     }
 
     /// Called after UI debounce. Never invokes a provider.
-    public func search() {
+    public func search(limit: Int? = nil) {
+        if let limit { loadedLimit = max(50, limit) }
         isSearching = true
         defer { isSearching = false }
         do {
-            hits = try environment.search.search(SearchQuery(text: text, types: types,
-                projectIds: projectIds, tagIds: tagIds, range: range))
+            let page = try environment.search.searchPage(SearchQuery(text: text, types: types,
+                projectIds: projectIds, tagIds: tagIds, range: range, limit: loadedLimit))
+            hits = page.hits
+            hasMore = page.hasMore
             errorMessage = nil
             if let selectedKey, !hits.contains(where: { $0.key == selectedKey }) {
                 self.selectedKey = nil
             }
         } catch {
-            hits = []; selectedKey = nil
+            hits = []; selectedKey = nil; hasMore = false
             errorMessage = "검색하지 못했습니다. 다시 시도하세요."
         }
+    }
+
+    /// Refresh the entire visible prefix so edits/deletions cannot shift an offset boundary.
+    public func loadMore() {
+        guard hasMore, !isSearching else { return }
+        search(limit: loadedLimit + 50)
     }
 
     // MARK: - 선택
@@ -127,7 +140,7 @@ public struct SearchState: Equatable, Sendable {
     /// 현재 검색 상태를 복원용으로 복사한다.
     public func snapshot() -> SearchState {
         SearchState(text: text, types: types, projectIds: projectIds, tagIds: tagIds,
-                    range: range, selectedKey: selectedKey, isPreviewVisible: isPreviewVisible)
+                    range: range, selectedKey: selectedKey, isPreviewVisible: isPreviewVisible, loadedLimit: loadedLimit)
     }
 
     /// 저장한 상태를 되돌리고 결과를 다시 조회한다. 선택은 결과에 있을 때만 유지한다.
@@ -140,7 +153,7 @@ public struct SearchState: Equatable, Sendable {
         range = state.range
         selectedKey = state.selectedKey
         isPreviewVisible = state.isPreviewVisible
-        search()
+        search(limit: state.loadedLimit)
     }
 
     // MARK: - AI

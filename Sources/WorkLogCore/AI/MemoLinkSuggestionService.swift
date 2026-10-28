@@ -93,16 +93,7 @@ public final class MemoLinkSuggestionService {
     /// proposed 외 상태로의 변경만 허용(accepted→rejected 같은 재결정도 허용).
     /// Task·Memo는 변경하지 않는다.
     public func decide(linkId: String, status: MemoTaskLinkStatus) throws -> MemoTaskLink {
-        guard status != .proposed else {
-            throw WorkLogError.validation("제안 상태로 되돌릴 수 없습니다.")
-        }
-        guard var link = try memoTaskLink(id: linkId) else {
-            throw WorkLogError.notFound("memo_task_link \(linkId)")
-        }
-        link.status = status
-        link.decidedAt = repo.clock.now()
-        try repo.upsertMemoTaskLink(link)
-        return link
+        try MemoEvidenceLinkService(repo: repo).decide(linkId: linkId, status: status)
     }
 
     /// 테스트·미리보기용: payload JSON 생성(결정적, StableJSON).

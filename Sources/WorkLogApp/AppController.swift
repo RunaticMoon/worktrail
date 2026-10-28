@@ -359,6 +359,11 @@ import WorkLogCore
     }
     func beginHotkeyRecording() { hotkeyCoordinator?.beginRecording() }
     func prepareToTerminate() -> Bool {
+        guard captureSession?.flushCheckpoints() != false else {
+            notice = "빠른 입력 초안을 보존하지 못해 종료를 취소했습니다. 저장 공간을 확인하고 다시 종료하세요."
+            showCapture()
+            return false
+        }
         guard meetings?.leaveScreen() != false else {
             route = .meetings
             notice = "회의록을 저장하지 못해 종료를 취소했습니다. 입력 오류를 수정하고 저장한 뒤 다시 종료하세요."

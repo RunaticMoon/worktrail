@@ -388,7 +388,11 @@ import WorkLogCore
             if model.projectIds != projectIds { model.projectIds = projectIds }
             if model.tagIds != tagIds { model.tagIds = tagIds }
             if model.range != surface.filterRange { model.range = surface.filterRange }
-            model.search()
+            let request = SearchState(text: query, types: scopedTypes, projectIds: projectIds,
+                tagIds: tagIds, range: surface.filterRange)
+            if surface.recordRequest != request { surface.loadedLimit = 50; surface.recordRequest = request }
+            model.search(limit: surface.loadedLimit)
+            surface.hasMore = model.hasMore
             surface.recordResults = model.hits
             surface.recordSearchError = model.errorMessage
             if let hit = selectedRecordHit { model.select(hit) }
@@ -403,6 +407,7 @@ import WorkLogCore
         guard isActive, surface.scope != .secret, model.text == query, model.types == scopedTypes,
               model.projectIds == (surface.scope == .reports ? [] : surface.projectFilterIds),
               model.tagIds == (surface.scope == .reports ? [] : surface.tagFilterIds), model.range == surface.filterRange else { return }
+        surface.hasMore = model.hasMore
         surface.recordResults = model.hits
         surface.recordSearchError = model.errorMessage
     }
@@ -705,8 +710,16 @@ import WorkLogCore
 
     private var filterControls: some View {
         HStack(spacing: 12) {
-            Text("결과 \(resultIDs.count)건").font(.callout).foregroundStyle(WorkLogTheme.muted)
+            Text("\(resultIDs.count)건 표시" + (surface.scope != .secret && surface.hasMore ? " · 더 있음" : " · 전체")).font(.callout).foregroundStyle(WorkLogTheme.muted)
             if surface.scope != .secret {
+            if surface.hasMore {
+                Button("더 보기") {
+                    surface.loadedLimit += 50
+                    updateSearch()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .worklogHelp("다음 50건 불러오기 · 선택과 미리보기 유지", keys: "⇧⌘M")
+            }
             Button { filtersExpanded.toggle() } label: {
                 Label(activeFilterCount == 0 ? "필터" : "필터 \(activeFilterCount)",
                       systemImage: "line.3.horizontal.decrease")
@@ -975,19 +988,10 @@ import WorkLogCore
     }
 
     private func memoSourceSheet(_ detail: MemoDetailModel) -> MemoDetailScreen {
-        let saveBody: (String) throws -> Void = { body in
-            try saveSourceMemo(body: body, detail: detail)
-        }
-        return MemoDetailScreen(model: detail, onClose: closeSource,
-            onSaveBody: saveBody, initiallyEditing: true)
+        MemoDetailScreen(model: detail, onClose: closeSource,
+            onSaved: { updateSearch() }, initiallyEditing: true)
     }
 
-    private func saveSourceMemo(body: String, detail: MemoDetailModel) throws {
-        guard let memo = detail.memo else { throw WorkLogError.notFound("memo") }
-        _ = try environment.repo.updateMemoBody(id: memo.id, body: body, workDate: memo.workDate)
-        detail.load(id: memo.id)
-        updateSearch()
-    }
 
     private func taskSourceSheet(_ detail: TaskDetailModel) -> some View {
         TaskDetailScreen(model: detail, onClose: closeSource)

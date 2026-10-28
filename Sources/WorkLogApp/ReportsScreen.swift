@@ -181,6 +181,7 @@ private struct ReportWorkspace: View {
     }
 
     private func focusContent() {
+        if model.canCreateRevision { model.beginConfirmedRevision() }
         if model.canEdit, model.version != nil {
             isEditing = true
             editorFocused = true
@@ -362,8 +363,8 @@ private struct ReportWorkspace: View {
         Button("본문 복사") { copyReport() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .buttonStyle(.borderedProminent).worklogHelp("현재 본문 복사 · 제출 상태는 바뀌지 않습니다", keys: "⇧⌘C")
-        Button("편집 ⌘E", action: focusContent)
-            .focusable().worklogKeyboardActivation(focusContent).disabled(!model.canEdit)
+        Button(model.canCreateRevision ? "이 본문으로 새 수정본 만들기 ⌘E" : "편집 ⌘E", action: focusContent)
+            .focusable().worklogKeyboardActivation(focusContent).disabled(!model.canEdit && !model.canCreateRevision)
             .accessibilityIdentifier("reports-edit")
         if isEditing && model.canEdit {
             Button("미리보기") {
@@ -386,7 +387,7 @@ private struct ReportWorkspace: View {
         Button("되돌리기") { model.discardEdits() }.disabled(!model.hasChanges)
             .worklogHelp("마지막 저장 본문으로 되돌리기")
         Button("보고서 확정") { retryAction = .confirm; model.confirm() }
-            .disabled(!model.canEdit || model.hasChanges)
+            .disabled(!model.canEdit || model.hasChanges || model.version?.state == .confirmed)
             .worklogHelp("현재 버전을 확정본으로 보존합니다. 이후 수정은 새 버전으로 남습니다")
     }
 

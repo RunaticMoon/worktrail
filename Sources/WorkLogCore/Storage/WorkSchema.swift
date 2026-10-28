@@ -13,6 +13,7 @@ public enum WorkSchema {
         Migration(version: 7, sql: "ALTER TABLE task ADD COLUMN due_reminder_days_before INTEGER CHECK (due_reminder_days_before IS NULL OR due_reminder_days_before BETWEEN 0 AND 365);"),
         Migration(version: 8, sql: ActivityImportSchema.v8),
         Migration(version: 9, sql: ActivityImportSchema.v9),
+        Migration(version: 10, sql: MemoHistorySchema.v10),
         Migration(version: 11, sql: MeetingSchema.v11),
     ]
 

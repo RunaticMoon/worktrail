@@ -20,18 +20,63 @@ import Observation
     /// 업무 탭 전용 일반 초안. `kind == .task` 고정.
     public let taskDraft: CaptureModel
 
+    public private(set) var recoveredKinds: Set<CaptureKind> = []
+    public private(set) var checkpointMessage: String?
+    public private(set) var checkpointFailed = false
+    @ObservationIgnored private let draftStore: CaptureDraftStore
+    @ObservationIgnored private var checkpointTask: Task<Void, Never>?
     @ObservationIgnored private var environment: AppEnvironment?
     /// `markSessionCompleted()` 이후 다음 `beginSession()`이 새 세션으로 시작해야 함을 표시한다.
     @ObservationIgnored private var pendingNewSession = true
 
     public init(environment: AppEnvironment) {
         self.environment = environment
+        draftStore = CaptureDraftStore(directory: environment.options.paths.dataRoot.appendingPathComponent("capture-drafts"),
+                                       ids: environment.options.ids)
         tab = environment.settings.defaultCaptureKind
         memoDraft = CaptureModel(environment: environment)
         taskDraft = CaptureModel(environment: environment)
         // 초안 종류는 설정 기본값과 무관하게 고정한다.
         memoDraft.kind = .memo
         taskDraft.kind = .task
+        for (kind, draft) in [(CaptureKind.memo, memoDraft), (.task, taskDraft)] {
+            do {
+                if let value = try draftStore.load(kind == .memo ? .memo : .task) {
+                    draft.restore(value); recoveredKinds.insert(kind); pendingNewSession = false
+                }
+            } catch { checkpointMessage = "일부 일반 초안을 읽지 못했습니다. 다른 탭의 초안은 유지됩니다."; checkpointFailed = true }
+        }
+        memoDraft.onDraftChanged = { [weak self] in self?.scheduleCheckpoint() }
+        taskDraft.onDraftChanged = { [weak self] in self?.scheduleCheckpoint() }
+    }
+
+    public func continueRecoveredDraft() { recoveredKinds.remove(tab) }
+
+    private func scheduleCheckpoint() {
+        checkpointTask?.cancel()
+        checkpointMessage = "일반 초안 저장 대기 중…"
+        checkpointTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            guard !Task.isCancelled else { return }
+            _ = self?.flushCheckpoints()
+        }
+    }
+
+    /// Called before application termination; false keeps the process and editable drafts alive.
+    @discardableResult public func flushCheckpoints() -> Bool {
+        checkpointTask?.cancel(); checkpointTask = nil
+        guard environment != nil else { return true }
+        do {
+            try draftStore.save(isEmpty(memoDraft) ? nil : memoDraft.checkpoint(), kind: .memo)
+            try draftStore.save(isEmpty(taskDraft) ? nil : taskDraft.checkpoint(), kind: .task)
+            checkpointMessage = "일반 초안이 이 Mac에 저장되었습니다."
+            checkpointFailed = false
+            return true
+        } catch {
+            checkpointMessage = "일반 초안을 보존하지 못했습니다. 입력은 유지됩니다. 저장을 다시 시도하세요."
+            checkpointFailed = true
+            return false
+        }
     }
 
     // MARK: - 탭
@@ -96,8 +141,17 @@ import Observation
     /// 활성 일반 탭만 새 초안으로 비운다. 다른 탭의 초안과 기본 입력 유형은 유지한다.
     /// Secret 값은 소유하지 않으며 Secret 탭에서는 아무 작업도 하지 않는다.
     @discardableResult public func startNewOrdinaryDraft() -> Bool {
-        guard let draft = activeDraft, draft.startNewDraft() else { return false }
+        guard let draft = activeDraft, !draft.isSubmitting, draft.pendingCompletion == nil else { return false }
+        do { try draftStore.save(nil, kind: tab == .memo ? .memo : .task) }
+        catch {
+            checkpointMessage = "초안을 폐기하지 못했습니다. 작성 내용은 유지됩니다. 다시 시도하세요."
+            checkpointFailed = true
+            return false
+        }
+        guard draft.startNewDraft() else { return false }
         forceFixedKinds()
+        recoveredKinds.remove(tab)
+        _ = flushCheckpoints()
         pendingNewSession = false
         return true
     }
@@ -108,11 +162,12 @@ import Observation
     /// Secret 저장은 패널의 `SecretCaptureView`가 담당한다.
     @discardableResult
     public func submitOrdinary() -> Bool {
-        guard !isSecretTab, let draft = activeDraft else { return false }
+        guard !isSecretTab, !recoveredKinds.contains(tab), let draft = activeDraft else { return false }
         let saved = draft.submit()
         // `CaptureModel.submit()` 성공 시 `resetDefaults()`가 kind를 설정값으로 되돌릴 수 있다.
         // 초안 종류는 고정 계약이므로 다시 보정한다.
         forceFixedKinds()
+        if saved { recoveredKinds.remove(tab); _ = flushCheckpoints() }
         return saved
     }
 
@@ -126,6 +181,10 @@ import Observation
     /// `memoDraft`/`taskDraft` 자체는 계약상 `public let`이라 유지하지만, 각 초안이
     /// 보유한 `AppEnvironment`·서비스 참조는 `detach()`로 즉시 놓는다. 이후 메서드 호출은 무해하다.
     public func detach() {
+        _ = flushCheckpoints()
+        checkpointTask?.cancel()
+        memoDraft.onDraftChanged = nil
+        taskDraft.onDraftChanged = nil
         memoDraft.detach()
         taskDraft.detach()
         environment = nil

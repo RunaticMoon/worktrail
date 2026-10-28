@@ -36,16 +36,23 @@ public struct SearchQuery: Sendable {
     /// work_date 기준 [start, endExclusive)
     public var range: DateRange?
     public var limit: Int
+    public var offset: Int
 
     public init(text: String, types: Set<SearchSourceType>? = nil, projectIds: [String] = [],
-                tagIds: [String] = [], range: DateRange? = nil, limit: Int = 50) {
+                tagIds: [String] = [], range: DateRange? = nil, limit: Int = 50, offset: Int = 0) {
         self.text = text
         self.types = types
         self.projectIds = projectIds
         self.tagIds = tagIds
         self.range = range
         self.limit = limit
+        self.offset = offset
     }
+}
+
+public struct SearchPage: Sendable {
+    public let hits: [SearchHit]
+    public let hasMore: Bool
 }
 
 /// 검색 결과 한 건. snippet은 첫 일치 위치 주변 최대 120자다.
@@ -386,6 +393,14 @@ public final class SearchIndex: @unchecked Sendable {
 
     // MARK: - 검색
 
+    public func searchPage(_ query: SearchQuery) throws -> SearchPage {
+        guard query.limit > 0 else { return SearchPage(hits: [], hasMore: false) }
+        var probe = query
+        probe.limit = query.limit == Int.max ? Int.max : query.limit + 1
+        let results = try search(probe)
+        return SearchPage(hits: Array(results.prefix(query.limit)), hasMore: results.count > query.limit)
+    }
+
     public func search(_ query: SearchQuery) throws -> [SearchHit] {
         let trimmed = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let terms = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
@@ -480,8 +495,9 @@ public final class SearchIndex: @unchecked Sendable {
         }
 
         for f in filters { sql += " AND " + f }
-        sql += " ORDER BY d.work_date DESC, d.source_id ASC LIMIT ?"
+        sql += " ORDER BY d.work_date DESC, d.source_id ASC, d.source_type ASC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(max(0, query.offset))
 
         let rows = try db.query(sql, params)
         var hits: [SearchHit] = []
