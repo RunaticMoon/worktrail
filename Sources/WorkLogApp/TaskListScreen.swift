@@ -22,7 +22,7 @@ import WorkLogCore
     private var projectNames: [String] {
         Set(model.rows.flatMap(\.projectNames)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
-    private var isFiltering: Bool { model.isSearching || projectFilter != .all }
+    private var isFiltering: Bool { model.isSearching || projectFilter != .all || model.hasExecutionFilters }
     private var visibleRows: [TaskListRow] {
         results.visibleRows(showsClosedRows: isFiltering || model.isClosedExpanded)
     }
@@ -47,13 +47,14 @@ import WorkLogCore
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: Bool.self) { $0.size.width >= 700 } action: { usesHorizontalSearchControls = $0 }
+            executionControls
             if let error = model.errorMessage {
                 RecoveryNotice(failed: error, preserved: "저장된 업무와 검색어는 그대로입니다.", retry: { model.load() })
             } else if model.rows.isEmpty {
                 StateView(kind: .empty, title: "첫 업무를 기록하세요", detail: "빠른 입력의 Task 유형에서 업무를 등록할 수 있습니다.",
                     actionTitle: "새 업무 ⌘N", action: onCapture)
             } else if results.rows.isEmpty {
-                StateView(kind: .noResults, title: "일치하는 업무가 없습니다", detail: "검색어 또는 프로젝트 필터를 확인하세요.",
+                StateView(kind: .noResults, title: "일치하는 업무가 없습니다", detail: "검색어·프로젝트·실행·상태 조건을 확인하세요.",
                     actionTitle: "검색·필터 초기화", action: clearFilters)
             } else {
                 ScrollViewReader { proxy in
@@ -143,6 +144,23 @@ import WorkLogCore
             .worklogHelp("업무 이름으로 찾기 · ↓ 목록으로 이동 · Return 열기", keys: "⌘⌥F")
     }
 
+    private var executionControls: some View {
+        HStack(spacing: 12) {
+            Picker("실행 조건", selection: $model.executionFilter) {
+                ForEach(TaskExecutionFilter.allCases, id: \.self) { filter in
+                    Text("\(filter.rawValue) (\(model.matchingRows(execution: filter, state: model.stateFilter).filter { projectFilter.includes($0) }.count))").tag(filter)
+                }
+            }.pickerStyle(.menu).accessibilityIdentifier("task-list-execution-filter")
+            Picker("상태", selection: $model.stateFilter) {
+                ForEach(TaskStateFilter.allCases, id: \.self) { state in
+                    Text("\(state.rawValue) (\(model.matchingRows(execution: model.executionFilter, state: state).filter { projectFilter.includes($0) }.count))").tag(state)
+                }
+            }.pickerStyle(.menu).accessibilityIdentifier("task-list-state-filter")
+            if isFiltering { Button("필터 초기화", action: clearFilters).accessibilityIdentifier("task-list-clear-filters") }
+        }
+        .help("오늘 마감·지연·계획·마감 없음은 기본으로 완료·취소를 제외합니다. 상태를 지정하면 해당 상태만 표시합니다.")
+    }
+
     private var filterControls: some View {
         HStack(spacing: 12) {
             Picker("프로젝트", selection: $projectFilter) {
@@ -178,7 +196,7 @@ import WorkLogCore
     }
 
     private func clearFilters() {
-        model.query = ""
+        model.clearFilters()
         projectFilter = .all
         listFocused = false
         queryFocused = true
@@ -281,7 +299,8 @@ import WorkLogCore
                 .help(row.isOverdue ? "마감이 지난 업무 · \(due)" : "마감 · \(due)")
         }
         if row.isInThisWeekPlan {
-            Label("이번 주 계획", systemImage: "calendar.badge.clock").fixedSize()
+            Label(row.planScopeSummary ?? "이번 주 계획", systemImage: "calendar.badge.clock")
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -289,7 +308,7 @@ import WorkLogCore
         var parts = [row.title, "전체 상태 \(row.status?.koreanLabel ?? "상태 없음")"]
         if !row.projectNames.isEmpty { parts.append("프로젝트 \(row.projectNames.joined(separator: ", "))") }
         if let due = row.dueLabel { parts.append("\(row.isOverdue ? "마감 지남" : "마감") \(due)") }
-        if row.isInThisWeekPlan { parts.append("이번 주 계획") }
+        if row.isInThisWeekPlan { parts.append(row.planScopeSummary ?? "이번 주 계획") }
         return parts.joined(separator: ", ")
     }
 

@@ -67,7 +67,7 @@ public struct TaskDetail: Sendable {
 /// 입력·상태 변경 명령을 저장소에 원자적으로 기록한다.
 /// 상태는 항상 이벤트 재생으로 계산하며, 허용되지 않는 전이는 저장 전에 거부한다.
 public final class TaskService: @unchecked Sendable {
-    private let repo: WorkRepository
+    let repo: WorkRepository
 
     public init(repo: WorkRepository) {
         self.repo = repo
@@ -316,6 +316,10 @@ public final class TaskService: @unchecked Sendable {
         guard !trimmed.isEmpty else {
             throw WorkLogError.validation("체크리스트 항목이 비어 있습니다.")
         }
+        let allowed = Set(try repo.taskProjects(taskId: taskId).map(\.projectId))
+        guard Set(projectIds).isSubset(of: allowed) else {
+            throw WorkLogError.validation("업무에 연결된 프로젝트만 선택할 수 있습니다.")
+        }
         return try repo.db.transaction {
             let existing = try repo.checklistItems(taskId: taskId, includeDeleted: true)
             let nextOrder = (existing.map { $0.sortOrder }.max() ?? 0) + 1
@@ -386,7 +390,7 @@ public final class TaskService: @unchecked Sendable {
         let events = try repo.events(taskId: taskId)
         let result = StateReplay.replay(events, through: asOf, knownAt: knownAt)
 
-        let activeLinks = try repo.taskProjects(taskId: taskId).filter { link in
+        let activeLinks = try repo.taskProjects(taskId: taskId, includeRemoved: asOf != nil).filter { link in
             if let asOf, link.linkedOn > asOf { return false }
             if let removed = link.removedOn {
                 if let asOf { return removed > asOf }

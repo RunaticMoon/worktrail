@@ -9,6 +9,7 @@ import Observation
     public private(set) var items: [WeekPlanItem] = []
     public private(set) var tasks: [WorkTask] = []
     public private(set) var errorMessage: String?
+    public private(set) var noticeMessage: String?
     public private(set) var isLoading = false
     public var range: DateRange { environment.periods.range(.weekly, containing: weekStart) }
     public var candidates: [WeekPlanItem] { items.filter { $0.state == .candidate } }
@@ -52,12 +53,21 @@ import Observation
     }
     public func unconfirm(_ id: String) { perform { try environment.plans.unconfirm(itemId: id) } }
     public func exclude(_ id: String) { perform { try environment.plans.exclude(itemId: id) } }
+    public func restore(_ id: String) {
+        perform { try environment.plans.restore(itemId: id) }
+        if errorMessage == nil { noticeMessage = "후보로 되돌렸습니다. 계획에 포함하려면 다시 확정하세요." }
+    }
     public func addTask(_ taskId: String) {
-        guard !items.contains(where: { $0.taskId == taskId && $0.scopeType == .wholeTask }) else { return }
+        let existing = items.first { $0.taskId == taskId && $0.scopeType == .wholeTask }
         perform { _ = try environment.plans.addItem(weekStart: weekStart, taskId: taskId, scopeType: .wholeTask, scopeId: nil, label: nil) }
+        guard errorMessage == nil else { return }
+        if existing?.state == .excluded { noticeMessage = "제외했던 항목을 후보로 되돌렸습니다. 다시 확정하세요." }
+        else if existing != nil { noticeMessage = "이미 계획에 포함된 항목입니다." }
+        else { noticeMessage = "후보에 추가했습니다. 계획에 포함하려면 확정하세요." }
     }
     public func title(for item: WeekPlanItem) -> String { tasks.first { $0.id == item.taskId }?.title ?? "업무를 찾을 수 없음" }
     private func perform(_ action: () throws -> Void) {
+        noticeMessage = nil
         do { try action(); load() }
         catch { errorMessage = "계획 변경을 저장하지 못했습니다. 다시 시도하세요." }
     }

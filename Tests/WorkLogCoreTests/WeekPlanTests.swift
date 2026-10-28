@@ -218,8 +218,11 @@ final class WeekPlanTests: XCTestCase {
 
         let first = try service.addItem(weekStart: monday, taskId: "task-A", scopeType: .checklistItem,
                                         scopeId: "checklist-docs", label: "문서")
-        let second = try service.addItem(weekStart: monday, taskId: "task-A", scopeType: .checklistItem,
-                                         scopeId: "checklist-docs", label: "문서")
+        // Existing databases may contain duplicate scopes from before addItem became idempotent.
+        let second = WeekPlanItem(id: "legacy-duplicate", weekPlanId: first.weekPlanId,
+                                  taskId: first.taskId, scopeType: first.scopeType,
+                                  scopeId: first.scopeId, label: first.label, state: .candidate)
+        try repo.insertWeekPlanItem(second)
         XCTAssertNotEqual(first.id, second.id)
 
         _ = try service.confirm(weekStart: monday, itemIds: [first.id, second.id])

@@ -8,6 +8,9 @@ import WorkLogCore
     let onClose: () -> Void
     var taskNames: [String: String] = [:]
     var onOpenTask: ((String) -> Void)? = nil
+    @State private var editingProperties = false
+    @State private var editingChecklist: ChecklistItem?
+    @State private var correctingEvent: DomainEvent?
     @State private var projectsExpanded = false
     @State private var checklistExpanded = false
     @State private var evidenceExpanded = false
@@ -46,12 +49,17 @@ import WorkLogCore
                         .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 }
                 if let error = model.errorMessage { InlineNotice(message: error) }
+                if let notice = model.noticeMessage { Text(notice).font(.callout).foregroundStyle(.secondary) }
                 if let detail = model.detail {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 12) { taskStatus(detail) }
                         VStack(alignment: .leading, spacing: 8) { taskStatus(detail) }
                     }
                     if model.asOf == nil {
+                        WorkDatePicker(title: "실제 업무일", value: $model.workDate, calendar: model.workCalendar)
+                            .accessibilityIdentifier("task-detail-work-date")
+                        TextField("보류·취소 등 상태 변경 사유 (선택)", text: $model.statusNote)
+                            .accessibilityLabel("상태 변경 사유")
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 8) { primaryActions(detail); statusActions(detail) }
                             VStack(alignment: .leading, spacing: 8) { primaryActions(detail); statusActions(detail) }
@@ -64,6 +72,8 @@ import WorkLogCore
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
                                 if model.asOf == nil {
+                                    Button("업무 정보 편집") { editingProperties = true }
+                                        .accessibilityIdentifier("task-detail-edit-properties")
                                     GroupBox("마감·알림") {
                                         TaskDueFields(
                                             dueOn: Binding(get: { model.detail?.task.dueOn }, set: { model.setDueDate($0) }),
@@ -106,6 +116,11 @@ import WorkLogCore
         .onChange(of: model.detail?.task.id, initial: true) { _, _ in
             initializeSectionExpansion()
         }
+        .sheet(isPresented: $editingProperties) {
+            if let draft = model.propertiesDraft { TaskPropertiesEditor(model: model, initial: draft) }
+        }
+        .sheet(item: $editingChecklist) { ChecklistItemEditor(model: model, item: $0) }
+        .sheet(item: $correctingEvent) { StatusCorrectionEditor(model: model, event: $0) }
         .interactiveDismissDisabled(hasUnsavedInput)
         .background(WorkLogKeyHandler(handle: handleKey))
         .alert("업무 입력을 버리고 닫을까요?", isPresented: $confirmsDiscardInput) {
@@ -119,12 +134,13 @@ import WorkLogCore
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
+        guard !editingProperties, editingChecklist == nil, correctingEvent == nil else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers == .command, event.keyCode == 13 {
             if !event.isARepeat { requestClose() }
             return true
         }
-        guard model.asOf == nil, model.completionCheck == nil else { return false }
+        guard model.asOf == nil, model.completionCheck == nil, !editingProperties, editingChecklist == nil, correctingEvent == nil else { return false }
         if modifiers == .command, event.keyCode == 14 {
             if !event.isARepeat { activityFocused = true }
             return true
@@ -196,6 +212,7 @@ import WorkLogCore
     private var completionConfirmation: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("남은 범위를 확인하세요").font(.headline)
+            Text("실제 업무일: \(model.workDate.iso)").font(.callout)
             if let error = model.errorMessage { InlineNotice(message: error) }
             Text("체크리스트와 프로젝트별 적용 상태는 그대로 남습니다.")
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
@@ -356,12 +373,21 @@ import WorkLogCore
         VStack(alignment: .leading, spacing: 8) {
             if detail.checklist.isEmpty { Text("체크리스트 항목이 없습니다.").foregroundStyle(WorkLogTheme.muted) }
             ForEach(detail.checklist, id: \.item.id) { entry in
-                Toggle(entry.item.text, isOn: Binding(get: { entry.done }, set: { model.setChecklist(itemId: entry.item.id, done: $0) }))
-                    .focusable()
-                    .disabled(model.asOf != nil)
-                    .accessibilityIdentifier("task-detail-checklist-\(entry.item.id)")
+                checklistRow(entry.item, done: entry.done, detail: detail)
             }
             if model.asOf == nil {
+                if !detail.checklist.isEmpty {
+                    Text("여기에 놓으면 맨 아래로 이동").font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 24)
+                        .dropDestination(for: String.self) { ids, _ in
+                            guard let id = ids.first, let index = detail.checklist.firstIndex(where: { $0.item.id == id }) else { return false }
+                            model.moveChecklist(itemId: id, offset: detail.checklist.count - 1 - index); return true
+                        }
+                }
+                if model.checklistUndoCount > 0 {
+                    Button("체크리스트 편집 실행 취소") { model.undoChecklistEdit() }
+                        .accessibilityIdentifier("checklist-undo")
+                }
                 HStack {
                     TextField("새 체크리스트 항목", text: $model.checklistText).accessibilityLabel("새 체크리스트 항목")
                         .focused($checklistFocused)
@@ -382,6 +408,33 @@ import WorkLogCore
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
         }.padding(.top, 8)
+    }
+
+    private func checklistRow(_ item: ChecklistItem, done: Bool, detail: TaskDetail) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(item.text, isOn: Binding(get: { done }, set: { model.setChecklist(itemId: item.id, done: $0) }))
+                    .focusable().disabled(model.asOf != nil)
+                    .accessibilityIdentifier("task-detail-checklist-\(item.id)")
+                Text(model.checklistScopeLabel(item)).font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            if model.asOf == nil {
+                Button("편집") { editingChecklist = item }.accessibilityLabel("\(item.text) 편집")
+                Menu("이동·삭제") {
+                    Button("위로 이동") { model.moveChecklist(itemId: item.id, offset: -1) }
+                        .disabled(detail.checklist.first?.item.id == item.id)
+                    Button("아래로 이동") { model.moveChecklist(itemId: item.id, offset: 1) }
+                        .disabled(detail.checklist.last?.item.id == item.id)
+                    Button("삭제", role: .destructive) { model.deleteChecklist(itemId: item.id) }
+                }.accessibilityLabel("\(item.text) 이동 또는 삭제")
+            }
+        }
+        .draggable(item.id)
+        .dropDestination(for: String.self) { ids, _ in
+            guard model.asOf == nil, let id = ids.first,
+                  detail.checklist.contains(where: { $0.item.id == id }) else { return false }
+            model.moveChecklist(itemId: id, before: item.id); return true
+        }
     }
 
     private var activityComposer: some View {
@@ -406,8 +459,7 @@ import WorkLogCore
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(WorkLogTheme.muted.opacity(0.35)))
                     .focused($activityFocused).accessibilityLabel("진행 기록 내용")
                 HStack(spacing: 12) {
-                    Text("오늘 업무일로 저장").font(.callout).foregroundStyle(WorkLogTheme.muted)
-                        .help("다른 업무일은 빠른 입력에서 선택할 수 있습니다")
+                    Text("\(model.workDate.iso) 업무일로 저장").font(.callout).foregroundStyle(WorkLogTheme.muted)
                     Spacer(minLength: 8)
                     Button("진행 기록 저장") {
                         guard !hasMarkedText else { return }
@@ -445,11 +497,37 @@ import WorkLogCore
         return CGFloat(min(160, max(72, max(lines, model.activityText.count / 65 + 1) * 19 + 16)))
     }
 
+    private func recordedTimeLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.timeZone = model.workCalendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss z"
+        return formatter.string(from: date)
+    }
+
     private func evidence(_ detail: TaskDetail) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("시작일: \(detail.firstStartedOn?.iso ?? "기록 없음")")
             if detail.completionDates.isEmpty { Text("완료 이력 없음").foregroundStyle(WorkLogTheme.muted) }
             ForEach(Array(detail.completionDates.enumerated()), id: \.offset) { _, date in Text("완료 이력: \(date.iso)") }
+            ForEach(model.statusEvents) { event in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("\(event.effectiveDate.iso) · \(model.eventScopeLabel(event)) · \(event.kind.editingLabel)")
+                        Spacer()
+                        if model.asOf == nil, event.kind.isStatusEvent, !model.isSuperseded(event) {
+                            Button("정정") { correctingEvent = event }
+                                .accessibilityLabel("\(event.effectiveDate.iso) \(event.kind.editingLabel) 이력 정정")
+                                .accessibilityIdentifier("status-correct-\(event.id)")
+                        }
+                    }
+                    if model.isSuperseded(event) { Text("정정 전 원래 기록 · 보존됨").font(.caption).foregroundStyle(.secondary) }
+                    if event.supersedesEventId != nil { Text(event.kind == .voided ? "원래 사건을 무효화한 정정 이력" : "정정된 대체 사건").font(.caption).foregroundStyle(.secondary) }
+                    Text("기록 시각: " + recordedTimeLabel(event.recordedAt))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let note = event.note, !note.isEmpty { Text(note).font(.callout) }
+                }
+            }
             ForEach(detail.relations) { relation in
                 let id = relation.fromTaskId == detail.task.id ? relation.toTaskId : relation.fromTaskId
                 let title = taskNames[id] ?? "연결된 업무"

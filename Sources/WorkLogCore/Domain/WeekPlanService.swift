@@ -53,6 +53,19 @@ public final class WeekPlanService: @unchecked Sendable {
         let current = StateReplay.replay(events, through: nil, knownAt: now)
 
         var existing = try repo.weekPlanItems(planId: plan.id)
+        // Automatic due-date candidates are recalculated after property edits.
+        // User-added candidates, confirmed plans and explicit exclusions are retained.
+        for item in existing where item.state == .candidate && item.candidateReason == "이번 주 마감" {
+            let task = try repo.task(id: item.taskId)
+            let status = current.taskStatus(item.taskId)
+            let previousStatus = prior.taskStatus(item.taskId)
+            let incomplete = previousStatus == .planned || previousStatus == .inProgress
+            let due = task?.dueOn.map { $0 >= weekStart && $0 < weekEnd } ?? false
+            if task == nil || status == .cancelled || status == .onHold || (!incomplete && (!due || status == .completed)) {
+                try repo.db.runV("DELETE FROM week_plan_item WHERE id = ? AND state = ?", item.id, PlanItemState.candidate.rawValue)
+            }
+        }
+        existing = try repo.weekPlanItems(planId: plan.id)
         var existingKeys = Set(existing.map { scopeKey($0) })
 
         for task in try repo.tasks() {
@@ -104,11 +117,22 @@ public final class WeekPlanService: @unchecked Sendable {
     public func addItem(weekStart: WorkDate, taskId: String, scopeType: PlanScopeType,
                         scopeId: String?, label: String?) throws -> WeekPlanItem {
         try requireMonday(weekStart)
-        let plan = try ensurePlan(weekStart: weekStart)
-        let item = WeekPlanItem(id: repo.ids.make(), weekPlanId: plan.id, taskId: taskId,
-                                scopeType: scopeType, scopeId: scopeId, label: label, state: .candidate)
-        try repo.insertWeekPlanItem(item)
-        return item
+        return try repo.db.transaction {
+            let plan = try ensurePlan(weekStart: weekStart)
+            if var existing = try repo.weekPlanItems(planId: plan.id).first(where: {
+                $0.taskId == taskId && $0.scopeType == scopeType && $0.scopeId == scopeId
+            }) {
+                if existing.state == .excluded {
+                    existing.state = .candidate; existing.confirmedAt = nil
+                    try repo.updateWeekPlanItem(existing)
+                }
+                return existing
+            }
+            let item = WeekPlanItem(id: repo.ids.make(), weekPlanId: plan.id, taskId: taskId,
+                                    scopeType: scopeType, scopeId: scopeId, label: label, state: .candidate)
+            try repo.insertWeekPlanItem(item)
+            return item
+        }
     }
 
     public func setLabel(itemId: String, label: String?) throws {
@@ -130,6 +154,7 @@ public final class WeekPlanService: @unchecked Sendable {
         let now = repo.clock.now()
         let items = try repo.weekPlanItems(planId: plan.id)
         for var item in items where target.contains(item.id) {
+            if item.label == nil { item.label = try displayLabel(for: item) }
             item.state = .confirmed
             item.confirmedAt = now
             try repo.updateWeekPlanItem(item)
@@ -150,6 +175,18 @@ public final class WeekPlanService: @unchecked Sendable {
         }
         item.state = .candidate
         item.confirmedAt = nil
+        try repo.updateWeekPlanItem(item)
+    }
+
+    /// Excluded items return only to candidate; the user must confirm them again.
+    public func restore(itemId: String) throws {
+        guard var item = try repo.weekPlanItem(id: itemId) else {
+            throw WorkLogError.notFound("week_plan_item \(itemId)")
+        }
+        guard item.state == .excluded else {
+            throw WorkLogError.validation("제외된 항목만 후보로 되돌릴 수 있습니다.")
+        }
+        item.state = .candidate; item.confirmedAt = nil
         try repo.updateWeekPlanItem(item)
     }
 
