@@ -92,7 +92,7 @@ struct MeetingAudioArchive: Sendable {
         try validateRoot()
         guard manager.fileExists(atPath: root.path) else { return [] }
         return try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .filter { !$0.lastPathComponent.hasPrefix(".") }
+            .filter { !$0.lastPathComponent.hasPrefix(".") && !$0.lastPathComponent.hasPrefix("import-") }
             .map { try recover(recordingID: $0.lastPathComponent) }
             .sorted { $0.startedAt < $1.startedAt }
     }
@@ -103,7 +103,8 @@ struct MeetingAudioArchive: Sendable {
         guard manager.fileExists(atPath: root.path) else { return ([], 0) }
         var snapshots: [MeetingAudioArchiveSnapshot] = [], failures = 0
         for url in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            where !url.lastPathComponent.hasPrefix(".") {
+            // import-* folders are restored DB-owned files, not live recording recovery journals.
+            where !url.lastPathComponent.hasPrefix(".") && !url.lastPathComponent.hasPrefix("import-") {
             do { snapshots.append(try recover(recordingID: url.lastPathComponent)) }
             catch { failures += 1 }
         }

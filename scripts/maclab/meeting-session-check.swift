@@ -414,6 +414,38 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         catch is MeetingAudioArchiveError { }
         print("PASS: restored import-folder PCM reprocesses and loads playback; symlink/path escape rejected")
 
+        let siblingRecording = try session.store.createRecording(meetingID: importedMeeting.id)
+        let siblingURL = importedFolder.appendingPathComponent("track-2.caf")
+        try sourceBytes.write(to: siblingURL)
+        let siblingTrack = try session.store.addTrack(recordingID: siblingRecording.id, kind: .imported,
+            relativePath: "import-fixture-safe/track-2.caf", sampleRate: 48_000, channels: 1)
+        _ = try session.store.updateTrack(id: siblingTrack.id, expectedRevision: siblingTrack.revision, fileState: .available, duration: 0.2)
+        _ = try session.store.updateRecordingState(id: siblingRecording.id, expectedRevision: siblingRecording.revision, state: .completed)
+        let importedExport = root.appendingPathComponent("restored-original-export")
+        session.exportOriginal(importedRecording.id, to: importedExport)
+        try check(try Data(contentsOf: importedExport.appendingPathComponent("track-1.caf")) == sourceBytes,
+            "Exporting a restored original must preserve PCM bytes")
+        let originalsMetadata = try JSONSerialization.jsonObject(with: Data(contentsOf: importedExport.appendingPathComponent("originals.json"))) as! [String: Any]
+        try check(originalsMetadata["version"] as? Int == 1 && originalsMetadata["localOnly"] as? Bool == true,
+            "Restored-original metadata must be versioned and retain local-only policy")
+        try check((originalsMetadata["tracks"] as? [[String: Any]])?.count == 1,
+            "Export must include only the selected recording's track references")
+        let exportBeforeRetry = try Data(contentsOf: importedExport.appendingPathComponent("originals.json"))
+        session.exportOriginal(importedRecording.id, to: importedExport)
+        try check(try Data(contentsOf: importedExport.appendingPathComponent("originals.json")) == exportBeforeRetry,
+            "Export must refuse an existing destination instead of silently replacing it")
+        try check(try session.archive.recoverAvailable().unavailableCount == 0,
+            "DB-owned import directories must not be mistaken for broken recovery journals")
+        session.deleteOriginal(importedRecording.id)
+        try check(!FileManager.default.fileExists(atPath: importedURL.path), "Explicit deletion must remove the selected restored track")
+        try check(try Data(contentsOf: siblingURL) == sourceBytes && session.store.track(id: siblingTrack.id)?.fileState == .available,
+            "Deleting one restored recording must preserve another recording in the same import directory")
+        try check(try session.store.track(id: importedTrack.id)?.fileState == .deleted && session.store.recording(id: importedRecording.id)?.state == .discarded,
+            "Restored-original deletion must update only the selected DB references")
+        try check(try session.store.segments(runID: importedRun.id).first?.text == importedSegment.text,
+            "Deleting restored audio must retain its transcript")
+        print("PASS: DB-backed original export preserves bytes/localOnly and refuses overwrite; deleting one recording preserves sibling files/transcripts; recovery skips import folders")
+
         model.select(second.id)
         model.manualSummary = "직접 작성한 가짜 요약"
         model.manualDecisions = "가짜 결정"
@@ -450,7 +482,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
-        print("14 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
+        print("15 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
     }
 }
 #endif

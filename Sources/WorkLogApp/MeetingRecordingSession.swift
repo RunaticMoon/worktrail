@@ -507,9 +507,14 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         guard !isRecovering, !isSavePending else { return }
         guard id != recordingID || !isCapturing, id != finalRecordingID else { return }
         do {
-            _ = try archive.acknowledgeRecovery(recordingID: id)
-            try archive.delete(recordingID: id)
-            for track in try store.tracks(recordingID: id) {
+            let tracks = try store.tracks(recordingID: id)
+            if tracks.contains(where: MeetingImportedAudioArchive.owns) {
+                try MeetingImportedAudioArchive(archive: archive, ids: ids).delete(recordingID: id, tracks: tracks)
+            } else {
+                _ = try archive.acknowledgeRecovery(recordingID: id)
+                try archive.delete(recordingID: id)
+            }
+            for track in tracks {
                 _ = try store.updateTrack(id: track.id, expectedRevision: track.revision, fileState: .deleted)
             }
             if let recording = try store.recording(id: id) {
@@ -520,8 +525,17 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     }
     func exportOriginal(_ id: String, to url: URL) {
         guard !isRecovering else { return }
-        do { _ = try archive.acknowledgeRecovery(recordingID: id); try archive.export(recordingID: id, to: url) }
-        catch { captureMessage = "원본 내보내기를 완료하지 못했습니다. 대상 폴더와 권한을 확인하세요." }
+        do {
+            let tracks = try store.tracks(recordingID: id)
+            if tracks.contains(where: MeetingImportedAudioArchive.owns) {
+                guard let recording = try store.recording(id: id) else { throw WorkLogError.notFound("녹음") }
+                let localOnly = try MeetingService(repo: store.repo).meeting(id: recording.meetingID, includeDeleted: true)?.localOnly ?? true
+                try MeetingImportedAudioArchive(archive: archive, ids: ids).export(recording: recording, tracks: tracks, localOnly: localOnly, to: url)
+            } else {
+                _ = try archive.acknowledgeRecovery(recordingID: id)
+                try archive.export(recordingID: id, to: url)
+            }
+        } catch { captureMessage = "원본 내보내기를 완료하지 못했습니다. 대상 폴더와 권한을 확인하세요." }
     }
     func importAudio(_ url: URL, meetingID: String) async throws {
         guard !isRecovering, !isSavePending, !isCapturing, !isFinalizing else { throw MeetingLocalModelError.busy }

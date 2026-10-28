@@ -48,6 +48,9 @@ enum MeetingPostProcessing {
         let existing = try store.runs(meetingID: recording.meetingID)
         let reusable = try existing.first { run in
             if let sourceRunID, run.id != sourceRunID { return false }
+            guard run.stage == .refined, run.status == .completed, run.recordingID == recordingID,
+                  run.modelIdentifier == descriptor.modelID, run.modelRevision == descriptor.revision,
+                  run.settingsJSON == settings else { return false }
             return MeetingProcessingReuse.isReusable(run, recordingID: recordingID, modelIdentifier: descriptor.modelID,
                 modelRevision: descriptor.revision, settingsJSON: settings,
                 hasUserEdits: try store.segments(runID: run.id).contains(where: \.isUserEdited))
@@ -137,6 +140,9 @@ enum MeetingPostProcessing {
         let hash: String
         let startOffset: Double
         let duration: Double?
+        let sampleRate: Double
+        let channels: Int
+        let kind: MeetingTrackKind
         let interruptions: [MeetingTrackInterruption]
     }
     private static func sourceFingerprint(_ tracks: [MeetingAudioTrack], archive: MeetingAudioArchive) throws -> String {
@@ -148,7 +154,8 @@ enum MeetingPostProcessing {
                 try Task.checkCancellation(); hash.update(data: data)
             }
             return .init(id: track.id, hash: hash.finalize().map { String(format: "%02x", $0) }.joined(),
-                startOffset: track.startOffset, duration: track.duration, interruptions: track.interruptions)
+                startOffset: track.startOffset, duration: track.duration, sampleRate: track.sampleRate,
+                channels: track.channels, kind: track.kind, interruptions: track.interruptions)
         }
         return SHA256.hash(data: Data(try StableJSON.string(sources).utf8)).map { String(format: "%02x", $0) }.joined()
     }
