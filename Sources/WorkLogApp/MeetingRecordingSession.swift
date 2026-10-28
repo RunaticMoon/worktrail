@@ -32,7 +32,8 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     private(set) var elapsed: Double = 0
     private(set) var levels: [String: Float] = [:]
     private(set) var visible: [MeetingPreviewSegment] = []
-    private(set) var previewMessage: String?
+    private var previewStatus = MeetingPreviewStatus()
+    var previewMessage: String? { previewStatus.message }
     private(set) var captureMessage: String?
     private(set) var captureIssue = false
     private(set) var finalMessage: String?
@@ -125,8 +126,8 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         phase = .starting; visible = []; levels = [:]; elapsed = 0
         changedSegments = [:]; previewGaps = []; trackIDs = [:]; liveRunID = nil
         checkpointDirty = false; lastCheckpoint = monotonic.seconds()
-        previewFailureLogged = false; checkpointFailureLogged = false
-        captureMessage = nil; captureIssue = false; previewMessage = nil; meetingTitle = meeting.title
+        previewFailureLogged = false; checkpointFailureLogged = false; previewStatus = MeetingPreviewStatus()
+        captureMessage = nil; captureIssue = false; previewStatus.progressMessage = nil; meetingTitle = meeting.title
         recordingID = nil; meetingID = meeting.id
         startupTask = Task { [weak self] in
             guard let self else { return }
@@ -150,7 +151,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                             settingsJSON: try StableJSON.string(MeetingRunConfiguration(preferences: preferences, stage: "live"))).id
                     } catch {
                         AppDiagnostics.shared.recordFailure(error, category: .transcription)
-                        previewMessage = "미리보기 저장을 준비하지 못했습니다. 원본만 녹음합니다."
+                        previewStatus.progressMessage = "미리보기 저장을 준비하지 못했습니다. 원본만 녹음합니다."
                     }
                 }
                 let stream = AsyncStream<MeetingCapturedPCM>(bufferingPolicy: .bufferingNewest(4)) { self.continuation = $0 }
@@ -165,7 +166,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                     guard expected == generation, !Task.isCancelled, phase == .starting || phase == .recording else { return }
                     if wantsPreview && available {
                         await preparePreview(recording: recording, expected: expected)
-                    } else { previewMessage = wantsPreview ? "실시간 모델 없음 · 원본만 녹음합니다." : "녹음만 진행합니다." }
+                    } else { previewStatus.progressMessage = wantsPreview ? "실시간 모델 없음 · 원본만 녹음합니다." : "녹음만 진행합니다." }
                 }
                 previewTask = Task { [weak self] in
                     guard let self else { return }
@@ -192,7 +193,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                             checkpointIfNeeded()
                         } catch {
                             if !previewFailureLogged { AppDiagnostics.shared.recordFailure(error, category: .transcription); previewFailureLogged = true }
-                            previewMessage = "미리보기를 처리하지 못했습니다. 원본 녹음은 계속 보관합니다."
+                            previewStatus.progressMessage = "미리보기를 처리하지 못했습니다. 원본 녹음은 계속 보관합니다."
                         }
                     }
                     for gap in drops.drain() { previewEvent(.skipped(gap), expected: expected) }
@@ -221,11 +222,11 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 guard expected == generation, !Task.isCancelled else { stop(); return }
                 phase = .recording
             } catch {
-                AppDiagnostics.shared.recordFailure(error, category: .recording)
+                let failure = MeetingFailurePresentation.failure(for: error, phase: .recordingStart)
+                AppDiagnostics.shared.recordFailure(failure, category: .recording, stage: .recordingStart)
                 continuation?.finish(); continuation = nil
-                captureIssue = !(error is CancellationError)
-                captureMessage = error is CancellationError ? "녹음 시작을 취소했습니다. 저장된 원본은 유지됩니다."
-                    : "녹음을 시작하지 못했습니다. 입력 장치·권한·저장 공간을 확인하세요. 저장된 원본은 유지됩니다."
+                captureIssue = failure.reason != .cancelled
+                captureMessage = MeetingFailurePresentation.startupMessage(for: failure)
                 if let recordingID, let record = try? store.recording(id: recordingID) {
                     _ = try? store.updateRecordingState(id: record.id, expectedRevision: record.revision, state: .failed)
                 }
@@ -244,7 +245,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 ids: ids, clock: monotonic, overlap: preferences.overlap) { [weak self] event in
                     await self?.previewEvent(event, expected: expected)
                 }
-            previewMessage = "음성을 기다리는 중 · 첫 요청에서 모델을 로딩합니다."
+            previewStatus.progressMessage = "음성을 기다리는 중 · 첫 요청에서 모델을 로딩합니다."
     }
 
     private func ensureTrack(_ packet: MeetingCapturedPCM, recordingID: String) throws {
@@ -258,6 +259,9 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     }
     private func previewEvent(_ event: MeetingPreviewEvent, expected: Int) {
         guard expected == generation else { return }
+        if let failure = previewStatus.receive(event) {
+            AppDiagnostics.shared.recordFailure(failure, category: .transcription, stage: .preview)
+        }
         switch event {
         case .updated(let current, let changes):
             visible = current
@@ -275,10 +279,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             } else { previewGaps.append(gap) }
             checkpointDirty = true
             checkpointIfNeeded(force: previewGaps.count >= 256)
-            previewMessage = "미리보기 일부 구간을 건너뛰었습니다. 종료 후 원본에서 다시 전사합니다."
-        case .failed: previewMessage = "미리보기 오류 · 원본 녹음은 계속됩니다."
-        case .load(let interval, let duration, _):
-            previewMessage = "최근 추론 \(String(format: "%.1f", duration))초 · 갱신 시도 \(String(format: "%.1f", interval))초 간격"
+        case .failed, .succeeded, .load: break
         }
     }
     private func checkpointIfNeeded(force: Bool = false) {
@@ -299,7 +300,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             checkpointFailureLogged = false
         } catch {
             if !checkpointFailureLogged { AppDiagnostics.shared.recordFailure(error, category: .transcription); checkpointFailureLogged = true }
-            previewMessage = "자막 체크포인트를 저장하지 못했습니다. 원본은 별도로 보관됩니다."
+            previewStatus.progressMessage = "자막 체크포인트를 저장하지 못했습니다. 원본은 별도로 보관됩니다."
         }
         // A prolonged DB failure cannot grow the preview mailbox indefinitely.
         if previewGaps.count > 256 {
@@ -313,7 +314,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         }
         if changedSegments.count > 512 {
             changedSegments = Dictionary(uniqueKeysWithValues: changedSegments.values.sorted { $0.end > $1.end }.prefix(512).map { ($0.sourceKey, $0) })
-            previewMessage = "자막 저장 지연 · 오래된 미리보기는 원본 정밀 전사로 복구해야 합니다."
+            previewStatus.progressMessage = "자막 저장 지연 · 오래된 미리보기는 원본 정밀 전사로 복구해야 합니다."
         }
     }
 
@@ -417,13 +418,16 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             AppDiagnostics.shared.record(.operationFailed, category: .transcription, fields: [.reason: .state(.cancelled)])
             finalMessage = "정밀 전사 대기 · 원본과 완료된 구간을 보존했습니다. 재시도할 수 있습니다."
         }
-        catch let error as WorkLogError {
-            AppDiagnostics.shared.recordFailure(error, category: .transcription)
-            finalMessage = error.localizedDescription + " 원본과 완료된 전사는 보존했습니다."
+        catch let failure as MeetingFinalizationFailure {
+            AppDiagnostics.shared.recordFailure(failure.diagnostic, category: .transcription,
+                stage: failure.phase == .refined ? .refined : .diarization)
+            finalMessage = failure.message
         }
         catch {
-            AppDiagnostics.shared.recordFailure(error, category: .transcription)
-            finalMessage = "처리 단계 실패 · 원본과 완료된 정밀 전사는 보존했습니다. 화자 분리만 재시도할 수 있습니다."
+            let failure = MeetingFailurePresentation.failure(for: error,
+                phase: mode == .diarizationOnly ? .diarization : .refined)
+            AppDiagnostics.shared.recordFailure(failure, category: .transcription)
+            finalMessage = "전사를 완료하지 못했습니다. 원본과 기존 전사는 보존했습니다. 모델과 원본을 확인한 뒤 ‘정밀 전사만 새로 실행’을 선택하세요."
         }
     }
     private func setFinalMessage(_ message: String) { finalMessage = message }

@@ -29,10 +29,12 @@ mkdir "$check_dir/sources"
 # a Swift input halfway through this independent verification process.
 for source in MeetingAudioArchive MeetingImportedAudioArchive MeetingAudioCapture MeetingPCMReader MeetingLocalModels \
               MeetingModelRegistry MeetingWhisperEngine MeetingDiarizationEngine \
-              MeetingPostProcessing MeetingRecordingSession MeetingsModel MeetingAudioRecorder AppDiagnostics; do
+              MeetingPostProcessing MeetingRecordingSession MeetingPreviewStatus MeetingFailurePresentation MeetingsModel MeetingAudioRecorder AppDiagnostics; do
     cp "$repo_root/Sources/WorkLogApp/$source.swift" "$check_dir/sources/$source.swift"
 done
 cp "$repo_root/scripts/maclab/meeting-session-check.swift" "$check_dir/sources/meeting-session-check.swift"
+cp "$repo_root/scripts/maclab/meeting-finalization-check.swift" "$check_dir/sources/meeting-finalization-check.swift"
+cp "$repo_root/scripts/maclab/meeting-error-session-check.swift" "$check_dir/sources/meeting-error-session-check.swift"
 xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" \
     -I "$bin_dir" -I "$repo_root/Sources/CSQLite" -lsqlite3 \
     "$bin_dir/WorkLogCore.o" "$bin_dir/Crypto.o" "$bin_dir/ArgmaxCore.o" \

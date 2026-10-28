@@ -1,5 +1,6 @@
 import Foundation
 import WhisperKit
+import WorkLogCore
 
 private enum ExpectedFailure: Error { case unexpectedlySucceeded }
 
@@ -28,8 +29,9 @@ private enum ExpectedFailure: Error { case unexpectedlySucceeded }
         do {
             try await pipeline.loadTokenizerIfNeeded()
             throw ExpectedFailure.unexpectedlySucceeded
-        } catch is MeetingLocalModelError {
-            print("PASS WorkLog override rejects lazy tokenizer fallback without downloading")
+        } catch let failure as MeetingOperationFailure {
+            guard failure.phase == .tokenizer, failure.reason == .tokenizerInvalid else { throw failure }
+            print("PASS WorkLog override rejects lazy tokenizer fallback with a safe tokenizer failure and no download")
         }
     }
 }

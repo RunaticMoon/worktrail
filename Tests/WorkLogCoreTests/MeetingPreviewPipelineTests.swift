@@ -91,6 +91,9 @@ final class MeetingPreviewPipelineTests: XCTestCase {
         let visible = await events.visible, gaps = await events.gaps
         XCTAssertTrue(visible.isEmpty)
         XCTAssertEqual(gaps.first?.reason, "finish-timeout")
+        let failures = await events.failures, successfulTracks = await events.successfulTracks
+        XCTAssertTrue(failures.isEmpty)
+        XCTAssertTrue(successfulTracks.isEmpty)
     }
     func testPreviewFailureIsReportedAndNextTrackStillRuns() async {
         let engine = ControlledMeetingEngine(), events = MeetingPreviewEvents()
@@ -99,12 +102,78 @@ final class MeetingPreviewPipelineTests: XCTestCase {
         await scheduler.submit(request())
         await engine.waitForCalls(1)
         await scheduler.submit(request("remote"))
-        await engine.release(failing: true)
+        let failure = MeetingOperationFailure(phase: .tokenizer, reason: .tokenizerInvalid,
+                                              errorDomain: .cocoa, errorCode: 3840)
+        await engine.release(error: failure)
         await engine.waitForCalls(2)
         await engine.release()
+        await events.waitForLoads(2)
         await scheduler.finish()
-        let failures = await events.failures, gaps = await events.gaps
-        XCTAssertEqual(failures, 1); XCTAssertEqual(gaps.first?.reason, "preview-error")
+        let failures = await events.failures, gaps = await events.gaps, order = await events.order
+        XCTAssertEqual(failures.map(\.trackID), ["mic"])
+        XCTAssertEqual(failures.map(\.failure), [failure])
+        XCTAssertEqual(gaps.first?.reason, "preview-error")
+        XCTAssertEqual(Array(order.prefix(3)), ["failed:mic", "skipped", "load"])
+        let successfulTracks = await events.successfulTracks
+        XCTAssertEqual(successfulTracks, ["remote"], "Other-track success and finish must not imply mic recovery")
+    }
+    func testUnknownFailureDropsPrivateMetadataAndFinishIsNotRecovery() async {
+        let engine = ControlledMeetingEngine(), events = MeetingPreviewEvents()
+        let scheduler = MeetingPreviewScheduler(sessionID: "session", recordingID: "recording", generation: 1,
+            tracks: ["mic"], engine: engine, ids: SequentialIDGenerator()) { await events.add($0) }
+        await scheduler.submit(request())
+        await engine.waitForCalls(1)
+        await engine.release(error: NSError(domain: "private-path-and-token", code: 493,
+            userInfo: [NSLocalizedDescriptionKey: "private meeting transcript", NSFilePathErrorKey: "/private/audio.wav"]))
+        await events.waitForLoads(1)
+        await scheduler.finish()
+        let failures = await events.failures, successfulTracks = await events.successfulTracks
+        XCTAssertEqual(failures.map(\.failure), [.init(phase: .preview, reason: .failed, errorDomain: .other)])
+        XCTAssertNil(failures.first?.failure.errorCode)
+        XCTAssertTrue(successfulTracks.isEmpty)
+        XCTAssertFalse(String(describing: failures).contains("private"))
+    }
+    func testSuccessfulEmptyDecodeExplicitlyRecoversOnlyItsTrack() async {
+        let engine = ControlledMeetingEngine(), events = MeetingPreviewEvents()
+        let scheduler = MeetingPreviewScheduler(sessionID: "session", recordingID: "recording", generation: 1,
+            tracks: ["mic", "remote"], engine: engine, ids: SequentialIDGenerator()) { await events.add($0) }
+        await scheduler.submit(request())
+        await engine.waitForCalls(1)
+        await engine.release(error: NSError(domain: NSCocoaErrorDomain, code: 260))
+        await events.waitForLoads(1)
+        await scheduler.submit(request("remote"))
+        await engine.waitForCalls(2)
+        await engine.release()
+        await events.waitForLoads(2)
+        await scheduler.submit(request(start: 10))
+        await engine.waitForCalls(3)
+        await engine.release(spans: [])
+        await events.waitForLoads(3)
+        await scheduler.finish()
+        let successfulTracks = await events.successfulTracks, failures = await events.failures
+        XCTAssertEqual(successfulTracks, ["remote", "mic"])
+        XCTAssertEqual(failures.first?.failure, .init(phase: .preview, reason: .failed, errorDomain: .cocoa, errorCode: 260))
+    }
+    func testCancelledDecodeDoesNotBecomePreviewErrorAndNextTrackStillRuns() async {
+        let cancellations: [Error] = [CancellationError(), URLError(.cancelled),
+            MeetingOperationFailure(phase: .modelLoading, reason: .cancelled)]
+        for cancellation in cancellations {
+            let engine = ControlledMeetingEngine(), events = MeetingPreviewEvents()
+            let scheduler = MeetingPreviewScheduler(sessionID: "session", recordingID: "recording", generation: 1,
+                tracks: ["mic", "remote"], engine: engine, ids: SequentialIDGenerator()) { await events.add($0) }
+            await scheduler.submit(request())
+            await engine.waitForCalls(1)
+            await scheduler.submit(request("remote"))
+            await engine.release(error: cancellation)
+            await engine.waitForCalls(2)
+            await engine.release()
+            await events.waitForLoads(2)
+            await scheduler.finish()
+            let failures = await events.failures, gaps = await events.gaps, successfulTracks = await events.successfulTracks
+            XCTAssertTrue(failures.isEmpty)
+            XCTAssertTrue(gaps.isEmpty)
+            XCTAssertEqual(successfulTracks, ["remote"])
+        }
     }
 }
 
@@ -127,23 +196,35 @@ private actor ControlledMeetingEngine: MeetingPreviewEngine {
         if calls.count >= count { return }
         await withCheckedContinuation { callWaiters.append((count, $0)) }
     }
-    func release(failing: Bool = false) {
+    func release(error: Error? = nil, spans: [MeetingRecognizedSpan] = [.init(start: 0, end: 1, text: "synthetic")]) {
         guard !continuations.isEmpty else { return }
         let waiter = continuations.removeFirst()
-        if failing { waiter.resume(throwing: CancellationError()) }
-        else { waiter.resume(returning: [.init(start: 0, end: 1, text: "synthetic")]) }
+        if let error { waiter.resume(throwing: error) }
+        else { waiter.resume(returning: spans) }
     }
 }
 private actor MeetingPreviewEvents {
     var visible: [MeetingPreviewSegment] = []
     var gaps: [MeetingPreviewGap] = []
-    var failures = 0
+    var failures: [(trackID: String, failure: MeetingOperationFailure)] = []
+    var successfulTracks: [String] = []
+    var order: [String] = []
+    private var loads = 0
+    private var loadWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     func add(_ event: MeetingPreviewEvent) {
         switch event {
-        case .updated(let segments, _): visible = segments
-        case .skipped(let gap): gaps.append(gap)
-        case .failed: failures += 1
-        case .load: break
+        case .updated(let segments, _): visible = segments; order.append("updated")
+        case .succeeded(let trackID): successfulTracks.append(trackID); order.append("succeeded:\(trackID)")
+        case .skipped(let gap): gaps.append(gap); order.append("skipped")
+        case .failed(let trackID, let failure): failures.append((trackID, failure)); order.append("failed:\(trackID)")
+        case .load:
+            loads += 1; order.append("load")
+            let ready = loadWaiters.filter { $0.0 <= loads }
+            loadWaiters.removeAll { $0.0 <= loads }; ready.forEach { $0.1.resume() }
         }
+    }
+    func waitForLoads(_ count: Int) async {
+        if loads >= count { return }
+        await withCheckedContinuation { loadWaiters.append((count, $0)) }
     }
 }

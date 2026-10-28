@@ -175,9 +175,11 @@ public struct MeetingPreviewMerger: Sendable {
 
 public enum MeetingPreviewEvent: Sendable {
     case updated(visible: [MeetingPreviewSegment], changed: [MeetingPreviewSegment])
+    /// An actual decoder success, including silence. Finish-only updates are not recovery.
+    case succeeded(trackID: String)
     case skipped(MeetingPreviewGap)
     case load(interval: Double, inferenceSeconds: Double, queued: Int)
-    case failed(trackID: String)
+    case failed(trackID: String, failure: MeetingOperationFailure)
 }
 
 /// One SDK call at a time and at most one pending window per known track.
@@ -200,6 +202,11 @@ public actor MeetingPreviewScheduler {
     private var finished = false
     private var finishWaiters: [CheckedContinuation<Void, Never>] = []
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    private enum Completion {
+        case success([MeetingRecognizedSpan])
+        case failure(MeetingOperationFailure)
+        case cancelled
+    }
     public private(set) var interval: Double = 2
     public private(set) var maximumPendingCount = 0
 
@@ -238,22 +245,34 @@ public actor MeetingPreviewScheduler {
         active = request; lastTrack = next
         let start = clock.seconds()
         task = Task { [engine] in
-            do { let spans = try await engine.transcribe(request); await self.complete(request, spans: spans, started: start) }
-            catch { await self.complete(request, spans: nil, started: start) }
+            do {
+                let spans = try await engine.transcribe(request)
+                try Task.checkCancellation()
+                await self.complete(request, result: .success(spans), started: start)
+            } catch {
+                let failure = MeetingOperationFailure.sanitized(error, phase: .preview)
+                let result: Completion = failure.reason == .cancelled || Task.isCancelled
+                    ? .cancelled : .failure(failure)
+                await self.complete(request, result: result, started: start)
+            }
         }
     }
 
-    private func complete(_ request: MeetingPreviewRequest, spans: [MeetingRecognizedSpan]?, started: Double) async {
+    private func complete(_ request: MeetingPreviewRequest, result: Completion, started: Double) async {
         active = nil; task = nil
         if !invalidated {
-            if let spans {
+            switch result {
+            case .success(let spans):
+                await onEvent(.succeeded(trackID: request.trackID))
                 let changed = merger.merge(spans, request: request)
                 await onEvent(.updated(visible: merger.segments, changed: changed))
                 for gap in merger.drainDiscardedGaps() { await onEvent(.skipped(gap)) }
-            } else {
-                await onEvent(.failed(trackID: request.trackID))
+            case .failure(let failure):
+                await onEvent(.failed(trackID: request.trackID, failure: failure))
                 await onEvent(.skipped(.init(trackID: request.trackID, start: request.windowStart,
                                             end: request.windowEnd, reason: "preview-error")))
+            case .cancelled:
+                break
             }
             let duration = max(0, clock.seconds() - started)
             interval = min(10, max(2, duration > 2 ? duration * 1.25 : interval * 0.8))

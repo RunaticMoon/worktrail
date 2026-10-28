@@ -21,16 +21,19 @@ public enum DiagnosticField: String, Codable, Sendable, CaseIterable {
     case errorCode, errorDomain, osStatus, attempt, durationMilliseconds, sampleRate, channelCount
     case inputSampleRate, inputChannelCount, engineSampleRate, engineChannelCount, engineRunning
     case inputDeviceMatches, configurationChanged, permissionGranted, bufferCount, byteCount, itemCount
-    case phase, reason, recovered, available
+    case phase, stage, reason, recovered, available
     case appVersionMajor, appVersionMinor, appVersionPatch, osMajor, osMinor, osPatch
 }
 
 public enum DiagnosticState: String, Codable, Sendable {
     case unknown, starting, running, stopping, stopped, succeeded, failed, cancelled
     case denied, authorized, notDetermined, restricted, unchanged, changed, missing, invalid, unavailable
-    case cocoa, posix, osStatus, url, other
+    case cocoa, posix, osStatus, url, coreML, other
     case validation, conflict, storage, integrity, notFound, vaultLocked, vaultKeyMissing, policyBlocked
     case authentication, network, rateLimit, timeout, schemaInvalid, contextTooLarge, unsupported
+    case preview, modelValidation, tokenizer, modelLoading, inference, refined, diarization, recordingStart
+    case captureBusy, missingUsageDescription, microphonePermission, screenPermission, missingDevice, missingApplication, invalidFormat
+    case modelMissing, modelInvalid, tokenizerInvalid, invalidAudio
 }
 
 public enum DiagnosticValue: Equatable, Sendable, Codable {

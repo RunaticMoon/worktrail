@@ -12,6 +12,7 @@ xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" -emit-librar
     "$repo_root/Sources/WorkLogCore/Support/Errors.swift" \
     "$check_dir/AIErrorContracts.swift" \
     "$repo_root/Sources/WorkLogCore/Diagnostics/"*.swift \
+    "$repo_root/Sources/WorkLogCore/Meetings/MeetingOperationFailure.swift" \
     -emit-module-path "$check_dir/WorkLogCore.swiftmodule" -o "$check_dir/libWorkLogCore.dylib"
 xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" \
     -I "$check_dir" -L "$check_dir" -lWorkLogCore -Xlinker -rpath -Xlinker "$check_dir" \
