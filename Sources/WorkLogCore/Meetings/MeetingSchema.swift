@@ -2,6 +2,24 @@ import Foundation
 
 /// WorkSchema가 등록하는 추가 migration. 기존 v1-v4 SQL은 변경하지 않는다.
 public enum MeetingSchema {
+    public static let v11 = """
+    ALTER TABLE meeting ADD COLUMN metadata_json TEXT;
+    ALTER TABLE meeting_summary ADD COLUMN origin TEXT NOT NULL DEFAULT 'ai';
+    CREATE TABLE meeting_summary_edit (
+        id TEXT PRIMARY KEY, summary_id TEXT NOT NULL REFERENCES meeting_summary(id),
+        previous_content TEXT NOT NULL, replacement_content TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE meeting_task_link (
+        id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meeting(id),
+        meeting_revision INTEGER NOT NULL, action_key TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES task(id), transcript_run_id TEXT REFERENCES meeting_transcript_run(id),
+        segment_id TEXT REFERENCES meeting_transcript_segment(id), quote TEXT NOT NULL,
+        owner TEXT, local_only INTEGER NOT NULL DEFAULT 1 CHECK (local_only IN (0,1)),
+        created_at TEXT NOT NULL, UNIQUE(meeting_id, action_key)
+    );
+    CREATE INDEX meeting_task_link_task ON meeting_task_link(task_id, local_only);
+    """
+
     public static let v6 = """
     ALTER TABLE meeting ADD COLUMN local_only INTEGER NOT NULL DEFAULT 1 CHECK (local_only IN (0, 1));
     ALTER TABLE meeting ADD COLUMN active_transcript_run_id TEXT;

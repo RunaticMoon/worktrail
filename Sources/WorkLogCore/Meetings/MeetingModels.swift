@@ -16,6 +16,7 @@ public struct Meeting: Codable, Hashable, Sendable, Identifiable {
     /// 모든 신규·이전 회의의 기본값. true이면 네트워크 AI 입력으로 사용할 수 없다.
     public var localOnly: Bool = true
     public var activeTranscriptRunID: String? = nil
+    public var metadata: MeetingMetadata? = nil
 
     public var isSummaryStale: Bool { summary.map { $0.sourceRevision != revision } ?? false }
 }
@@ -43,6 +44,8 @@ public struct MeetingSummary: Codable, Hashable, Sendable, Identifiable {
     public var isUserEdited: Bool
     public var createdAt: Date
     public var updatedAt: Date
+    public var origin: String? = nil
+    public var isManual: Bool { origin == "manual" }
 }
 
 public enum MeetingSourceKind: String, Codable, Hashable, Sendable {
@@ -101,4 +104,17 @@ public enum MeetingLimits {
     public static let linkedMemoBytes = 256_000
     public static let summaryInputBytes = 240_000
     public static let summaryOutputBytes = 64_000
+}
+
+/// Optional metadata is independent of the work date and recording timestamps.
+public struct MeetingMetadata: Codable, Hashable, Sendable {
+    public var projectIDs: [String] = []
+    public var tagIDs: [String] = []
+    public var participants: [String] = []
+    public var agenda: String = ""
+    public var occurredAt: Date? = nil
+    public init(projectIDs: [String] = [], tagIDs: [String] = [], participants: [String] = [], agenda: String = "", occurredAt: Date? = nil) {
+        self.projectIDs = projectIDs; self.tagIDs = tagIDs; self.participants = participants
+        self.agenda = agenda; self.occurredAt = occurredAt
+    }
 }
