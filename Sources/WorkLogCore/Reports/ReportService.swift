@@ -206,7 +206,9 @@ public final class ReportService {
             instructions: instructions, payloadJSON: payloadJSON, templateVersionId: version.id,
             regenerationNonce: mode == .userRequested ? repo.ids.make() : nil)
 
-        let result = try await runner.submit(request)
+        let result = try await runner.submit(request, preflight: { [repo] in
+            try TaskDisclosurePolicy(repo: repo).requireDisclosable(facts)
+        })
         let aiJobStatus = result.job.status
 
         // AI 실패·차단 → 기록 기반 초안으로 대체(REP-T18).

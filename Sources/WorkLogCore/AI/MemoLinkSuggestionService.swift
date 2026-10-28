@@ -71,7 +71,12 @@ public final class MemoLinkSuggestionService {
                                    instructions: instructions,
                                    payloadJSON: prepared.payloadJSON,
                                    templateVersionId: versionId)
-        let result = try await runner.submit(request)
+        let candidateIDs = prepared.candidateTaskIds
+        let result = try await runner.submit(request, preflight: { [repo] in
+            guard try TaskDisclosurePolicy(repo: repo).protectedTaskIDs().isDisjoint(with: candidateIDs) else {
+                throw WorkLogError.policyBlocked("연결 후보에 로컬 전용 업무가 포함되었습니다. 다시 시도하세요.")
+            }
+        })
 
         // 8) AI가 성공하지 않았으면 저장하지 않고 상태만 전달한다.
         guard result.job.status == .succeeded else {
@@ -182,7 +187,8 @@ public final class MemoLinkSuggestionService {
     private func candidateTasks() throws -> [Candidate] {
         let taskService = TaskService(repo: repo)
         var candidates: [Candidate] = []
-        for task in try repo.tasks() {
+        let protected = try TaskDisclosurePolicy(repo: repo).protectedTaskIDs()
+        for task in try repo.tasks() where !protected.contains(task.id) {
             let status: TaskStatus?
             if let cached = task.cachedStatus {
                 status = cached

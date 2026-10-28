@@ -91,6 +91,10 @@ public extension SearchHit {
 /// - 원본 변화는 `WorkRepository.onSourceChanged`에 연결해 저장 직후 반영한다.
 /// - FTS5 trigram을 쓸 수 있으면 search_fts를 함께 유지하고, 아니면 LIKE 경로만 쓴다.
 public final class SearchIndex: @unchecked Sendable {
+    public func allowsExternalAI(sourceType: SearchSourceType, sourceID: String) throws -> Bool {
+        try TaskDisclosurePolicy(repo: repo).allows(sourceType, sourceID: sourceID)
+    }
+
     private let repo: WorkRepository
     private let db: SQLiteDatabase
 
