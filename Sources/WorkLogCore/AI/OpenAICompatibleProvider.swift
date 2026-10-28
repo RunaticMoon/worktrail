@@ -25,12 +25,12 @@ public actor OpenAICompatibleProvider: AIProvider, AIModelCatalogProvider {
     public func beginOfficialLogin() async throws -> URL? { nil }
     public func listAvailableSkills() async throws -> [DiscoveredSkill] { [] }
     public func getAccountStatus() async throws -> AIAccountState {
-        guard try credentials.read(account: settings.credentialAccount())?.isEmpty == false else { return .loggedOut }
+        guard try credentials.read(account: settings.credentialAccount(), allowAuthenticationUI: true)?.isEmpty == false else { return .loggedOut }
         _ = try await listAvailableModels()
         return .loggedIn(accountType: "OpenAI 호환 API", email: nil, planType: nil)
     }
     public func listAvailableModels() async throws -> [DiscoveredAIModel] {
-        let response = try await transport.send(authorizedRequest(path: "models"))
+        let response = try await transport.send(authorizedRequest(path: "models", allowAuthenticationUI: true))
         guard response.status == 200 else { throw Self.responseError(response) }
         guard let object = try? JSONDecoder().decode(JSONValue.self, from: response.body),
               let models = object["data"]?.arrayValue else {
@@ -92,9 +92,10 @@ public actor OpenAICompatibleProvider: AIProvider, AIModelCatalogProvider {
         return AIJobOutput(rawJSON: content, model: object["model"]?.stringValue ?? model,
                            providerRef: object["id"]?.stringValue)
     }
-    private func authorizedRequest(path: String) throws -> URLRequest {
+    private func authorizedRequest(path: String, allowAuthenticationUI: Bool = false) throws -> URLRequest {
         let endpoint = try settings.endpoint()
-        guard let key = try credentials.read(account: settings.credentialAccount()), !key.isEmpty,
+        guard let key = try credentials.read(account: settings.credentialAccount(),
+                                             allowAuthenticationUI: allowAuthenticationUI), !key.isEmpty,
               !key.contains("\r"), !key.contains("\n") else {
             throw AIProviderError(.notLoggedIn, "이 API 주소의 키를 설정에서 저장하세요.")
         }

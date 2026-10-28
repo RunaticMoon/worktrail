@@ -55,6 +55,8 @@ import WorkLogCore
     func start() async {
         guard !isRestoring else { return }
         guard !didStart else { return }; didStart = true
+        AppDiagnostics.shared.record(.appStarted, category: .application)
+        AppDiagnostics.shared.maintenance()
         clearRegistrations()
         do {
             let env = try await openEnvironment()
@@ -82,7 +84,10 @@ import WorkLogCore
             meetings = MeetingsModel(environment: env)
             if !usesFixture {
                 activityIntegrations = ActivityIntegrationsModel(dataRoot: env.options.paths.dataRoot,
-                    repo: env.repo, credentials: ServiceKeychainCredentialStore())
+                    repo: env.repo, credentials: ServiceKeychainCredentialStore(),
+                    onDiagnostic: { event, level, fields in
+                        AppDiagnostics.shared.record(event, category: .integrations, level: level, fields: fields)
+                    })
                 if Bundle.main.bundleIdentifier != nil {
                     taskNotifications = TaskNotificationScheduler()
                     taskNotifications?.onOpenTask = { [weak self] id in
@@ -100,10 +105,14 @@ import WorkLogCore
             taskDetail?.onChanged = { [weak self] in self?.refreshBackgroundServices() }
             installProtectionTimer()
             maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                AppDiagnostics.shared.maintenance()
                 MainActor.assumeIsolated { self?.refreshBackgroundServices() }
             }
             let launch = env.onLaunch()
-            if launch.backupError != nil { notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다." }
+            if launch.backupError != nil {
+                AppDiagnostics.shared.record(.operationFailed, category: .backup, level: .error)
+                notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다."
+            }
             refresh()
             installLifecycleObservers()
             let keys = GlobalHotkeys(clock: env.options.clock, timeZone: env.calendar.timeZone, handlers: [
@@ -114,12 +123,20 @@ import WorkLogCore
             hotkeys = keys
             hotkeyCoordinator = coordinator
             let failures = coordinator.start(capture: settings.captureHotkey, search: settings.searchHotkey)
-            if !failures.isEmpty { notice = failures.joined(separator: "\n") }
+            if !failures.isEmpty {
+                AppDiagnostics.shared.record(.operationFailed, category: .settings, level: .warning, fields: [.itemCount: .integer(failures.count)])
+                notice = failures.joined(separator: "\n")
+            }
             do { try await env.runStartupCatchUp() }
-            catch { notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다." }
+            catch {
+                AppDiagnostics.shared.recordFailure(error, category: .ai)
+                notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다."
+            }
             // Scheduled reports bypass the editors, including any saved before a failure.
             reportLibrary?.load()
+            AppDiagnostics.shared.record(.appReady, category: .application)
         } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .storage)
             clearRegistrations()
             startupError = "WorkLog 저장소를 열지 못했습니다. 저장소 권한과 설정 파일을 확인하고 다시 시도하세요."
         }
@@ -137,8 +154,16 @@ import WorkLogCore
         let provider = AIProviderFactory.make(paths: paths)
         chatGPTLogin = nil
         return try AppEnvironment.open(AppEnvironmentOptions(paths: paths,
-            keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier),
-            authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider))
+            keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier, onStatus: { status in
+                let expected = status == 0 || status == -25300
+                AppDiagnostics.shared.record(expected ? .operationSucceeded : .operationFailed, category: .keychain,
+                    level: expected ? .info : .error, fields: [.osStatus: .integer(Int(status))])
+            }),
+            authenticator: LocalDeviceAuthenticator(), pasteboard: SystemPasteboard(), aiProvider: provider),
+            onStorageError: { code in
+                AppDiagnostics.shared.record(.operationFailed, category: .storage, level: .error,
+                    fields: [.errorCode: .integer(Int(code)), .reason: .state(.storage)])
+            })
     }
 
     func retryStart() async { didStart = false; startupError = nil; await start() }
@@ -377,21 +402,24 @@ import WorkLogCore
 
     func saveSettings() {
         guard let environment, let settingsModel, let coordinator = hotkeyCoordinator else { return }
-        _ = settingsModel.save { [weak self] changed in
+        let saved = settingsModel.save { [weak self] changed in
             try coordinator.apply(capture: changed.captureHotkey, search: changed.searchHotkey) {
                 try environment.updateSettings(changed)
             }
             self?.secrets?.tick()
         }
+        AppDiagnostics.shared.record(saved ? .operationSucceeded : .operationFailed, category: .settings, level: saved ? .info : .warning)
     }
     func beginHotkeyRecording() { hotkeyCoordinator?.beginRecording() }
     func prepareToTerminate() -> Bool {
         guard captureSession?.flushCheckpoints() != false else {
+            AppDiagnostics.shared.record(.operationFailed, category: .storage, level: .error, fields: [.phase: .state(.stopping)])
             notice = "빠른 입력 초안을 보존하지 못해 종료를 취소했습니다. 저장 공간을 확인하고 다시 종료하세요."
             showCapture()
             return false
         }
         guard meetings?.leaveScreen() != false else {
+            AppDiagnostics.shared.record(.operationFailed, category: .storage, level: .error, fields: [.phase: .state(.stopping)])
             route = .meetings
             notice = "회의록을 저장하지 못해 종료를 취소했습니다. 입력 오류를 수정하고 저장한 뒤 다시 종료하세요."
             openMainWindow?()
@@ -403,6 +431,7 @@ import WorkLogCore
     func prepareAudioAndTerminate() async -> Bool {
         guard prepareToTerminate() else { return false }
         guard await meetings?.shutdownAudio() != false else {
+            AppDiagnostics.shared.record(.operationFailed, category: .recording, level: .error, fields: [.phase: .state(.stopping)])
             notice = "녹음 원본을 마무리하지 못했습니다. 녹음 상태를 확인한 뒤 다시 종료하세요."
             route = .meetings; openMainWindow?(); NSApp.activate(ignoringOtherApps: true)
             return false
@@ -429,6 +458,7 @@ import WorkLogCore
             return
         }
         isRestoring = true
+        AppDiagnostics.shared.record(.operationStarted, category: .backup)
         activityIntegrations?.detach()
         maintenanceTask?.cancel()
         notificationTask?.cancel()
@@ -475,12 +505,14 @@ import WorkLogCore
             try? await Task.sleep(for: .milliseconds(100))
         }
         guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousReportLibrary == nil && previousPlan == nil && previousQuiz == nil else {
+            AppDiagnostics.shared.record(.operationFailed, category: .backup, level: .error)
             startupError = "저장소 연결을 안전하게 닫지 못해 복원을 중단했습니다. 앱을 다시 열고 시도하세요."
             isRestoring = false
             return
         }
         let restored = await model.restoreAfterClosing(backup, into: options.paths, keyStore: options.keyStore,
             includeVault: includeVault, clock: options.clock)
+        AppDiagnostics.shared.record(restored ? .operationSucceeded : .operationFailed, category: .backup, level: restored ? .info : .error)
         isRestoring = false; didStart = false; startupError = nil
         await start()
         route = .backups
@@ -518,8 +550,10 @@ import WorkLogCore
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
             object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    AppDiagnostics.shared.record(.appTerminating, category: .application)
                     self?.meetings?.leaveScreen()
                     self?.environment?.lockSecrets(.appQuit)
+                    AppDiagnostics.shared.flush()
                 }
             })
         observers.append(DistributedNotificationCenter.default().addObserver(

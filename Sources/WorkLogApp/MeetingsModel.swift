@@ -367,6 +367,7 @@ struct MeetingTaskReview: Identifiable {
         service = nil; environment = nil
     }
     func show(_ error: Error) {
+        AppDiagnostics.shared.recordFailure(error, category: .transcription)
         if let error = error as? WorkLogError { message = error.localizedDescription }
         else if let error = error as? MeetingLocalModelError { message = error.localizedDescription }
         else if let error = error as? MeetingAudioCaptureError { message = error.localizedDescription }

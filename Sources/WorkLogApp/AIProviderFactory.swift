@@ -18,13 +18,13 @@ enum AIProviderFactory {
         }, factory: { selected in
             switch selected.connection.kind {
             case .codexCLI:
-                return CodexAppServerProvider(config: CodexProviderConfig(
+                return DiagnosticAIProvider(CodexAppServerProvider(config: CodexProviderConfig(
                     executablePath: selected.codexExecutablePath,
                     stagingRoot: paths.dataRoot.appendingPathComponent("ai-jobs"),
-                    blockedSkillPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path]), profileResolver: profileResolver)
+                    blockedSkillPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path]), profileResolver: profileResolver))
             case .openAICompatible:
-                return OpenAICompatibleProvider(settings: selected.connection, credentials: credentials,
-                    blockedSkillPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path], profileResolver: profileResolver)
+                return DiagnosticAIProvider(OpenAICompatibleProvider(settings: selected.connection, credentials: credentials,
+                    blockedSkillPathPrefixes: [paths.dataRoot.path, paths.backupRoot.path], profileResolver: profileResolver))
             }
         })
     }

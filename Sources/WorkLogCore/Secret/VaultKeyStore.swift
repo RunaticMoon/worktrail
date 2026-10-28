@@ -43,9 +43,12 @@ import Security
 /// 주의: Linux CI/검증 환경에서는 컴파일 대상이 아니라 실행 검증이 불가능하다(미검증).
 public final class KeychainVaultKeyStore: VaultKeyStore {
     private let service: String
+    /// Numeric operation status only. Never receives key data, key IDs or metadata.
+    private let onStatus: @Sendable (Int32) -> Void
 
-    public init(service: String) {
+    public init(service: String, onStatus: @escaping @Sendable (Int32) -> Void = { _ in }) {
         self.service = service
+        self.onStatus = onStatus
     }
 
     private func baseQuery(id: String) -> [String: Any] {
@@ -61,7 +64,10 @@ public final class KeychainVaultKeyStore: VaultKeyStore {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = try KeychainInteraction.perform(allowUserInteraction: true) {
+            SecItemCopyMatching(query as CFDictionary, &result)
+        }
+        onStatus(status)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else {
             throw WorkLogError.storage("Keychain 키 조회 실패(\(status))")
@@ -70,26 +76,33 @@ public final class KeychainVaultKeyStore: VaultKeyStore {
     }
 
     public func storeKey(_ key: Data, id: String) throws {
-        let attributes: [String: Any] = [
-            kSecValueData as String: key,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
-        ]
-        var addQuery = baseQuery(id: id)
-        addQuery.merge(attributes) { _, new in new }
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        if status == errSecDuplicateItem {
-            let updateStatus = SecItemUpdate(baseQuery(id: id) as CFDictionary, attributes as CFDictionary)
-            guard updateStatus == errSecSuccess else {
-                throw WorkLogError.storage("Keychain 키 갱신 실패(\(updateStatus))")
+        try KeychainInteraction.perform(allowUserInteraction: true) {
+            let attributes: [String: Any] = [
+                kSecValueData as String: key,
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
+            ]
+            var addQuery = baseQuery(id: id)
+            addQuery.merge(attributes) { _, new in new }
+            let status = SecItemAdd(addQuery as CFDictionary, nil)
+            if status == errSecDuplicateItem {
+                let updateStatus = SecItemUpdate(baseQuery(id: id) as CFDictionary, attributes as CFDictionary)
+                onStatus(updateStatus)
+                guard updateStatus == errSecSuccess else {
+                    throw WorkLogError.storage("Keychain 키 갱신 실패(\(updateStatus))")
+                }
+            } else {
+                onStatus(status)
+                if status != errSecSuccess { throw WorkLogError.storage("Keychain 키 저장 실패(\(status))") }
             }
-        } else if status != errSecSuccess {
-            throw WorkLogError.storage("Keychain 키 저장 실패(\(status))")
         }
     }
 
     public func deleteKey(id: String) throws {
-        let status = SecItemDelete(baseQuery(id: id) as CFDictionary)
+        let status = try KeychainInteraction.perform(allowUserInteraction: true) {
+            SecItemDelete(baseQuery(id: id) as CFDictionary)
+        }
+        onStatus(status)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw WorkLogError.storage("Keychain 키 삭제 실패(\(status))")
         }

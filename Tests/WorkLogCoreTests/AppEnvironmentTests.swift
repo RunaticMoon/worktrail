@@ -307,7 +307,8 @@ final class AppEnvironmentTests: XCTestCase {
         let paths = try makePaths()
         let keyStore = RecordingVaultKeyStore()
 
-        _ = try AppEnvironment.open(makeOptions(paths: paths, keyStore: keyStore))
+        let initial = try AppEnvironment.open(makeOptions(paths: paths, keyStore: keyStore))
+        try await initial.vaultSession.unlock(reason: "가짜 보관함 최초 사용")
         let keyId = try XCTUnwrap(keyStore.storedIds.first)
         try keyStore.deleteKey(id: keyId)
 

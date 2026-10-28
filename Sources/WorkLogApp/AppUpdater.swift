@@ -2,6 +2,7 @@
 import Combine
 import Sparkle
 import SwiftUI
+import WorkLogCore
 
 /// Sparkle owns update scheduling, preferences, signature checks and installation.
 /// This service only uses public release metadata; it never receives application records.
@@ -15,6 +16,7 @@ final class AppUpdater: ObservableObject {
     let isConfigured: Bool
     let version: String
     private let controller: SPUStandardUpdaterController?
+    private let diagnostics = UpdateDiagnosticsDelegate()
 
     private init(bundle: Bundle = .main) {
         version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "개발 빌드"
@@ -24,7 +26,7 @@ final class AppUpdater: ObservableObject {
             controller = nil
             return
         }
-        let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
+        let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: diagnostics, userDriverDelegate: nil)
         self.controller = controller
         controller.updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheckForUpdates)
         controller.updater.publisher(for: \.automaticallyChecksForUpdates).assign(to: &$automaticallyChecksForUpdates)
@@ -43,6 +45,24 @@ final class AppUpdater: ObservableObject {
         _ = controller.updater
         precondition(Bundle.main.bundleIdentifier == "dev.worklog.WorkLog")
         print("WorkLog Sparkle loader smoke test passed")
+    }
+}
+
+@MainActor
+private final class UpdateDiagnosticsDelegate: NSObject, SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, didFinishLoading appcast: SUAppcast) {
+        AppDiagnostics.shared.record(.updateChecked, category: .update)
+    }
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        AppDiagnostics.shared.record(.updateAvailable, category: .update)
+    }
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        AppDiagnostics.shared.record(.updateDownloaded, category: .update)
+    }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        // Sparkle codes are public constants; descriptions may contain URLs or filesystem paths.
+        AppDiagnostics.shared.record(.operationFailed, category: .update, level: .error,
+                                     fields: [.errorCode: .integer((error as NSError).code)])
     }
 }
 

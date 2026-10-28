@@ -18,7 +18,10 @@ final class ChatGPTKeychainCredentialStore: ChatGPTOAuthCredentialStore, @unchec
         var request = query; request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        let status = try KeychainInteraction.perform(allowUserInteraction: true) {
+            SecItemCopyMatching(request as CFDictionary, &result)
+        }
+        record(status)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data,
               let value = try? JSONDecoder().decode(ChatGPTOAuthCredentials.self, from: data) else {
@@ -28,14 +31,22 @@ final class ChatGPTKeychainCredentialStore: ChatGPTOAuthCredentialStore, @unchec
     }
     func save(_ credentials: ChatGPTOAuthCredentials) throws {
         let data = try JSONEncoder().encode(credentials)
-        let attributes: [String: Any] = [kSecValueData as String: data]
-        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var item = query; item[kSecValueData as String] = data
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            status = SecItemAdd(item as CFDictionary, nil)
+        try KeychainInteraction.perform(allowUserInteraction: true) {
+            let attributes: [String: Any] = [kSecValueData as String: data]
+            var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+            if status == errSecItemNotFound {
+                var item = query; item[kSecValueData as String] = data
+                item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                status = SecItemAdd(item as CFDictionary, nil)
+            }
+            record(status)
+            guard status == errSecSuccess else { throw AIProviderError(.notLoggedIn, "WorkLog의 ChatGPT 인증을 안전하게 저장할 수 없습니다.") }
         }
-        guard status == errSecSuccess else { throw AIProviderError(.notLoggedIn, "WorkLog의 ChatGPT 인증을 안전하게 저장할 수 없습니다.") }
+    }
+    private func record(_ status: OSStatus) {
+        let expected = status == errSecSuccess || status == errSecItemNotFound
+        AppDiagnostics.shared.record(expected ? .operationSucceeded : .operationFailed, category: .keychain,
+            level: expected ? .info : .error, fields: [.osStatus: .integer(Int(status))])
     }
 }
 

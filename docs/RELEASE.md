@@ -106,3 +106,15 @@ bash distribution/verify-dmg.sh "release/WorkLog-$(cat VERSION)-arm64.dmg" "$(ca
 서명 회귀 테스트는 Linux에서 인증서/P12 생성·검증·실패 시 차단을, 일회용 macOS CI에서는 새 가짜 인증서·임시 keychain으로 서로 다른 두 앱 바이너리의 DR 호환성과 가짜 항목의 재승인 없는 읽기·다른 서명자 거부를 확인한다. 패키징한 앱의 임시 복사본에도 가짜 인증서로 서명해 Sparkle 로더 smoke를 실행한다. macOS 테스트에는 Homebrew `openssl@3`를 PATH 앞에 둔다. 이 테스트는 실제 사용자의 Keychain 경고나 기존 항목의 최초 재승인을 자동으로 검증하지 않는다.
 
 2026-10-19 검증: [macOS CI 39239121884](https://github.com/RunaticMoon/worktrail/actions/runs/39239121884)에서 앱 전체 빌드, Core 테스트 826개, 배포 도구 테스트, 가짜 Keychain 업데이트 연속성·다른 서명자 거부, DMG 패키징과 자체서명 앱의 Sparkle 로더 실행을 통과했다. 실제 사용자 항목의 최초 재승인과 Sparkle의 전체 업데이트 설치는 별도 확인 대상이다.
+
+### 업데이트 후 시작 시 Keychain 창 방지
+
+2026-10-28 재조사에서 공개 v0.15.0 DMG를 읽기 전용으로 마운트하여 `code_signing.py verify`를 통과했다(앱 실행 없음). 공개 앱 DR은 `identifier "dev.worklog.WorkLog" and certificate leaf = H"bc82901fe15589e2a0f095c2b84dc6915680ccc8"`로 고정돼 있었다. 원본 체크아웃 `.build/app/WorkLog.app`의 v0.13.0은 개발용 ad-hoc 서명(`cdhash`)이었다. 두 산출물을 혼동하면 안 된다. 사용자 설치본은 기본 설치 경로에서 발견하지 못했으므로 실제 경고가 이전 ad-hoc 항목의 ACL 때문인지, 잠긴 login Keychain 때문인지는 미확인이다.
+
+앱을 여는 과정에서 `SecretVault.init`이 곧바로 키를 조회·생성하던 경로를 제거했다. 앱 시작, 백업 생성, 잠금 상태 제목 검색은 Keychain에 접근하지 않는다. 기존 키 버전을 보존하고 사용자가 Secret 잠금 해제를 요청할 때만 조회하며, 일시적인 접근 거절은 다음 명시적 요청에서 재시도한다. 키가 실제로 없으면 새 키로 덮어쓰지 않는다. 기존 기기 인증과 암호화는 유지한다.
+
+자동 활동 수집과 예약 AI 요청은 Keychain 인증창 없이 읽기를 시도한다. 승인이 필요하면 실패 상태를 남기고 해당 작업을 중단한다. 설정의 연결 상태 확인·모델 조회, 지금 수집, 키 저장/삭제는 사용자가 선택한 요청이므로 기존 승인 UI를 허용한다. 정상 서명의 기존 승인 항목은 그대로 읽으며, 이전 ACL을 우회하거나 모든 앱에 접근 권한을 주지 않는다.
+
+macOS 파일 기반 Keychain은 `kSecUseNoAuthenticationUI` 같은 Data Protection 전용 쿼리 플래그만으로 UI를 차단할 수 없다(macOS SDK `SecItem.h` 명시). [Apple의 UI 제어 문서](https://developer.apple.com/documentation/security/seckeychainsetuserinteractionallowed(_:))에 따라 비대화형 조회 동안 `SecKeychainSetUserInteractionAllowed(false)`를 적용하고 원래 상태를 복원한다. 앱의 모든 파일 Keychain 연산은 같은 동기 잠금을 거치므로 자동 조회가 명시적 승인 요청의 정책을 바꾸지 않는다. [Apple 동시성 지침](https://developer.apple.com/documentation/security/working-with-concurrency)도 macOS Security API 호출의 직렬화를 안내한다. 검색 목록, 인증서 신뢰, Keychain 잠금 설정, 기존 항목·ACL은 변경하지 않는다.
+
+가짜 저장소 회귀 테스트는 첫 실행/업데이트 재실행의 Keychain 무접근, 시작 백업, 명시적 재시도, 키 누락 시 암호문 보존을 검증한다. 가짜 UI 정책 테스트는 성공·실패 후 복원, 중첩/동시 요청, 정책 변경 실패 시 조회 차단을 검증한다. 실제 사용자 Keychain·토큰·회사 데이터는 검증에 사용하지 않는다. 이전 승인 기록이 없는 항목의 최초 승인과 실제 설치본 업데이트 후 동작은 사용자 환경에서 추가 확인해야 한다.

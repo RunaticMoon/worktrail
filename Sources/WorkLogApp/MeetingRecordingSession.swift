@@ -62,6 +62,8 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     private var trackIDs: [String: String] = [:]
     private var changedSegments: [String: MeetingSegmentInput] = [:]
     private var checkpointDirty = false
+    private var previewFailureLogged = false
+    private var checkpointFailureLogged = false
     private var previewGaps: [MeetingPreviewGap] = []
     private var lastCheckpoint: Double = 0
     private var player: AVAudioPlayer?
@@ -94,7 +96,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
 
     func savePreferences() {
         do { try JSONEncoder().encode(preferences).write(to: preferencesURL, options: .atomic) }
-        catch { captureMessage = "음성 설정을 저장하지 못했습니다." }
+        catch { AppDiagnostics.shared.recordFailure(error, category: .recording); captureMessage = "음성 설정을 저장하지 못했습니다." }
     }
     func refreshMicrophones() {
         microphones = MeetingAudioCapture.microphoneDevices()
@@ -103,11 +105,11 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     }
     func refreshApplications() async {
         do { applications = try await MeetingAudioCapture.onlineApplications() }
-        catch { captureMessage = "회의 앱 목록을 열지 못했습니다. 화면 및 시스템 오디오 권한을 확인하세요." }
+        catch { AppDiagnostics.shared.recordFailure(error, category: .recording); captureMessage = "회의 앱 목록을 열지 못했습니다. 화면 및 시스템 오디오 권한을 확인하세요." }
     }
     func prepare(_ role: MeetingModelRole) {
         guard !isRecovering, !isSavePending, !models.isPreparing, !isCapturing, !isFinalizing else { return }
-        Task { do { try await models.prepare(role) } catch { /* authored model message is shown by the model manager */ } }
+        Task { do { try await models.prepare(role) } catch { AppDiagnostics.shared.recordFailure(error, category: .transcription) } }
     }
 
     func start(meeting: Meeting, recordOnly: Bool = false) {
@@ -123,6 +125,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         phase = .starting; visible = []; levels = [:]; elapsed = 0
         changedSegments = [:]; previewGaps = []; trackIDs = [:]; liveRunID = nil
         checkpointDirty = false; lastCheckpoint = monotonic.seconds()
+        previewFailureLogged = false; checkpointFailureLogged = false
         captureMessage = nil; captureIssue = false; previewMessage = nil; meetingTitle = meeting.title
         recordingID = nil; meetingID = meeting.id
         startupTask = Task { [weak self] in
@@ -145,7 +148,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                         liveRunID = try store.createRun(meetingID: recording.meetingID, recordingID: recording.id, stage: .live,
                             engine: "WhisperKit", modelIdentifier: descriptor.modelID, modelRevision: descriptor.revision,
                             settingsJSON: try StableJSON.string(MeetingRunConfiguration(preferences: preferences, stage: "live"))).id
-                    } catch { previewMessage = "미리보기 저장을 준비하지 못했습니다. 원본만 녹음합니다." }
+                    } catch {
+                        AppDiagnostics.shared.recordFailure(error, category: .transcription)
+                        previewMessage = "미리보기 저장을 준비하지 못했습니다. 원본만 녹음합니다."
+                    }
                 }
                 let stream = AsyncStream<MeetingCapturedPCM>(bufferingPolicy: .bufferingNewest(4)) { self.continuation = $0 }
                 let sink = continuation!
@@ -184,7 +190,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                             }
                             for gap in drops.drain() { previewEvent(.skipped(gap), expected: expected) }
                             checkpointIfNeeded()
-                        } catch { previewMessage = "미리보기를 처리하지 못했습니다. 원본 녹음은 계속 보관합니다." }
+                        } catch {
+                            if !previewFailureLogged { AppDiagnostics.shared.recordFailure(error, category: .transcription); previewFailureLogged = true }
+                            previewMessage = "미리보기를 처리하지 못했습니다. 원본 녹음은 계속 보관합니다."
+                        }
                     }
                     for gap in drops.drain() { previewEvent(.skipped(gap), expected: expected) }
                     if let scheduler, expected == generation {
@@ -212,6 +221,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 guard expected == generation, !Task.isCancelled else { stop(); return }
                 phase = .recording
             } catch {
+                AppDiagnostics.shared.recordFailure(error, category: .recording)
                 continuation?.finish(); continuation = nil
                 captureIssue = !(error is CancellationError)
                 captureMessage = error is CancellationError ? "녹음 시작을 취소했습니다. 저장된 원본은 유지됩니다."
@@ -286,7 +296,11 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 }
             }
             changedSegments = [:]; previewGaps = []; checkpointDirty = false; lastCheckpoint = monotonic.seconds()
-        } catch { previewMessage = "자막 체크포인트를 저장하지 못했습니다. 원본은 별도로 보관됩니다." }
+            checkpointFailureLogged = false
+        } catch {
+            if !checkpointFailureLogged { AppDiagnostics.shared.recordFailure(error, category: .transcription); checkpointFailureLogged = true }
+            previewMessage = "자막 체크포인트를 저장하지 못했습니다. 원본은 별도로 보관됩니다."
+        }
         // A prolonged DB failure cannot grow the preview mailbox indefinitely.
         if previewGaps.count > 256 {
             var combined: [String: MeetingPreviewGap] = [:]
@@ -366,6 +380,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             pendingSnapshot = nil; isSavePending = false
             return true
         } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
             isSavePending = true; captureIssue = true
             captureMessage = "녹음 저장이 완료되지 않아 종료와 새 녹음을 보류합니다. 저장 공간·폴더 권한을 확인하고 ‘저장 재시도’를 누르세요. 원본은 삭제하지 않았습니다."
             return false
@@ -392,13 +407,24 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             finalMessage = "화자 분리 모델을 준비하거나 ‘정밀 전사만’ 실행하세요."; return
         }
         do {
+            AppDiagnostics.shared.record(.operationStarted, category: .transcription)
             finalMessage = "원본으로 정밀 전사 중…"
             try await MeetingPostProcessing.run(recordingID: id, store: store, archive: archive, models: modelStore,
                 preferences: preferences, mode: mode, sourceRunID: sourceRunID) { [weak self] message in await self?.setFinalMessage(message) }
             finalMessage = "정밀 전사 버전을 저장했습니다. 검토 후 활성 전사본으로 선택하세요."
-        } catch is CancellationError { finalMessage = "정밀 전사 대기 · 원본과 완료된 구간을 보존했습니다. 재시도할 수 있습니다." }
-        catch let error as WorkLogError { finalMessage = error.localizedDescription + " 원본과 완료된 전사는 보존했습니다." }
-        catch { finalMessage = "처리 단계 실패 · 원본과 완료된 정밀 전사는 보존했습니다. 화자 분리만 재시도할 수 있습니다." }
+            AppDiagnostics.shared.record(.operationSucceeded, category: .transcription)
+        } catch is CancellationError {
+            AppDiagnostics.shared.record(.operationFailed, category: .transcription, fields: [.reason: .state(.cancelled)])
+            finalMessage = "정밀 전사 대기 · 원본과 완료된 구간을 보존했습니다. 재시도할 수 있습니다."
+        }
+        catch let error as WorkLogError {
+            AppDiagnostics.shared.recordFailure(error, category: .transcription)
+            finalMessage = error.localizedDescription + " 원본과 완료된 전사는 보존했습니다."
+        }
+        catch {
+            AppDiagnostics.shared.recordFailure(error, category: .transcription)
+            finalMessage = "처리 단계 실패 · 원본과 완료된 정밀 전사는 보존했습니다. 화자 분리만 재시도할 수 있습니다."
+        }
     }
     private func setFinalMessage(_ message: String) { finalMessage = message }
 
@@ -415,7 +441,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 do {
                     let persisted = try archive.acknowledgeRecovery(recordingID: snapshot.recordingID)
                     try reconcile(persisted)
-                } catch { captureMessage = "일부 원본의 DB 연결을 복구하지 못했습니다. 원본 파일은 유지됩니다." }
+                } catch {
+                    AppDiagnostics.shared.recordFailure(error, category: .recording)
+                    captureMessage = "일부 원본의 DB 연결을 복구하지 못했습니다. 원본 파일은 유지됩니다."
+                }
             }
             // Backups deliberately exclude audio. A restored reference must visibly become missing.
             for meeting in try MeetingService(repo: store.repo).meetings(includeDeleted: true) {
@@ -429,7 +458,12 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 }
             }
             if recovered.contains(where: { $0.status == .interrupted }) { captureMessage = "중단된 원본을 복구했습니다. 녹음을 자동 재개하지 않습니다." }
-        } catch { captureMessage = "일부 녹음 복구 정보를 확인하지 못했습니다. 원본은 삭제하지 않았습니다." }
+            AppDiagnostics.shared.record(.operationSucceeded, category: .recording,
+                fields: [.recovered: .flag(true), .itemCount: .integer(recovered.count)])
+        } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
+            captureMessage = "일부 녹음 복구 정보를 확인하지 못했습니다. 원본은 삭제하지 않았습니다."
+        }
         contentRevision += 1
         await models.refreshAvailability()
     }
@@ -477,7 +511,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                         startOffset: track.startOffset, interruptions: track.interruptions)
                 }
             }
-        } catch { playbackMessage = "원본을 재생하지 못했습니다. 원본 파일과 보관 폴더를 확인하세요. 전사는 계속 편집할 수 있습니다." }
+        } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
+            playbackMessage = "원본을 재생하지 못했습니다. 원본 파일과 보관 폴더를 확인하세요. 전사는 계속 편집할 수 있습니다."
+        }
     }
     func togglePlayback() {
         guard let player else { return }
@@ -521,7 +558,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 _ = try store.updateRecordingState(id: id, expectedRevision: recording.revision, state: .discarded)
             }
             contentRevision += 1
-        } catch { captureMessage = "원본 삭제를 완료하지 못했습니다. 파일과 복구 정보를 확인하세요." }
+        } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
+            captureMessage = "원본 삭제를 완료하지 못했습니다. 파일과 복구 정보를 확인하세요."
+        }
     }
     func exportOriginal(_ id: String, to url: URL) {
         guard !isRecovering else { return }
@@ -535,7 +575,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 _ = try archive.acknowledgeRecovery(recordingID: id)
                 try archive.export(recordingID: id, to: url)
             }
-        } catch { captureMessage = "원본 내보내기를 완료하지 못했습니다. 대상 폴더와 권한을 확인하세요." }
+        } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
+            captureMessage = "원본 내보내기를 완료하지 못했습니다. 대상 폴더와 권한을 확인하세요."
+        }
     }
     func importAudio(_ url: URL, meetingID: String) async throws {
         guard !isRecovering, !isSavePending, !isCapturing, !isFinalizing else { throw MeetingLocalModelError.busy }
@@ -554,6 +597,7 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
             contentRevision += 1
             if preferences.automaticFinalization { retryFinalization(recording.id) }
         } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
             let snapshot = await writer.finish(reason: "파일 가져오기 중단")
             pendingSnapshot = snapshot
             _ = persistStoppedRecording(); contentRevision += 1; throw error
