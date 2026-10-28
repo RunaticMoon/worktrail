@@ -117,6 +117,14 @@ private struct MeetingModelPreparationView: View {
                             Text(item.role.label)
                             Text("다운로드 \(ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file)) · \(item.license) · \(item.revision.prefix(8))")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if item.role == model.audio.models.preparingRole {
+                                Text(ModelDownloadProgressText.caption(
+                                    completed: model.audio.models.progress?.completedBytes ?? 0,
+                                    total: model.audio.models.progress?.totalBytes ?? item.bytes,
+                                    bytesPerSecond: model.audio.models.progress?.bytesPerSecond
+                                ))
+                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         if model.audio.models.readyRoles.contains(item.role) { Image(systemName: "checkmark.circle").accessibilityLabel("준비됨") }
