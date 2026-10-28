@@ -210,9 +210,11 @@ public final class ReportFactsBuilder: @unchecked Sendable {
                                       sourceUrls: urls, urlBodyFetched: false))
         }
 
-        for memo in try repo.memos(in: range).filter({ $0.recordedAt <= knownAt }) {
+        for memo in try repo.memos(in: range, includingImported: true).filter({ $0.recordedAt <= knownAt }) {
             let urls = try repo.links(ownerType: .memo, ownerId: memo.id).map(\.url)
-            sources.append(FactSource(id: FactSource.memoId(memo.id), kind: .memo,
+            let imported = try repo.importedActivityRecord(id: memo.id)
+            let kind: FactSourceKind = imported.map { $0.source == .github ? .github : .jira } ?? .memo
+            sources.append(FactSource(id: FactSource.memoId(memo.id), kind: kind,
                                       revision: memo.revision, recordedAt: memo.recordedAt,
                                       workDate: memo.workDate, taskId: nil, projectIds: memo.projectIds,
                                       text: memo.body, sourceUrls: urls, urlBodyFetched: false))

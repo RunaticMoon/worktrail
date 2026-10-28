@@ -20,7 +20,8 @@ import WorkLogCore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(isEditing ? "메모 편집" : "메모와 업무 연결").font(.title2)
+                Text(isEditing ? "\(model.recordLabel) 편집" :
+                    (model.importedActivity == nil ? "메모와 업무 연결" : "\(model.recordLabel) · 업무 연결")).font(.title2)
                 Spacer()
                 if onSaveBody != nil, model.memo != nil {
                     if isEditing {
@@ -38,7 +39,7 @@ import WorkLogCore
             if isEditing {
                 TextEditor(text: $draft)
                     .font(.body).focused($editorFocused)
-                    .accessibilityLabel("메모 본문 편집")
+                    .accessibilityLabel("\(model.recordLabel) 본문 편집")
                     .frame(minHeight: 240)
                     .padding(8)
                     .worklogCard(padding: 0)
@@ -51,19 +52,19 @@ import WorkLogCore
                         Text(memo.workDate.iso).font(.caption).foregroundStyle(.secondary)
                         Text(memo.body).textSelection(.enabled)
                     }
-                    Text("제안은 승인 후 연결됩니다. 메모 원문과 업무 상태는 유지됩니다.")
+                    Text("제안은 승인 후 연결됩니다. 원문과 업무 상태는 유지됩니다.")
                         .font(.callout).foregroundStyle(.secondary)
                     Button("AI 업무 연결 제안") { Task { await model.suggest() } }
                         .disabled(!model.isAIAvailable || model.isSuggesting)
                     if !model.isAIAvailable {
                         StateView(kind: .aiUnavailable, title: "AI 업무 연결 제안은 연결 후 사용할 수 있습니다",
-                                  detail: "메모 원문과 기존 업무 연결은 계속 확인할 수 있습니다.")
+                                  detail: "원문과 기존 업무 연결은 계속 확인할 수 있습니다.")
                     }
                     if model.isSuggesting { ProgressView("연결 후보 찾는 중…") }
                     if let message = model.message { InlineNotice(message: message) }
                     if model.links.isEmpty {
                         StateView(kind: .empty, title: "연결 제안 없음",
-                                  detail: "메모 원문과 업무 상태는 유지됩니다. AI가 연결되어 있으면 제안을 요청할 수 있습니다.")
+                                  detail: "원문과 업무 상태는 유지됩니다. AI가 연결되어 있으면 제안을 요청할 수 있습니다.")
                     }
                     ForEach(model.links) { link in
                         VStack(alignment: .leading, spacing: 8) {
@@ -106,7 +107,7 @@ import WorkLogCore
             if initiallyEditing { beginEditing() }
             else if onSaveBody != nil { editButtonFocused = true }
         }
-        .alert("메모 수정을 저장할까요?", isPresented: $showsUnsavedChanges) {
+        .alert("\(model.recordLabel) 수정을 저장할까요?", isPresented: $showsUnsavedChanges) {
             Button("저장하고 닫기") { if save() { onClose() } }.keyboardShortcut(.defaultAction)
             Button("수정 버리고 닫기", role: .destructive) { onClose() }
                 .keyboardShortcut("d", modifiers: .command)

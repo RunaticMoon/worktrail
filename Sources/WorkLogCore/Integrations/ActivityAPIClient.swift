@@ -86,7 +86,10 @@ public struct ActivityAPIClient: Sendable {
                     let commits = event.payload.commits ?? []
                     let detail = (["\(ref) · push"] + commits.map { String($0.message.prefix(500)) }).joined(separator: "\n")
                     let url = event.payload.head.map { web.appendingPathComponent("commit").appendingPathComponent($0) } ?? web
-                    activity = .init(id: event.id, occurredAt: instant, title: "\(event.repo.name) push", detail: detail, url: url.absoluteString)
+                    let count = event.payload.size.flatMap { $0 >= 0 ? $0 : nil }
+                    activity = .init(id: event.id, occurredAt: instant, title: "\(event.repo.name) push", detail: detail,
+                        url: url.absoluteString, display: .init(kind: .githubPush, repository: event.repo.name,
+                            action: "push", branch: ActivityDisplayMetadata.branchName(event.payload.ref), commitCount: count))
                 case "PullRequestEvent", "PullRequestReviewEvent", "PullRequestReviewCommentEvent":
                     guard let number = event.payload.pull_request?.number ?? event.payload.number else { continue }
                     let pr = event.payload.pull_request
@@ -94,8 +97,11 @@ public struct ActivityAPIClient: Sendable {
                     // GitHub's trimmed Events payload omits title/merged on current
                     // servers. Retain the event even when richer PR details are absent.
                     let title = "\(event.repo.name) PR #\(number)" + (pr?.title.map { ": " + $0 } ?? "")
+                    let displayAction = pr?.merged == true && event.payload.action == "closed" ? "merged" : event.payload.action
                     activity = .init(id: event.id, occurredAt: instant, title: title,
-                                     detail: "PR \(action)", url: web.appendingPathComponent("pull/\(number)").absoluteString)
+                        detail: "PR \(action)", url: web.appendingPathComponent("pull/\(number)").absoluteString,
+                        display: .init(kind: event.type == "PullRequestEvent" ? .githubPullRequest : .githubReview,
+                            repository: event.repo.name, title: pr?.title, number: number, action: displayAction))
                 default: activity = nil
                 }
                 if let activity { result.activities.append(activity) }
@@ -200,7 +206,8 @@ public struct ActivityAPIClient: Sendable {
                 let title = "\(issue.key): \(issue.fields.summary)"
                 if issue.fields.creator?.accountId == me.accountId, let created = issue.fields.created.flatMap(SQLDate.parse),
                    range.contains(calendar.workDate(of: created)) {
-                    activities.append(.init(id: "\(issue.id):created", occurredAt: created, title: title, detail: "이슈 생성", url: url))
+                    activities.append(.init(id: "\(issue.id):created", occurredAt: created, title: title, detail: "이슈 생성", url: url,
+                        display: .init(kind: .jiraCreated, title: issue.fields.summary, issueKey: issue.key)))
                 }
                 var start = 0
                 for changelogPage in 0..<100 {
@@ -209,8 +216,17 @@ public struct ActivityAPIClient: Sendable {
                     for change in changes.values where change.author?.accountId == me.accountId {
                         guard let instant = SQLDate.parse(change.created), range.contains(calendar.workDate(of: instant)) else { continue }
                         let details = change.items.map { "\($0.field): \($0.fromString ?? "—") → \($0.toString ?? "—")" }.joined(separator: "\n")
+                        let statuses = change.items.filter { item in
+                            if let fieldID = ActivityDisplayMetadata.nonempty(item.fieldId) { return fieldID == "status" }
+                            return item.field.lowercased() == "status"
+                        }
+                        let status = statuses.count == 1 ? statuses[0] : nil
                         activities.append(.init(id: "\(issue.id):change:\(change.id)", occurredAt: instant,
-                                                title: title, detail: details, url: url))
+                            title: title, detail: details, url: url,
+                            display: .init(kind: status == nil ? .jiraUpdated : .jiraTransition,
+                                title: issue.fields.summary, issueKey: issue.key,
+                                statusFrom: ActivityDisplayMetadata.nonempty(status?.fromString),
+                                statusTo: ActivityDisplayMetadata.nonempty(status?.toString), changedFields: change.items.map(\.field))))
                     }
                     start += changes.values.count
                     if changes.isLast == true || start >= changes.total { break }
@@ -223,7 +239,9 @@ public struct ActivityAPIClient: Sendable {
                     for log in logs.worklogs where log.author.accountId == me.accountId {
                         guard let instant = SQLDate.parse(log.started), range.contains(calendar.workDate(of: instant)) else { continue }
                         activities.append(.init(id: "\(issue.id):worklog:\(log.id)", occurredAt: instant, title: title,
-                                                detail: "작업 시간 기록: \(log.timeSpentSeconds / 60)분", url: url))
+                            detail: "작업 시간 기록: \(log.timeSpentSeconds / 60)분", url: url,
+                            display: .init(kind: .jiraWorklog, title: issue.fields.summary, issueKey: issue.key,
+                                durationSeconds: log.timeSpentSeconds >= 0 ? log.timeSpentSeconds : nil)))
                     }
                     start += logs.worklogs.count
                     if start >= logs.total { break }
@@ -247,7 +265,7 @@ private struct GitHubEvent: Decodable {
     let id: String; let type: String; let actor: GitHubIdentity; let created_at: String; let repo: Repo; let payload: Payload
     struct Repo: Decodable { let name: String }
     struct Payload: Decodable {
-        let action: String?; let number: Int?; let ref: String?; let head: String?; let commits: [Commit]?; let pull_request: PR?
+        let action: String?; let number: Int?; let ref: String?; let head: String?; let size: Int?; let commits: [Commit]?; let pull_request: PR?
     }
     struct Commit: Decodable { let message: String }
     struct PR: Decodable { let number: Int?; let title: String?; let merged: Bool? }
@@ -262,7 +280,7 @@ private struct JiraSearch: Decodable {
 private struct JiraChangelogs: Decodable {
     let values: [Change]; let total: Int; let isLast: Bool?
     struct Change: Decodable { let id: String; let author: JiraUser?; let created: String; let items: [Item] }
-    struct Item: Decodable { let field: String; let fromString: String?; let toString: String? }
+    struct Item: Decodable { let field: String; let fieldId: String?; let fromString: String?; let toString: String? }
 }
 private struct JiraWorklogs: Decodable {
     let worklogs: [Log]; let total: Int

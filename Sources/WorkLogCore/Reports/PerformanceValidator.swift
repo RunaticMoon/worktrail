@@ -109,6 +109,15 @@ public enum PerformanceValidator {
                                facts.task(taskId)?.projectIds == [projectId] {
                                 return true
                             }
+                            if source.projectIds.isEmpty, source.kind == .github || source.kind == .jira {
+                                // Imported records retain memo identities. An explicit accepted link
+                                // supports only this item's task and that task's single project.
+                                return facts.memoLinksAccepted.contains { link in
+                                    source.id == FactSource.memoId(link.memoId)
+                                        && item.taskIds.contains(link.taskId)
+                                        && facts.task(link.taskId)?.projectIds == [projectId]
+                                }
+                            }
                             return false
                         }
                         if !satisfied {

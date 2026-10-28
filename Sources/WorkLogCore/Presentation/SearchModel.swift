@@ -177,3 +177,27 @@ public struct SearchState: Equatable, Sendable {
         }
     }
 }
+
+public extension SearchSourceType {
+    var displayLabel: String {
+        switch self {
+        case .memo: return "메모"
+        case .task: return "업무"
+        case .activity: return "진행 기록"
+        case .report: return "리포트"
+        case .github: return "GitHub"
+        case .jira: return "Jira"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .memo: return "text.alignleft"
+        case .task: return "checklist"
+        case .activity: return "bolt"
+        case .report: return "doc.text"
+        case .github: return "chevron.left.forwardslash.chevron.right"
+        case .jira: return "ticket"
+        }
+    }
+}

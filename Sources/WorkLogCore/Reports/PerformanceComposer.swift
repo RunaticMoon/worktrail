@@ -79,7 +79,9 @@ public enum PerformanceComposer {
                 otherItems.append(contentsOf: taskItems)
             }
 
-            let activitySupplementCount = candidates.filter { $0.kind == .activity || $0.kind == .supplement }.count
+            let activitySupplementCount = candidates.filter {
+                $0.kind == .activity || $0.kind == .supplement || $0.kind == .github || $0.kind == .jira
+            }.count
             let supplementCount = candidates.filter { $0.kind == .supplement }.count
 
             if (task.statusAtCutoff == .inProgress || task.statusAtCutoff == .completed),
@@ -94,12 +96,12 @@ public enum PerformanceComposer {
         }
 
         // Task에 연결되지 않은 메모 근거 → 기타 섹션
-        for source in facts.sources where source.kind == .memo {
+        for source in facts.sources where source.kind.usesMemoIdentity {
             let memoId = stripMemoPrefix(source.id)
             if accepted[memoId] != nil { continue }
             if source.taskId == nil {
                 otherItems.append(PerformanceItem(itemId: "", taskIds: [], projectIds: source.projectIds,
-                                                  kind: .discussion, text: text(for: source),
+                                                  kind: kind(for: source.kind), text: text(for: source),
                                                   evidenceIds: [source.id]))
             }
         }
@@ -170,7 +172,7 @@ public enum PerformanceComposer {
         facts.sources.filter { source in
             if source.kind == .activity && task.activitySourceIds.contains(source.id) { return true }
             if source.taskId == task.id { return true }
-            if source.kind == .memo, accepted[stripMemoPrefix(source.id)]?.contains(task.id) == true {
+            if source.kind.usesMemoIdentity, accepted[stripMemoPrefix(source.id)]?.contains(task.id) == true {
                 return true
             }
             return false
@@ -225,7 +227,7 @@ public enum PerformanceComposer {
 
     private static func kind(for sourceKind: FactSourceKind) -> PerformanceItemKind {
         switch sourceKind {
-        case .activity: return .activity
+        case .activity, .github, .jira: return .activity
         case .memo: return .discussion
         case .supplement: return .activity
         case .report: return .unknown

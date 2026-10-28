@@ -40,7 +40,7 @@ enum SubmissionAIContract {
                 // 존재하지 않는 ID는 SubmissionValidator가 unknown_evidence로 보고한다.
                 guard let source = sourceById[sourceId] else { continue }
                 let related: Bool
-                if source.kind == .memo {
+                if source.kind.usesMemoIdentity {
                     related = !(acceptedMemoTasks[sourceId] ?? []).isDisjoint(with: taskIds)
                 } else {
                     related = source.taskId.map { taskIds.contains($0) } ?? false

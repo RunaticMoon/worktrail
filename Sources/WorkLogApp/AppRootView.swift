@@ -107,7 +107,8 @@ struct AppRootView: View {
                 .sheet(isPresented: Binding(get: { controller.selectedMemoId != nil },
                     set: { if !$0 { controller.selectedMemoId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
                     if let memo = controller.memoDetail {
-                        MemoDetailScreen(model: memo, onClose: { controller.selectedMemoId = nil }, onSaveBody: { body in
+                        SourceActivityDetailSheet(model: memo, calendar: environment.calendar,
+                            onClose: { controller.selectedMemoId = nil }, onSaveBody: { body in
                             guard let record = memo.memo else { throw WorkLogError.validation("메모를 찾을 수 없습니다.") }
                             try environment.repo.updateMemoBody(id: record.id, body: body, workDate: record.workDate)
                             memo.load(id: record.id)
