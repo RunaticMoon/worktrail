@@ -8,6 +8,10 @@ public struct MeetingLocalSearchHit: Hashable, Sendable, Identifiable {
     public var segmentID: String?
     public var start: Double?
     public var snippet: String
+    public init(meetingID: String, title: String, runID: String? = nil, segmentID: String? = nil, start: Double? = nil, snippet: String = "") {
+        self.meetingID = meetingID; self.title = title; self.runID = runID; self.segmentID = segmentID
+        self.start = start; self.snippet = snippet
+    }
     public var id: String { meetingID + ":" + (runID ?? "") + ":" + (segmentID ?? "") }
 }
 public struct MeetingSegmentFilter: Hashable, Sendable {

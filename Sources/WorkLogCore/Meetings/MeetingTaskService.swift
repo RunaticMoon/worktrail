@@ -29,6 +29,11 @@ public final class MeetingTaskService: Sendable {
             guard let meeting = try MeetingService(repo: repo).meeting(id: meetingID) else { throw WorkLogError.notFound("회의") }
             guard meeting.revision == expectedRevision else { throw WorkLogError.conflict("회의 원문이 변경되었습니다. 근거를 다시 검토해 주세요.") }
             guard !actionKey.isEmpty, !quote.isEmpty else { throw WorkLogError.validation("업무 근거가 필요합니다.") }
+            if let transcriptRunID {
+                guard try MeetingAudioStore(repo: repo).run(id: transcriptRunID)?.meetingID == meetingID, segmentID != nil else {
+                    throw WorkLogError.validation("회의에 속한 전사 구간을 선택해 주세요.")
+                }
+            }
             if let segmentID {
                 guard let transcriptRunID, let run = try MeetingAudioStore(repo: repo).run(id: transcriptRunID), run.meetingID == meetingID,
                       let segment = try MeetingAudioStore(repo: repo).segments(runID: transcriptRunID).first(where: { $0.id == segmentID }),

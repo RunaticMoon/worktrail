@@ -31,7 +31,8 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
     let fails: Bool
     init(_ order: FakeInferenceOrder, fails: Bool) { self.order = order; self.fails = fails }
     func diarize(samples: [Float], progress: (@Sendable (Double) -> Void)?) async throws -> MeetingDiarizationResult {
-        guard await order.steps.last == "unload-transcriber" else { throw SessionCheckError("Diarizer started before transcriber unload") }
+        let steps = await order.steps
+        guard steps.isEmpty || steps.last == "unload-transcriber" else { throw SessionCheckError("Diarizer started before transcriber unload") }
         await order.add("diarize")
         if fails { throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOMEM)) }
         return .init(turns: [.init(start: 0, end: Double(samples.count) / 16_000, speakerID: 1)], centroids: [1: [1, 0, 0]])
@@ -310,7 +311,42 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         try check(runs.contains { $0.stage == .diarized && $0.status == .failed }, "Diarization failure must retain a failed, independent version")
         let originalSegment = try session.store.segments(runID: refined.id).first!
         try check(originalSegment.isFinal && originalSegment.originalText == "가짜 정밀 전사 원문", "Completed refined text must survive speaker failure")
+        let reuseOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
+            transcriber: FakeFileTranscriber(reuseOrder), speakerEngine: FakeFileDiarizer(reuseOrder, fails: false), progress: { _ in })
+        let reuseSteps = await reuseOrder.steps
+        try check(reuseSteps == ["diarize", "unload-speaker"], "Unchanged failed-stage retry must not call or unload Whisper")
+        try check(try session.store.runs(meetingID: second.id).filter { $0.stage == .refined }.count == 1,
+            "Diarization-only retry must reuse the completed refined run")
+        try check(try meetings.meeting(id: second.id)?.activeTranscriptRunID == nil,
+            "Independent processing must never activate a transcript without review")
+        var changedPreferences = session.preferences; changedPreferences.vadEnabled.toggle()
+        let mismatchOrder = FakeInferenceOrder()
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: changedPreferences, mode: .diarizationOnly, sourceRunID: refined.id,
+                transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
+            throw SessionCheckError("Changed settings must not reuse a refined result")
+        } catch is WorkLogError { }
+        let mismatchSteps = await mismatchOrder.steps
+        try check(mismatchSteps.isEmpty, "Incompatible settings must fail before inference")
+        try (sourceBytes + Data([0])).write(to: secondURL)
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
+                transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
+            throw SessionCheckError("Changed original bytes must not reuse a refined result")
+        } catch is WorkLogError { }
+        try sourceBytes.write(to: secondURL)
+        print("PASS: diarization retry calls no Whisper; changed settings/original SHA256 reject reuse before inference; active transcript unchanged")
         let edited = try session.store.editSegment(id: originalSegment.id, expectedRevision: originalSegment.revision, text: "사용자 검토 수정")
+        do {
+            try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
+                transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
+            throw SessionCheckError("User-edited refined transcript must require an explicit new run")
+        } catch is WorkLogError { }
         let successfulOrder = FakeInferenceOrder()
         try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
             models: session.modelStore, preferences: session.preferences,
@@ -322,6 +358,34 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         try check(try session.store.segment(id: edited.id)?.text == "사용자 검토 수정", "Retry must preserve edits in the older refined version")
         try check(try Data(contentsOf: secondURL) == sourceBytes, "Post-processing must never alter original PCM")
         print("PASS: sequential inference unload, refined result retained on diarization failure and retry preserves user edits/original bytes")
+
+        let refinedOnlyOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .refinedOnly,
+            transcriber: FakeFileTranscriber(refinedOnlyOrder), speakerEngine: FakeFileDiarizer(refinedOnlyOrder, fails: true), progress: { _ in })
+        let refinedOnlySteps = await refinedOnlyOrder.steps
+        try check(refinedOnlySteps == ["transcribe", "unload-transcriber"], "Refined-only mode must not load or invoke a speaker model")
+        print("PASS: refined-only produces completed output without invoking diarization or requiring speaker model files")
+
+        model.select(second.id)
+        model.manualSummary = "직접 작성한 가짜 요약"
+        model.manualDecisions = "가짜 결정"
+        try environment.repo.db.run("CREATE TRIGGER fixture_summary_failure BEFORE INSERT ON meeting_summary BEGIN SELECT RAISE(ABORT, 'fake summary failure'); END")
+        try check(!model.save() && model.manualSummary == "직접 작성한 가짜 요약", "Failed autosave must preserve manual input")
+        try environment.repo.db.run("DROP TRIGGER fixture_summary_failure")
+        try check(model.save(), "Manual summary must retry successfully after a transient storage failure")
+        let manual = try meetings.meeting(id: second.id)!.summary!
+        model.manualSummary = "경쟁 수정 중인 내 초안"
+        _ = try meetings.saveManualSummary(meetingID: second.id, expectedMeetingRevision: model.selected!.revision,
+            expectedSummaryRevision: manual.revision, output: .init(summary: [.init(text: "다른 창의 최신 내용", citations: [])]))
+        model.refreshAudio()
+        try check(!model.save() && model.manualSummary == "경쟁 수정 중인 내 초안" && model.conflictingSummary != nil,
+            "Background refresh must not silently rebase an unsaved summary; stale save preserves input and exposes latest version")
+        model.retrySummaryAfterReview()
+        try check(try meetings.meeting(id: second.id)?.summary?.structuredOutput.summary.first?.text == "경쟁 수정 중인 내 초안",
+            "Explicit conflict review permits saving the draft as another preserved version")
+        try check(try environment.repo.db.scalarInt("SELECT COUNT(*) FROM ai_job") == 0, "Manual authoring must create zero AI jobs")
+        print("PASS: actual manual summary model preserves input on storage failure and concurrent change, retries after review, and creates no AI jobs")
 
         let cancelledCapture = FakeMeetingCapture()
         let cancelledSession = MeetingRecordingSession(environment: environment, capture: cancelledCapture)
@@ -336,7 +400,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
-        print("9 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
+        print("12 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
     }
 }
 #endif
