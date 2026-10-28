@@ -215,7 +215,7 @@ final class TaskEditingWorkflowTests: XCTestCase {
         XCTAssertEqual(try plans.plan(weekStart: monday)?.items.first?.state, .excluded)
     }
 
-    @MainActor func testDetailUsesSelectedWorkDateAcrossAllScopesAndKeepsRecordedAt() throws {
+    @MainActor func testDetailUsesSelectedWorkDateAcrossAllScopesAndKeepsRecordedAt() async throws {
         let clock = FixedClock(SQLDate.parse("2026-10-26T00:00:00Z")!)
         let env = try environment(clock: clock)
         let task = try env.tasks.createTask(title: "과거입력", workDate: thursday, projectNames: ["적용"], trackingMode: .perProject, checklist: ["확인"])
@@ -244,7 +244,7 @@ final class TaskEditingWorkflowTests: XCTestCase {
         XCTAssertEqual(try env.repo.events(taskId: task.id).count, events.count + 1)
     }
 
-    @MainActor func testExecutionFiltersUseKSTDayBoundaryAndPartialChecklistPlan() throws {
+    @MainActor func testExecutionFiltersUseKSTDayBoundaryAndPartialChecklistPlan() async throws {
         let clock = FixedClock(SQLDate.parse("2026-10-25T15:00:00Z")!) // Monday 00:00 KST
         let env = try environment(clock: clock)
         let due = try env.tasks.createTask(title: "오늘", workDate: friday, dueOn: monday, projectNames: ["교집합"])
@@ -290,7 +290,7 @@ final class TaskEditingWorkflowTests: XCTestCase {
         XCTAssertEqual(try plans.plan(weekStart: monday)?.items.first?.id, refreshed.id)
     }
 
-    @MainActor func testEditsAndRestorePersistWhenDatabaseIsReopened() throws {
+    @MainActor func testEditsAndRestorePersistWhenDatabaseIsReopened() async throws {
         let clock = FixedClock(SQLDate.parse("2026-10-26T00:00:00Z")!)
         let env = try environment(clock: clock)
         let task = try env.tasks.createTask(title: "재시작전", workDate: thursday, checklist: ["첫째", "둘째"])
@@ -311,7 +311,7 @@ final class TaskEditingWorkflowTests: XCTestCase {
         XCTAssertEqual(try reopenedPlans.plan(weekStart: monday)?.items.first?.id, plan.id)
     }
 
-    @MainActor func testChecklistUndoAndPropertyDraftFailurePreserveInputs() throws {
+    @MainActor func testChecklistUndoAndPropertyDraftFailurePreserveInputs() async throws {
         let clock = FixedClock(SQLDate.parse("2026-10-26T00:00:00Z")!)
         let env = try environment(clock: clock)
         let task = try env.tasks.createTask(title: "실패후입력", workDate: thursday, checklist: ["원본"])

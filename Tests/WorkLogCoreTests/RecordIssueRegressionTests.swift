@@ -17,7 +17,7 @@ final class RecordIssueRegressionTests: XCTestCase {
             clock: FixedClock(WorkCalendar().startOfDay(today)), ids: SequentialIDGenerator()))
     }
 
-    @MainActor func testMemoMetadataHistoryIsAtomicAndReindexesWithoutChangingIdentity() throws {
+    @MainActor func testMemoMetadataHistoryIsAtomicAndReindexesWithoutChangingIdentity() async throws {
         let env = try environment()
         let p = try env.repo.createProject(name: "원래 분류")
         let q = try env.repo.createProject(name: "새로운 분류")
@@ -44,7 +44,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         XCTAssertFalse(try env.repo.tags().contains { $0.name == "rollback" })
     }
 
-    @MainActor func testManualEvidenceDecisionWorksWithAIDisabledAndReapprovesCurrentRevision() throws {
+    @MainActor func testManualEvidenceDecisionWorksWithAIDisabledAndReapprovesCurrentRevision() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "근거 대상 업무", workDate: today)
         try env.repo.insertMemo(Memo(id: "memo", body: "원문", workDate: today, recordedAt: env.options.clock.now()))
@@ -74,7 +74,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         XCTAssertEqual(try env.tasks.currentStatus(taskId: task.id), .planned)
     }
 
-    @MainActor func testBothCaptureDraftsSurviveNewSessionAndSuccessfulSaveClearsOnlyOne() throws {
+    @MainActor func testBothCaptureDraftsSurviveNewSessionAndSuccessfulSaveClearsOnlyOne() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "기존 업무", workDate: today)
         let project = try env.repo.createProject(name: "프로젝트")
@@ -108,7 +108,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         session.detach(); restored.detach(); reopened.detach()
     }
 
-    @MainActor func testCheckpointCorruptionIsIsolatedAndMissingTaskDoesNotBecomeNewTask() throws {
+    @MainActor func testCheckpointCorruptionIsIsolatedAndMissingTaskDoesNotBecomeNewTask() async throws {
         let env = try environment()
         let session = CaptureSessionModel(environment: env)
         session.memoDraft.text = "정상 초안"
@@ -128,7 +128,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         session.detach(); restored.detach()
     }
 
-    @MainActor func testCheckpointFlushFailureRetainsDraftAndCanRetry() throws {
+    @MainActor func testCheckpointFlushFailureRetainsDraftAndCanRetry() async throws {
         let env = try environment()
         let location = env.options.paths.dataRoot.appendingPathComponent("capture-drafts")
         try Data("block directory".utf8).write(to: location)
@@ -194,7 +194,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         }
     }
 
-    @MainActor func testSearchPagesCoverBoundariesLikeFTSAndStableMixedTypeTies() throws {
+    @MainActor func testSearchPagesCoverBoundariesLikeFTSAndStableMixedTypeTies() async throws {
         for count in [0, 49, 50, 51, 120] {
             let env = try environment()
             for index in 0..<count {
@@ -218,7 +218,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         }
     }
 
-    @MainActor func testSearchLoadMoreRefreshesDeletionAndRestoresSelectionWithoutMixingQueries() throws {
+    @MainActor func testSearchLoadMoreRefreshesDeletionAndRestoresSelectionWithoutMixingQueries() async throws {
         let env = try environment()
         for index in 0..<120 {
             try env.repo.insertMemo(Memo(id: "m-\(index)", body: "검색대상", workDate: today, recordedAt: env.options.clock.now()))
@@ -252,7 +252,7 @@ final class RecordIssueRegressionTests: XCTestCase {
         capture.detach(); restored.detach()
     }
 
-    @MainActor func testLargeSearchFixtureMeasuresFirstAndAdditionalPage() throws {
+    @MainActor func testLargeSearchFixtureMeasuresFirstAndAdditionalPage() async throws {
         let env = try environment()
         try env.repo.db.transaction {
             for index in 0..<5_000 {

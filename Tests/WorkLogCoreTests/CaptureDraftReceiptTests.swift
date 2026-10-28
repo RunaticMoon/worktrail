@@ -41,7 +41,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         try env.repo.db.execute("CREATE TEMP TRIGGER fail_capture_receipt BEFORE INSERT ON capture_draft_receipt BEGIN SELECT RAISE(ABORT, 'fixture receipt failure'); END;")
     }
 
-    @MainActor func testCommittedMemoAndTaskAreNotRestoredAfterCheckpointCleanupFails() throws {
+    @MainActor func testCommittedMemoAndTaskAreNotRestoredAfterCheckpointCleanupFails() async throws {
         for kind in [CaptureKind.memo, .task] {
             let env = try environment()
             let session = CaptureSessionModel(environment: env)
@@ -77,7 +77,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         }
     }
 
-    @MainActor func testReceiptFailureRollsBackRecordLinksIndexAndCompleteInputForBothTabs() throws {
+    @MainActor func testReceiptFailureRollsBackRecordLinksIndexAndCompleteInputForBothTabs() async throws {
         for kind in [CaptureKind.memo, .task] {
             let env = try environment()
             let project = try env.repo.createProject(name: "분류")
@@ -115,7 +115,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         }
     }
 
-    @MainActor func testStatusSubmissionRecoversUnusedDraftAndFollowsLaterSubmissionReceipt() throws {
+    @MainActor func testStatusSubmissionRecoversUnusedDraftAndFollowsLaterSubmissionReceipt() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "상태 변경", workDate: yesterday)
         let session = CaptureSessionModel(environment: env)
@@ -150,7 +150,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         session.detach(); restored.detach(); reopened.detach()
     }
 
-    @MainActor func testDirectCompletionConfirmationRollsBackReceiptFailureAndRecoversUnusedText() throws {
+    @MainActor func testDirectCompletionConfirmationRollsBackReceiptFailureAndRecoversUnusedText() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "확인 필요", workDate: yesterday, checklist: ["미완료 항목"])
         let session = CaptureSessionModel(environment: env)
@@ -187,7 +187,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         session.detach(); restored.detach()
     }
 
-    @MainActor func testActivityReceiptFailureRollsBackAndStaleSubmittedCheckpointCannotRepeat() throws {
+    @MainActor func testActivityReceiptFailureRollsBackAndStaleSubmittedCheckpointCannotRepeat() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "진행 대상", workDate: today)
         let session = CaptureSessionModel(environment: env)
@@ -212,7 +212,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         session.detach()
     }
 
-    @MainActor func testLegacyCheckpointGetsStableReceiptIdentityEvenWhenUpgradeCannotBeWritten() throws {
+    @MainActor func testLegacyCheckpointGetsStableReceiptIdentityEvenWhenUpgradeCannotBeWritten() async throws {
         for kind in [CaptureKind.memo, .task] {
             let env = try environment()
             let session = CaptureSessionModel(environment: env)
@@ -237,7 +237,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         }
     }
 
-    @MainActor func testCorruptReceiptChainsNeverRestoreSubmittedAction() throws {
+    @MainActor func testCorruptReceiptChainsNeverRestoreSubmittedAction() async throws {
         for corruption in ["cycle", "length", "json", "version"] {
             let env = try environment()
             let session = CaptureSessionModel(environment: env)
@@ -273,7 +273,7 @@ final class CaptureDraftReceiptTests: XCTestCase {
         }
     }
 
-    @MainActor func testSecretTabDoesNotCreateSubmissionReceipt() throws {
+    @MainActor func testSecretTabDoesNotCreateSubmissionReceipt() async throws {
         let env = try environment()
         let session = CaptureSessionModel(environment: env)
         session.memoDraft.text = "미제출 일반 초안"
