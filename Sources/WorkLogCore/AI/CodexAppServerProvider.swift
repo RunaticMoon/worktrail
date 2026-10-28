@@ -15,14 +15,17 @@ public struct CodexProviderConfig: Sendable {
     public var model: String?
     public var requestTimeout: TimeInterval
     public var turnTimeout: TimeInterval
+    public var blockedSkillPathPrefixes: [String]
 
     public init(executablePath: String? = nil, stagingRoot: URL, model: String? = nil,
-                requestTimeout: TimeInterval = 60, turnTimeout: TimeInterval = 600) {
+                requestTimeout: TimeInterval = 60, turnTimeout: TimeInterval = 600,
+                blockedSkillPathPrefixes: [String] = []) {
         self.executablePath = executablePath
         self.stagingRoot = stagingRoot
         self.model = model
         self.requestTimeout = requestTimeout
         self.turnTimeout = turnTimeout
+        self.blockedSkillPathPrefixes = blockedSkillPathPrefixes
     }
 }
 
@@ -134,6 +137,8 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
     }
 
     public func run(_ input: AIJobInput) async throws -> AIJobOutput {
+        let instructions = try ChatGPTSkillInstructions.appending(input.skill, to: input.instructions,
+                                                                  blockedPathPrefixes: config.blockedSkillPathPrefixes)
         // Resolve at job start so newly saved preferences apply without restarting.
         var profile = try profileResolver?(input.jobType) ?? AITaskProfile(model: config.model)
         let connection: JSONRPCConnection
@@ -141,6 +146,9 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
             connection = try await ensureConnection()
         } catch {
             throw providerError(error)
+        }
+        guard Self.supportsEnvironmentIsolation(locked { state.connectionInfo?.userAgent }) else {
+            throw AIProviderError(.protocolMismatch, "안전한 일반 기록 처리를 위해 Codex CLI 0.163.0 이상이 필요합니다. CLI를 업데이트하세요.")
         }
         if profileResolver != nil, profile.model == nil {
             // Discovery is part of an actual requested AI job, never settings initialization.
@@ -156,13 +164,31 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         let jobDirectory = config.stagingRoot.appendingPathComponent(input.jobId, isDirectory: true)
         try? FileManager.default.createDirectory(at: jobDirectory, withIntermediateDirectories: true)
 
+        // An empty MCP table does not clear inherited TOML tables. Read only the configured
+        // server names through the official RPC and override each server for this thread.
+        // Never forward configuration values (which may contain credentials) to the model.
+        let configured = try await send(connection, "config/read", .object([
+            "includeLayers": .bool(false), "cwd": .string(jobDirectory.path)
+        ]))
+        guard let effective = configured["config"]?.objectValue else {
+            throw AIProviderError(.protocolMismatch, "Codex 도구 격리 설정을 확인할 수 없습니다. CLI를 업데이트하세요.")
+        }
+        let serverNames = effective["mcp_servers"]?.objectValue?.keys.map { $0 } ?? []
+        let disabledServers = Dictionary(uniqueKeysWithValues: serverNames.map {
+            ($0, JSONValue.object(["enabled": .bool(false)]))
+        })
+
         // 1) thread/start — 읽기 전용, 무승인, 임시 thread.
         var threadParams: [String: JSONValue] = [
             "cwd": .string(jobDirectory.path),
             "sandbox": .string("read-only"),
             "approvalPolicy": .string("never"),
             "ephemeral": .bool(true),
-            "developerInstructions": .string(input.instructions),
+            "environments": .array([]),
+            "selectedCapabilityRoots": .array([]),
+            "config": .object(["mcp_servers": .object(disabledServers)]),
+            "baseInstructions": .string("You generate JSON drafts from the provided work records only. Do not access files, commands, external tools or other data sources. Return only the requested JSON object."),
+            "developerInstructions": .string(instructions),
         ]
         if let model { threadParams["model"] = .string(model) }
 
@@ -182,10 +208,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         defer { unregister(context) }
 
         // 2) turn/start — payloadJSON(+선택 스킬 언급)을 텍스트 입력으로 보낸다.
-        var text = input.payloadJSON
-        if let skill = input.skill, !skill.name.isEmpty {
-            text = "$\(skill.name)\n\(text)"
-        }
+        let text = input.payloadJSON
         var turnParams: [String: JSONValue] = [
             "threadId": .string(threadId),
             "input": .array([
@@ -276,6 +299,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         try connection.start()
 
         let initParams = JSONValue.object([
+            "capabilities": .object(["experimentalApi": .bool(true)]),
             "clientInfo": .object([
                 "name": .string("worklog"),
                 "title": .string("WorkLog"),
@@ -295,12 +319,36 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         guard let executable = Self.resolveExecutable(config.executablePath) else {
             throw AIExecutableNotFoundError(path: config.executablePath ?? "codex")
         }
-        return ProcessLineTransport(executableURL: executable, arguments: ["app-server"])
+        return ProcessLineTransport(executableURL: executable, arguments: Self.processArguments)
     }
+
+    /// Override user tool configuration before starting the server. Authentication remains CLI-owned.
+    /// Read-only sandboxing alone would still allow reading the Secret database through shell tools.
+    static let processArguments: [String] = {
+        var result = ["app-server", "--listen", "stdio://", "-c", "web_search=\"disabled\"", "-c", "project_doc_max_bytes=0",
+                      "-c", "tools.experimental_request_user_input.enabled=false", "-c", "tools.update_plan.enabled=false"]
+        for feature in ["shell_tool", "unified_exec", "js_repl", "code_mode", "apps", "connectors", "plugins",
+                        "hooks", "codex_hooks", "plugin_hooks", "multi_agent", "multi_agent_v2", "browser_use",
+                        "computer_use", "image_generation", "view_image", "memory_tool", "memories", "skill_search",
+                        "search_tool", "apply_patch_freeform", "remote_plugin", "tool_search", "in_app_local_automation",
+                        "stable_environment_tools", "deferred_executor", "code_mode_only", "code_mode_host", "goals", "sleep_tool"] {
+            result += ["-c", "features.\(feature)=false"]
+        }
+        result += ["-c", "features.skip_host_skill_discovery=true"]
+        return result
+    }()
 
     /// Finder·Dock으로 실행한 macOS 앱은 로그인 셸의 PATH를 물려받지 않으므로
     /// PATH 다음에 흔한 설치 위치를 확인한다(Homebrew Apple Silicon/Intel). 실제 Mac에서는 미검증.
-    static let fallbackDirectories = ["/opt/homebrew/bin", "/usr/local/bin"]
+    static let fallbackDirectories = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path,
+                                      "/opt/homebrew/bin", "/usr/local/bin"]
+
+    static func supportsEnvironmentIsolation(_ userAgent: String?) -> Bool {
+        guard let version = userAgent?.split(separator: "/").dropFirst().first?.split(separator: " ").first else { return false }
+        let parts = version.split(separator: ".")
+        guard parts.count >= 3, let major = Int(parts[0]), let minor = Int(parts[1]) else { return false }
+        return major > 0 || minor >= 163
+    }
 
     /// executablePath가 있으면 그 경로만, 없으면 PATH → fallbackDirectories 순서로 "codex"를 찾는다.
     static func resolveExecutable(_ explicitPath: String?,

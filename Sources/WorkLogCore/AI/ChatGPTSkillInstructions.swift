@@ -12,7 +12,7 @@ enum ChatGPTSkillInstructions {
     static func appending(_ skill: SkillRef?, to instructions: String, blockedPathPrefixes: [String]) throws -> String {
         guard let skill else { return instructions }
         guard let path = skill.path, URL(fileURLWithPath: path).lastPathComponent == "SKILL.md" else {
-            throw AIProviderError(.protocolMismatch, "OAuth 연결의 스킬은 이름 대신 SKILL.md 전체 경로를 지정하세요.")
+            throw AIProviderError(.protocolMismatch, "스킬은 이름 대신 SKILL.md 전체 경로를 지정하세요.")
         }
         let canonical = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
         guard let expectedHash = skill.contentHash,

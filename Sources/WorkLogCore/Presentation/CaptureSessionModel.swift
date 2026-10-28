@@ -155,6 +155,7 @@ import Observation
         if draft === taskDraft {
             return blankBody && noLinks
                 && draft.taskQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && draft.dueOn == nil && draft.dueReminderDaysBefore == nil
                 && draft.taskSelection == .newTask && draft.taskAction == .addActivity
                 && draft.statusTarget == nil && draft.pendingCompletion == nil
                 && draft.initialStatus == .planned && draft.projectTrackingMode == .shared

@@ -35,6 +35,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
     public var selectionRange: NSRange?
     public var kind: RecordCaptureKind = .memo
     public var workDate: WorkDate
+    public var dueOn: WorkDate?
+    public var dueReminderDaysBefore: Int?
+    public var workCalendar: WorkCalendar { environment?.calendar ?? WorkCalendar() }
     public var targetTaskId: String?
     public var initialStatus: TaskStatus = .planned
     public var projectTrackingMode: ProjectTrackingMode = .shared
@@ -148,6 +151,8 @@ public enum CaptureTaskAction: Equatable, Sendable {
         pendingCompletionTaskId = nil
         initialStatus = .planned
         projectTrackingMode = .shared
+        dueOn = nil
+        dueReminderDaysBefore = nil
         errorMessage = nil
         lastSavedId = nil
         resetWorkDateToToday()
@@ -540,8 +545,9 @@ public enum CaptureTaskAction: Equatable, Sendable {
                     let reference = try linkedCapture.create(
                         .task(title: title, body: body,
                               initialStatus: initialStatus, workDate: workDate, effectiveTime: nil,
-                              dueOn: nil, projectNames: names, trackingMode: projectTrackingMode,
-                              tagNames: tagNames, checklist: [], links: []),
+                              dueOn: dueOn, projectNames: names, trackingMode: projectTrackingMode,
+                              tagNames: tagNames, checklist: [], links: [],
+                              dueReminderDaysBefore: dueOn == nil ? nil : dueReminderDaysBefore),
                         related: relatedRecords.map(\.reference))
                     lastSavedId = reference.id
                     finishOrdinarySubmit()
@@ -703,6 +709,8 @@ public enum CaptureTaskAction: Equatable, Sendable {
         errorMessage = nil
         initialStatus = .planned
         projectTrackingMode = .shared
+        dueOn = nil
+        dueReminderDaysBefore = nil
         resetDefaults()
         reloadCandidates()
     }

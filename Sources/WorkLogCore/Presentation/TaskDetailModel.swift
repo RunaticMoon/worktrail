@@ -10,6 +10,7 @@ import Observation
     /// 진행 기록의 범위. nil = Task 공통 기록, 값이 있으면 그 프로젝트 기록.
     public var activityProjectId: String?
     public var checklistText = ""
+    @ObservationIgnored public var onChanged: (() -> Void)?
     @ObservationIgnored private let environment: AppEnvironment
     @ObservationIgnored private var taskId: String?
 
@@ -29,9 +30,22 @@ import Observation
     }
     private func update(_ action: (String) throws -> Void) {
         guard asOf == nil, let taskId else { return }
-        do { try action(taskId); load(taskId: taskId) }
+        do { try action(taskId); load(taskId: taskId); onChanged?() }
         catch { errorMessage = "변경하지 못했습니다. 상태와 입력 내용을 확인하세요." }
     }
+    public var workCalendar: WorkCalendar { environment.calendar }
+    public var today: WorkDate { environment.calendar.workDate(of: environment.options.clock.now()) }
+
+    public func setDueDate(_ dueOn: WorkDate?) {
+        update { try environment.tasks.updateTaskDue(taskId: $0, dueOn: dueOn,
+            dueReminderDaysBefore: dueOn == nil ? nil : detail?.task.dueReminderDaysBefore) }
+    }
+
+    public func setDueReminderDaysBefore(_ days: Int?) {
+        update { try environment.tasks.updateTaskDue(taskId: $0, dueOn: detail?.task.dueOn,
+            dueReminderDaysBefore: days) }
+    }
+
     public func changeStatus(_ kind: DomainEventKind) {
         update { try environment.tasks.changeTaskStatus(taskId: $0, kind: kind) }
     }
@@ -39,7 +53,7 @@ import Observation
         guard asOf == nil, let taskId else { return }
         do {
             let result = try environment.tasks.completeTask(taskId: taskId, confirmRemaining: confirmRemaining)
-            if result.completed { load(taskId: taskId) } else { completionCheck = result; errorMessage = nil }
+            if result.completed { load(taskId: taskId); onChanged?() } else { completionCheck = result; errorMessage = nil }
         } catch { errorMessage = "완료하지 못했습니다. 업무 상태를 확인하세요." }
     }
     public func cancelCompletion() { completionCheck = nil }

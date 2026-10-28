@@ -180,6 +180,30 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
     }
 
     @MainActor static func main() async throws {
+        let microphones = [
+            MeetingMicrophoneDevice(id: "continuity", name: "A iPhone"),
+            MeetingMicrophoneDevice(id: "usb", name: "USB microphone"),
+            MeetingMicrophoneDevice(id: "built-in", name: "Mac microphone", isBuiltIn: true)
+        ]
+        try check(MeetingMicrophoneDevice.preferredID(in: microphones) == "built-in", "Prefer the Mac input even when iPhone sorts first")
+        try check(MeetingMicrophoneDevice.preferredID(in: Array(microphones.prefix(2))) == nil, "Without a built-in input require explicit selection")
+        let callbackWasBackground = await withCheckedContinuation { continuation in
+            // Construct from MainActor, then invoke exactly the production tap
+            // wrapper on a background queue. Synthetic PCM never opens a device.
+            let tap = MeetingMicrophoneTap.make { _, _ in continuation.resume(returning: !Thread.isMainThread) }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1)!
+                buffer.frameLength = 1; buffer.floatChannelData![0][0] = 0
+                tap(buffer, AVAudioTime(sampleTime: 0, atRate: 48_000))
+            }
+        }
+        try check(callbackWasBackground, "The microphone tap must accept background audio callbacks without MainActor isolation")
+        let availableMicrophones = MeetingAudioCapture.microphoneDevices()
+        if availableMicrophones.contains(where: \.isBuiltIn) {
+            try check(availableMicrophones.first?.isBuiltIn == true, "CoreAudio enumerates the built-in input first")
+        }
+        print("PASS: Mac input preference and background tap callback; device metadata enumeration only, no recording")
         setbuf(stdout, nil)
         guard CommandLine.arguments.count == 2 else { throw SessionCheckError("Disposable fixture root required") }
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
@@ -312,7 +336,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
-        print("8 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
+        print("9 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
     }
 }
 #endif

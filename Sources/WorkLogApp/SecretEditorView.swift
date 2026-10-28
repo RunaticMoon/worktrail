@@ -84,7 +84,7 @@ import WorkLogCore
         }
         .onAppear {
             if canEdit && (host == .capture || titleFocusRequest > 0) && captureNavigation?.keepTabFocus != true {
-                focusedField = .title
+                focusedField = host == .capture ? .group : .title
             }
         }
         .onChange(of: titleFocusRequest) { _, _ in if canEdit { focusedField = .title } }
@@ -99,14 +99,21 @@ import WorkLogCore
                     .secretControlFocus(captureNavigation, "secretVisibility", order: 190, action: toggleValues)
             }
             VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("그룹") {
+                    TextField("그룹 선택 또는 새 그룹 입력", text: $model.groupName)
+                        .accessibilityLabel("그룹 (선택 사항)")
+                        .accessibilityHint("기존 그룹을 자동 완성하거나 새 그룹을 입력합니다. 다음은 이름입니다.")
+                        .textInputSuggestions {
+                            ForEach(model.groupSuggestions, id: \.self) { group in
+                                Label(group, systemImage: "folder").textInputCompletion(group)
+                            }
+                        }
+                        .modifier(fieldFocus(.group, id: "secretGroup", order: 200))
+                }
                 LabeledContent("제목") {
                     TextField("비우면 임시 제목", text: $model.title)
                         .accessibilityLabel("Secret 제목")
-                        .modifier(fieldFocus(.title, id: "secretTitle", order: 200))
-                }
-                LabeledContent("그룹") {
-                    TextField("선택 사항", text: $model.groupName).accessibilityLabel("그룹 (선택 사항)")
-                        .modifier(fieldFocus(.group, id: "secretGroup", order: 210))
+                        .modifier(fieldFocus(.title, id: "secretTitle", order: 210))
                 }
             }
             HStack(spacing: 8) {

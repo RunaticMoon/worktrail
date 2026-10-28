@@ -11,11 +11,11 @@ extension WorkRepository {
         try db.transaction {
             try db.runV("""
                 INSERT INTO task
-                    (id, title, due_on, created_at, project_tracking_mode, revision, deleted_at, cached_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, title, due_on, created_at, project_tracking_mode, revision, deleted_at, cached_status, due_reminder_days_before)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, task.id, task.title, task.dueOn, task.createdAt,
                    task.projectTrackingMode.rawValue, task.revision, task.deletedAt,
-                   task.cachedStatus?.rawValue)
+                   task.cachedStatus?.rawValue, task.dueReminderDaysBefore)
             for tagId in task.tagIds {
                 try db.runV("INSERT OR IGNORE INTO task_tag (task_id, tag_id) VALUES (?, ?)",
                            task.id, tagId)
@@ -31,8 +31,18 @@ extension WorkRepository {
     }
 
     public func updateTaskDue(id: String, dueOn: WorkDate?) throws {
-        let n = try db.runV("UPDATE task SET due_on = ? WHERE id = ?", dueOn, id)
+        guard let existing = try task(id: id) else { throw WorkLogError.notFound("task \(id)") }
+        try updateTaskDue(id: id, dueOn: dueOn,
+                          dueReminderDaysBefore: dueOn == nil ? nil : existing.dueReminderDaysBefore)
+    }
+
+    public func updateTaskDue(id: String, dueOn: WorkDate?, dueReminderDaysBefore: Int?) throws {
+        let n = try db.runV("""
+            UPDATE task SET due_on = ?, due_reminder_days_before = ?, revision = revision + 1
+            WHERE id = ? AND deleted_at IS NULL
+            """, dueOn, dueOn == nil ? nil : dueReminderDaysBefore, id)
         if n == 0 { throw WorkLogError.notFound("task \(id)") }
+        onSourceChanged?("task", id)
     }
 
     public func setTaskTrackingMode(id: String, mode: ProjectTrackingMode) throws {
@@ -305,7 +315,8 @@ extension WorkRepository {
         let cachedStatus = row.string("cached_status").flatMap(TaskStatus.init(rawValue:))
         return WorkTask(id: id, title: title, dueOn: row.workDate("due_on"), createdAt: createdAt,
                         projectTrackingMode: mode, revision: row.int("revision") ?? 1,
-                        deletedAt: row.date("deleted_at"), tagIds: tagIds, cachedStatus: cachedStatus)
+                        deletedAt: row.date("deleted_at"), tagIds: tagIds, cachedStatus: cachedStatus,
+                        dueReminderDaysBefore: row.int("due_reminder_days_before"))
     }
 
     private func taskProjectRow(_ row: SQLRow) throws -> TaskProject {

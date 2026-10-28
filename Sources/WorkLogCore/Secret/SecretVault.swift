@@ -258,6 +258,16 @@ public final class SecretVault: @unchecked Sendable {
         return try db.query(sql, params).map { try metadataRow($0) }
     }
 
+    /// Local metadata only. Independent of the title search limit, and excludes
+    /// groups whose only items are in the trash. No payload is decrypted.
+    public func groupNames() throws -> [String] {
+        try db.query("""
+            SELECT g.name FROM secret_group g
+            WHERE EXISTS (SELECT 1 FROM secret_item i WHERE i.group_id = g.id AND i.deleted_at IS NULL)
+            """).compactMap { $0.string("name") }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
     // MARK: - 휴지통
 
     func moveToTrash(secretId: String) throws {

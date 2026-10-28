@@ -81,13 +81,16 @@ public struct WorkTask: Codable, Hashable, Sendable, Identifiable {
     public var deletedAt: Date?
     public var tagIds: [String]
     public var cachedStatus: TaskStatus?
+    public var dueReminderDaysBefore: Int?
 
     public init(id: String, title: String, dueOn: WorkDate? = nil, createdAt: Date,
                 projectTrackingMode: ProjectTrackingMode = .shared, revision: Int = 1,
-                deletedAt: Date? = nil, tagIds: [String] = [], cachedStatus: TaskStatus? = nil) {
+                deletedAt: Date? = nil, tagIds: [String] = [], cachedStatus: TaskStatus? = nil,
+                dueReminderDaysBefore: Int? = nil) {
         self.id = id; self.title = title; self.dueOn = dueOn; self.createdAt = createdAt
         self.projectTrackingMode = projectTrackingMode; self.revision = revision
         self.deletedAt = deletedAt; self.tagIds = tagIds; self.cachedStatus = cachedStatus
+        self.dueReminderDaysBefore = dueReminderDaysBefore
     }
 }
 

@@ -2,6 +2,20 @@
 import Foundation
 import WorkLogCore
 
+final class FixtureServiceCredentials: ServiceCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+    func read(account: String) throws -> String? { lock.lock(); defer { lock.unlock() }; return values[account] }
+    func write(_ credential: String, account: String) throws { lock.lock(); defer { lock.unlock() }; values[account] = credential }
+    func delete(account: String) throws { lock.lock(); defer { lock.unlock() }; values[account] = nil }
+}
+
+struct FixtureActivityTransport: ChatGPTHTTPTransport {
+    func send(_ request: URLRequest) async throws -> ChatGPTHTTPResponse {
+        throw WorkLogError.validation("화면 검증에서는 네트워크에 연결하지 않습니다.")
+    }
+}
+
 /// Explicit debug launches use a fresh disposable workspace and fake authentication.
 /// This branch must run before opening standard paths, Keychain, or an AI provider.
 @MainActor

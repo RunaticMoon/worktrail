@@ -102,18 +102,19 @@ public final class TaskService: @unchecked Sendable {
                            dueOn: WorkDate? = nil, projectNames: [String] = [],
                            trackingMode: ProjectTrackingMode = .shared, tagNames: [String] = [],
                            checklist: [String] = [], note: String? = nil,
-                           links: [String] = []) throws -> WorkTask {
+                           links: [String] = [], dueReminderDaysBefore: Int? = nil) throws -> WorkTask {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw WorkLogError.validation("업무명이 비어 있습니다.")
         }
+        try validateDueReminder(dueOn: dueOn, daysBefore: dueReminderDaysBefore)
         let date = resolved(workDate)
         let now = repo.clock.now()
         return try repo.db.transaction {
             let tagIds = try tagNames.map { try repo.findOrCreateTag(name: $0).id }
             let task = WorkTask(id: repo.ids.make(), title: trimmed, dueOn: dueOn, createdAt: now,
                                 projectTrackingMode: trackingMode, tagIds: tagIds,
-                                cachedStatus: initialStatus)
+                                cachedStatus: initialStatus, dueReminderDaysBefore: dueReminderDaysBefore)
             try repo.insertTask(task)
 
             let created = try makeEvent(taskId: task.id, scopeType: .task, scopeId: task.id,
@@ -143,6 +144,21 @@ public final class TaskService: @unchecked Sendable {
 
             try insertLinks(ownerType: .task, ownerId: task.id, urls: unique(links), createdAt: now)
             return task
+        }
+    }
+
+    /// 마감일과 알림 시작일을 함께 변경한다. 마감일을 지우면 알림도 해제한다.
+    public func updateTaskDue(taskId: String, dueOn: WorkDate?, dueReminderDaysBefore: Int?) throws {
+        _ = try requireTask(taskId)
+        let days = dueOn == nil ? nil : dueReminderDaysBefore
+        try validateDueReminder(dueOn: dueOn, daysBefore: days)
+        try repo.updateTaskDue(id: taskId, dueOn: dueOn, dueReminderDaysBefore: days)
+    }
+
+    private func validateDueReminder(dueOn: WorkDate?, daysBefore: Int?) throws {
+        guard let daysBefore else { return }
+        guard dueOn != nil, (0...365).contains(daysBefore) else {
+            throw WorkLogError.validation("마감일을 정하고 알림 시작일을 0~365일 전으로 선택하세요.")
         }
     }
 

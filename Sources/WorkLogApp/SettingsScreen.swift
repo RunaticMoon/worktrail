@@ -12,6 +12,8 @@ struct SettingsScreen: View {
     let onEndHotkeyRecording: () -> Void
     let backups: BackupModel?
     let onOpenBackups: (() -> Void)?
+    let activityIntegrations: ActivityIntegrationsModel?
+    let onImported: () -> Void
     @Environment(\.hotkeyDiagnostics) private var hotkeyDiagnostics
     @Environment(\.colorSchemeContrast) private var contrast
     @FocusState private var errorFocused: Bool
@@ -19,10 +21,12 @@ struct SettingsScreen: View {
     @State private var query = ""
     @State private var destination: SettingsDestination = .general
     @State private var promptEditor: PromptEditorSelection?
+    @State private var apiKey = ""
 
     init(chatGPTLogin: ChatGPTLoginCoordinator? = nil, model: SettingsModel, prompts: PromptSettingsModel, onSave: @escaping () -> Void,
          onBeginHotkeyRecording: @escaping () -> Void, onEndHotkeyRecording: @escaping () -> Void,
-         backups: BackupModel? = nil, onOpenBackups: (() -> Void)? = nil) {
+         backups: BackupModel? = nil, onOpenBackups: (() -> Void)? = nil,
+         activityIntegrations: ActivityIntegrationsModel? = nil, onImported: @escaping () -> Void = {}) {
         self.chatGPTLogin = chatGPTLogin
         self.model = model
         self.prompts = prompts
@@ -31,6 +35,8 @@ struct SettingsScreen: View {
         self.onEndHotkeyRecording = onEndHotkeyRecording
         self.backups = backups
         self.onOpenBackups = onOpenBackups
+        self.activityIntegrations = activityIntegrations
+        self.onImported = onImported
     }
 
     private var matchingDestinations: [SettingsDestination] {
@@ -65,6 +71,8 @@ struct SettingsScreen: View {
         .navigationTitle("설정")
         .worklogFocusContent { errorFocused = false; headingFocused = true }
         .onAppear { backups?.load() }
+        .onDisappear { apiKey = "" }
+        .onChange(of: model.aiConnection.baseURL) { _, _ in apiKey = "" }
         .onChange(of: query) { _, _ in
             if !matchingDestinations.contains(destination), let first = matchingDestinations.first {
                 destination = first
@@ -233,6 +241,8 @@ struct SettingsScreen: View {
         case .shortcuts: shortcutsSection
         case .aiConnection: aiConnectionSection
         case .aiTasks: aiTasksSection
+        case .integrations:
+            if let activityIntegrations { ActivityIntegrationSettingsView(model: activityIntegrations, onImported: onImported) }
         case .backups: backupSection
         case .secret: secretSection
         case .reminders: reminderSection
@@ -348,44 +358,53 @@ struct SettingsScreen: View {
             Divider()
             Toggle("일반 기록에 AI 사용", isOn: $model.draft.aiEnabled).toggleStyle(.switch)
             hint(SettingsModel.transmissionNotice)
-            if let login = chatGPTLogin {
+            Picker("AI 연결 방식", selection: Binding(get: { model.aiConnection.kind }, set: { model.selectConnection($0); apiKey = "" })) {
+                ForEach(AIConnectionKind.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            if model.aiConnection.kind == .codexCLI {
+                TextField("Codex CLI 실행 파일", text: Binding(get: { model.draft.codexExecutablePath ?? "" },
+                    set: { model.draft.codexExecutablePath = $0.isEmpty ? nil : $0 }), prompt: Text("자동 탐색 · ~/.local/bin/codex"))
+                    .textFieldStyle(.roundedBorder)
+                hint("설치된 Codex CLI의 로그인 계정을 사용합니다. 터미널에서 codex login으로 Enterprise 계정에 로그인한 뒤 상태를 확인하세요. WorkLog는 CLI 토큰을 읽거나 복사하지 않습니다.")
+                hint("실행 파일 경로를 비워 두면 PATH와 기본 설치 위치에서 찾습니다.")
+            } else {
+                Button("DeepSeek 기본값 사용") { model.useDeepSeekPreset(); apiKey = "" }
+                TextField("API 기본 URL", text: $model.aiConnection.baseURL, prompt: Text("https://api.deepseek.com"))
+                    .textFieldStyle(.roundedBorder)
+                TextField("기본 모델", text: $model.aiConnection.model, prompt: Text("deepseek-flash"))
+                    .textFieldStyle(.roundedBorder)
+                SecureField("API 키", text: $apiKey).textFieldStyle(.roundedBorder)
                 HStack {
-                    Button("ChatGPT로 로그인") {
-                        Task { model.accountConnectionChanged(); await login.startLogin(); model.accountConnectionChanged(); await model.checkAccount() }
-                    }.disabled(login.isLoggingIn)
-                    Button("다른 계정으로 로그인") {
-                        Task { model.accountConnectionChanged(); await login.startLogin(addAccount: true); model.accountConnectionChanged(); await model.checkAccount() }
-                    }.disabled(login.isLoggingIn)
-                    if login.isLoggingIn {
-                        ProgressView().controlSize(.small)
-                        Button("로그인 취소") { login.cancel() }
-                    } else {
-                        Button("로그아웃") { Task { await login.signOut(); model.accountConnectionChanged(); await model.checkAccount() } }
-                    }
+                    Button("API 키 저장") {
+                        Task { if await model.saveAPIKey(apiKey) { apiKey = "" } }
+                    }.disabled(apiKey.isEmpty)
+                    Button("저장된 키 삭제") { Task { apiKey = ""; await model.deleteAPIKey() } }
                 }
-                if let message = login.message { hint(message) }
+                if let message = model.apiKeyMessage { hint(message) }
+                hint("키는 입력한 API 주소별로 macOS Keychain에 저장됩니다. 주소를 바꾸면 해당 주소의 키를 따로 저장하세요. 기본 URL 아래 /chat/completions를 사용합니다.")
+                hint("DeepSeek 등 OpenAI 호환 API에는 공급자의 API 요금이 적용됩니다. JSON 출력 지원 모델을 선택하세요.")
             }
             HStack(spacing: 12) {
-                Button("로그인 상태 확인") { Task { await model.checkAccount() } }
+                Button("연결 상태 확인") { Task { await model.checkAccount() } }
                     .worklogKeyboardActivation { Task { await model.checkAccount() } }
                     .disabled(model.isCheckingAccount).focusable()
-                    .worklogHelp("ChatGPT OAuth 로그인 상태 확인")
+                    .worklogHelp("저장한 CLI 로그인 또는 API 연결 상태 확인")
                 if model.isCheckingAccount {
-                    ProgressView().controlSize(.small).accessibilityLabel("ChatGPT 로그인 상태 확인 중")
+                    ProgressView().controlSize(.small).accessibilityLabel("AI 연결 상태 확인 중")
                 }
             }
             Text(model.accountMessage)
                 .font(.callout).foregroundStyle(WorkLogTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel("ChatGPT 계정 상태: \(model.accountMessage)")
-            hint("CLI 설치 없이 공식 OAuth로 연결합니다. 현재 공개 문서는 Plus·Pro 플랜 사용을 안내하며 Enterprise 지원은 보장하지 않습니다. 조직의 사용 정책과 계정 허용 범위를 확인하세요.")
+                .accessibilityLabel("AI 연결 상태: \(model.accountMessage)")
+            if model.hasUnsavedAIConnection { hint("연결 설정을 저장한 뒤 상태 확인과 모델 조회를 실행하세요.") }
         }
     }
 
     private var aiTasksSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
-                hint("자동으로 선택되는 모델은 ChatGPT 계정의 모델 목록을 기준으로 표시합니다. 작업마다 모델과 사고 수준(Effort)을 정할 수 있으며, 변경사항을 저장하면 다음 AI 작업부터 사용합니다.")
+                hint("Codex CLI는 로그인 계정의 모델을, 호환 API는 설정한 기본 모델을 사용합니다. 작업별 모델 선택은 저장 후 다음 AI 작업부터 적용됩니다.")
                 HStack(spacing: 12) {
                     Button("모델 목록 불러오기") { Task { await model.refreshModels() } }
                         .worklogKeyboardActivation { Task { await model.refreshModels() } }
@@ -403,7 +422,7 @@ struct SettingsScreen: View {
             ForEach(AIJobType.allCases, id: \.rawValue) { type in
                 aiTaskCard(type)
             }
-            hint("명시적인 SKILL.md 파일 경로를 입력하세요. OAuth 연결은 CLI의 이름 기반 스킬 검색을 사용하지 않습니다. 기존 스킬 파일은 수정하지 않습니다.")
+            hint("명시적인 SKILL.md 파일 경로를 입력하세요. 선택한 스킬의 지침만 읽어 첨부하며 기존 스킬 파일은 수정하지 않습니다.")
             hint("프롬프트 편집 창의 저장은 일반 설정 저장과 별도로 적용됩니다.")
         }
         .task { await model.loadModelsIfNeeded() }
@@ -414,6 +433,11 @@ struct SettingsScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 hint(model.defaultProfileDescription(for: type))
                 modelPicker(type)
+                if model.aiConnection.kind == .openAICompatible {
+                    TextField("모델 직접 지정", text: Binding(get: { model.modelSelection(for: type) },
+                        set: { model.setModel($0, for: type) }), prompt: Text("비워 두면 API 기본 모델"))
+                        .textFieldStyle(.roundedBorder)
+                }
                 effortPicker(type)
                 field("추가 스킬") {
                     TextField("추가 스킬", text: Binding(
@@ -582,7 +606,7 @@ struct SettingsScreen: View {
 }
 
 private enum SettingsDestination: String, CaseIterable, Identifiable {
-    case general, shortcuts, aiConnection, aiTasks, backups, secret, reminders, updates
+    case general, shortcuts, aiConnection, aiTasks, integrations, backups, secret, reminders, updates
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -590,6 +614,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         case .shortcuts: return "단축키"
         case .aiConnection: return "AI 연결"
         case .aiTasks: return "작업별 AI"
+        case .integrations: return "활동 수집"
         case .backups: return "백업"
         case .secret: return "Secret 보호"
         case .reminders: return "검토 알림"
@@ -600,8 +625,9 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "빠른 입력의 기본 동작을 정합니다."
         case .shortcuts: return "자주 쓰는 동작을 키보드로 빠르게 실행합니다."
-        case .aiConnection: return "ChatGPT OAuth 연결과 AI 전송 범위를 확인합니다."
+        case .aiConnection: return "Codex CLI·호환 API 연결과 AI 전송 범위를 확인합니다."
         case .aiTasks: return "작업에 맞는 모델·사고 수준·스킬·프롬프트를 선택합니다."
+        case .integrations: return "GitHub Enterprise와 Jira Cloud 활동을 날짜별로 기록합니다."
         case .backups: return "기록을 안전하게 보관하고 필요할 때 복원합니다."
         case .secret: return "보관함 잠금과 클립보드 보호 시간을 정합니다."
         case .reminders: return "한 주의 기록을 돌아볼 시간을 정합니다."
@@ -614,6 +640,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         case .shortcuts: return "keyboard"
         case .aiConnection: return "network"
         case .aiTasks: return "sparkles"
+        case .integrations: return "arrow.triangle.2.circlepath"
         case .backups: return "externaldrive"
         case .secret: return "lock.shield"
         case .reminders: return "bell"
@@ -625,8 +652,9 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         switch self {
         case .general: keywords = "기본 입력 유형 메모 업무 memo task secret"
         case .shortcuts: keywords = "빠른 입력 검색 키보드 hotkey shortcut 등록 충돌"
-        case .aiConnection: keywords = "로그인 계정 OAuth ChatGPT Enterprise 회사 전송 보안"
+        case .aiConnection: keywords = "로그인 계정 Codex CLI ChatGPT Enterprise OpenAI compatible API DeepSeek 회사 전송 보안"
         case .aiTasks: keywords = "모델 model effort low medium high 사고 수준 스킬 skill prompt 프롬프트 주간보고 팀 제출용 성과자료 성과 질문 메모 업무 연결 제안 검색 계획 기록 기반 답변"
+        case .integrations: keywords = "GitHub Enterprise Jira Atlassian Cloud 사내망 VPN push PR issue 이슈 매일 토큰 연동"
         case .backups: keywords = "위치 보관 기간 복원 backup retention"
         case .secret: keywords = "잠금 복사 클립보드 보호 key 값 비밀"
         case .reminders: keywords = "월요일 시각 시간대 HH:mm reminder"

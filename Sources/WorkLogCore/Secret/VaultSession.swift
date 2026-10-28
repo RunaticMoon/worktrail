@@ -205,6 +205,9 @@ public final class VaultSession: @unchecked Sendable {
         try vault.searchTitles(query, limit: limit)
     }
 
+    /// Group names share the same local, metadata-only access as title search.
+    public func groupNames() throws -> [String] { try vault.groupNames() }
+
     // MARK: - SecretVault 파사드(잠금 게이트 통과 후에만 값 접근)
     //
     // SecretVault의 복호화·쓰기 메서드는 internal이므로 앱 계층은 이 파사드를 거쳐야 한다.

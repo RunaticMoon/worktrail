@@ -25,7 +25,8 @@ public enum OrdinaryCaptureRequest: Sendable {
               trackingMode: ProjectTrackingMode,
               tagNames: [String],
               checklist: [String],
-              links: [String])
+              links: [String],
+              dueReminderDaysBefore: Int? = nil)
 
     case activity(taskId: String,
                   body: String,
@@ -72,12 +73,13 @@ public final class LinkedCaptureService: @unchecked Sendable {
                 reference = RecordReference(kind: .memo, id: memo.id)
 
             case let .task(title, body, initialStatus, workDate, effectiveTime, dueOn,
-                           projectNames, trackingMode, tagNames, checklist, links):
+                           projectNames, trackingMode, tagNames, checklist, links, dueReminderDaysBefore):
                 let task = try tasks.createTask(title: title, initialStatus: initialStatus,
                                                 workDate: workDate, effectiveTime: effectiveTime,
                                                 dueOn: dueOn, projectNames: projectNames,
                                                 trackingMode: trackingMode, tagNames: tagNames,
-                                                checklist: checklist, note: body, links: links)
+                                                checklist: checklist, note: body, links: links,
+                                                dueReminderDaysBefore: dueReminderDaysBefore)
                 reference = RecordReference(kind: .task, id: task.id)
 
             case let .activity(taskId, body, workDate, effectiveTime, projectIds,

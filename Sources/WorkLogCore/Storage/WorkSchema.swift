@@ -10,6 +10,8 @@ public enum WorkSchema {
         Migration(version: 4, sql: v4),
         Migration(version: 5, sql: MeetingSchema.v5),
         Migration(version: 6, sql: MeetingSchema.v6),
+        Migration(version: 7, sql: "ALTER TABLE task ADD COLUMN due_reminder_days_before INTEGER CHECK (due_reminder_days_before IS NULL OR due_reminder_days_before BETWEEN 0 AND 365);"),
+        Migration(version: 8, sql: ActivityImportSchema.v8),
     ]
 
     /// v4: 일반 기록 간 무방향 수동 관련 연결. Secret 종류 없음. 정규 순서는 RecordReference.canonicalPair와 동일(UTF-8/BINARY).
