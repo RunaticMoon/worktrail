@@ -1,7 +1,7 @@
 import Foundation
 
 /// vault 키 상태. .missing이면 키가 필요한 연산은 거부한다.
-public enum VaultKeyStatus: Equatable, Sendable { case ready, missing }
+public enum VaultKeyStatus: Equatable, Sendable { case notLoaded, ready, missing }
 
 /// 저장 결과. 실제 변경이 없으면 새 revision을 만들지 않는다.
 public enum SecretSaveOutcome: Equatable, Sendable { case unchanged, saved(version: Int) }
@@ -27,8 +27,10 @@ public final class SecretVault: @unchecked Sendable {
     private let ids: IDGenerator
     private let calendar: WorkCalendar
 
-    private let keyVersionValue: String?
-    private let cachedKey: Data?
+    private let keyLock = NSLock()
+    private var keyVersionValue: String?
+    private var cachedKey: Data?
+    private var didLoadKey = false
 
     private static let metaKeyVersion = "key_version"
     private static let draftId = "draft"
@@ -37,11 +39,12 @@ public final class SecretVault: @unchecked Sendable {
     /// 초안 AAD(단일 슬롯).
     private static let draftAAD = Data("worklog.secret.draft|v1".utf8)
 
-    /// VaultSchema를 migrate하고 키 상태를 확정한다.
+    /// VaultSchema를 migrate한다. deferKeyAccess이면 키 조회·생성은 명시적 Secret 사용까지 미룬다.
     /// 최초 설치(key_version 없음)면 새 키를 만들어 KeyStore에 저장하고 key_version을 기록한다.
     /// key_version이 있는데 KeyStore에 키가 없으면 .missing으로 두고 새 키를 만들지 않는다.
     public init(db: SQLiteDatabase, keyStore: VaultKeyStore, clock: Clock = SystemClock(),
-                ids: IDGenerator = UUIDGenerator(), calendar: WorkCalendar = WorkCalendar()) throws {
+                ids: IDGenerator = UUIDGenerator(), calendar: WorkCalendar = WorkCalendar(),
+                deferKeyAccess: Bool = false) throws {
         self.db = db
         self.keyStore = keyStore
         self.clock = clock
@@ -50,12 +53,20 @@ public final class SecretVault: @unchecked Sendable {
 
         try Migrator.migrate(db, migrations: VaultSchema.migrations)
 
-        let storedVersion = try db.queryOne(
+        keyVersionValue = try db.queryOne(
             "SELECT value FROM vault_meta WHERE key = ?", [Self.metaKeyVersion])?.string("value")
+        // App launch and metadata-only search must not open the login Keychain.
+        // Direct clients retain eager initialization unless they opt into deferral.
+        if !deferKeyAccess { try prepareKey() }
+    }
 
-        if let storedVersion {
-            self.keyVersionValue = storedVersion
-            self.cachedKey = try keyStore.loadKey(id: storedVersion)
+    /// Called only for explicit Secret access. A denied/locked Keychain is retriable;
+    /// an existing key version is never replaced, even when its key is missing.
+    func prepareKey() throws {
+        keyLock.lock(); defer { keyLock.unlock() }
+        guard !didLoadKey else { return }
+        if let storedVersion = keyVersionValue {
+            cachedKey = try keyStore.loadKey(id: storedVersion)
         } else {
             let key = VaultCrypto.generateKey()
             let version = ids.make()
@@ -64,13 +75,20 @@ public final class SecretVault: @unchecked Sendable {
                 try db.run("INSERT INTO vault_meta (key, value) VALUES (?, ?)",
                            [Self.metaKeyVersion, version])
             }
-            self.keyVersionValue = version
-            self.cachedKey = key
+            keyVersionValue = version
+            cachedKey = key
         }
+        didLoadKey = true
     }
 
-    public var keyStatus: VaultKeyStatus { cachedKey == nil ? .missing : .ready }
-    public var keyVersion: String? { keyVersionValue }
+    public var keyStatus: VaultKeyStatus {
+        keyLock.lock(); defer { keyLock.unlock() }
+        return didLoadKey ? (cachedKey == nil ? .missing : .ready) : .notLoaded
+    }
+    public var keyVersion: String? {
+        keyLock.lock(); defer { keyLock.unlock() }
+        return keyVersionValue
+    }
 
     // MARK: - 생성 · 저장
 
@@ -343,6 +361,8 @@ public final class SecretVault: @unchecked Sendable {
     // MARK: - 내부
 
     private func requireKey() throws -> Data {
+        try prepareKey()
+        keyLock.lock(); defer { keyLock.unlock() }
         guard let key = cachedKey else { throw WorkLogError.vaultKeyMissing }
         return key
     }

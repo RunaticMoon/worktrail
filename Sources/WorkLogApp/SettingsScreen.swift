@@ -247,6 +247,7 @@ struct SettingsScreen: View {
         case .secret: secretSection
         case .reminders: reminderSection
         case .updates: UpdateSettingsSection()
+        case .diagnostics: DiagnosticSettingsSection()
         }
     }
 
@@ -606,7 +607,7 @@ struct SettingsScreen: View {
 }
 
 private enum SettingsDestination: String, CaseIterable, Identifiable {
-    case general, shortcuts, aiConnection, aiTasks, integrations, backups, secret, reminders, updates
+    case general, shortcuts, aiConnection, aiTasks, integrations, backups, secret, reminders, updates, diagnostics
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -619,6 +620,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         case .secret: return "Secret 보호"
         case .reminders: return "검토 알림"
         case .updates: return "앱 업데이트"
+        case .diagnostics: return "진단 로그"
         }
     }
     var subtitle: String {
@@ -632,6 +634,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         case .secret: return "보관함 잠금과 클립보드 보호 시간을 정합니다."
         case .reminders: return "한 주의 기록을 돌아볼 시간을 정합니다."
         case .updates: return "WorkLog 버전을 확인하고 업데이트를 관리합니다."
+        case .diagnostics: return "문제 해결에 필요한 진단 로그를 저장하고 제출합니다."
         }
     }
     var symbol: String {
@@ -645,6 +648,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         case .secret: return "lock.shield"
         case .reminders: return "bell"
         case .updates: return "arrow.down.circle"
+        case .diagnostics: return "doc.text.magnifyingglass"
         }
     }
     var searchText: String {
@@ -659,6 +663,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
         case .secret: keywords = "잠금 복사 클립보드 보호 key 값 비밀"
         case .reminders: keywords = "월요일 시각 시간대 HH:mm reminder"
         case .updates: keywords = "버전 자동 확인 다운로드 update"
+        case .diagnostics: keywords = "진단 로그 오류 에러 녹음 마이크 Keychain 리포트 다운로드 제출 diagnostics log error"
         }
         return "\(title) \(subtitle) \(keywords)"
     }

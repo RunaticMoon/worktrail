@@ -122,7 +122,8 @@ public final class AppEnvironment {
     /// 3) work.sqlite / vault.sqlite를 각각 별도 SQLiteDatabase로 연다(두 파일 분리) 4) 서비스 조립
     /// 5) AIPayloadGuard.blockedSubstrings = [vault DB 경로, vault 디렉터리, backupRoot]
     /// 6) aiProvider가 nil이거나 settings.aiEnabled == false면 aiRunner/memoLinks/quiz/groundedAnswers = nil
-    public static func open(_ options: AppEnvironmentOptions) throws -> AppEnvironment {
+    public static func open(_ options: AppEnvironmentOptions,
+                            onStorageError: @escaping @Sendable (Int32) -> Void = { _ in }) throws -> AppEnvironment {
         let paths = options.paths
         try paths.createDirectories()
 
@@ -133,8 +134,8 @@ public final class AppEnvironment {
             ?? TimeZone(identifier: "Asia/Seoul")!
         let calendar = WorkCalendar(timeZone: timeZone)
 
-        let workDB = try SQLiteDatabase(path: paths.workDatabase.path)
-        let vaultDB = try SQLiteDatabase(path: paths.vaultDatabase.path)
+        let workDB = try SQLiteDatabase(path: paths.workDatabase.path, onError: onStorageError)
+        let vaultDB = try SQLiteDatabase(path: paths.vaultDatabase.path, onError: onStorageError)
 
         let repo = try WorkRepository(db: workDB, clock: options.clock, ids: options.ids,
                                       calendar: calendar)
@@ -149,7 +150,7 @@ public final class AppEnvironment {
         let reportStore = ReportStore(repo: repo)
 
         let vault = try SecretVault(db: vaultDB, keyStore: options.keyStore, clock: options.clock,
-                                    ids: options.ids, calendar: calendar)
+                                    ids: options.ids, calendar: calendar, deferKeyAccess: true)
         let vaultSession = VaultSession(vault: vault, authenticator: options.authenticator,
                                         clock: options.clock,
                                         idleTimeout: TimeInterval(settings.secretIdleLockMinutes * 60))

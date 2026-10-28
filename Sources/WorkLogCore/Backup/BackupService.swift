@@ -455,7 +455,7 @@ public final class BackupService: @unchecked Sendable {
 
     /// `target`에 백업을 복원한다.
     ///
-    /// 순서: verify → (includeVault면) 키 존재 확인(없으면 `.vaultKeyMissing`, 아무 파일도 바꾸지 않음)
+    /// 순서: verify → (includeVault면) 키 확인 또는 미초기화된 빈 vault 확인(실패하면 대상 불변)
     /// → target의 기존 데이터를 preRestore 백업으로 보존 → 검증된 사본을 임시 이름으로 복사·해시 재확인
     /// → 대상 DB의 -wal/-shm 제거 후 rename으로 교체.
     ///
@@ -482,15 +482,18 @@ public final class BackupService: @unchecked Sendable {
 
         let hasVault = manifest.files.contains { $0.name == vaultFileName }
         if includeVault, hasVault {
-            guard let keyVersion = manifest.vaultKeyVersion else {
-                throw BackupFailure.vaultKeyMissing(keyVersion: nil)
+            if let keyVersion = manifest.vaultKeyVersion {
+                let key = try? keyStore.loadKey(id: keyVersion)
+                guard let key, !key.isEmpty else {
+                    throw BackupFailure.vaultKeyMissing(keyVersion: keyVersion)
+                }
+                // 대상 파일을 하나도 바꾸기 전에 실제 복호화가 되는지 시험한다.
+                try probeVaultDecryptable(directory: backup.directory, keyVersion: keyVersion, key: key)
+            } else {
+                // First launch now defers Keychain creation until explicit Secret use.
+                // Only that exact empty state can be restored without a key.
+                try verifyUninitializedVault(directory: backup.directory, schemaVersion: manifest.vaultSchemaVersion)
             }
-            let key = try? keyStore.loadKey(id: keyVersion)
-            guard let key, !key.isEmpty else {
-                throw BackupFailure.vaultKeyMissing(keyVersion: keyVersion)
-            }
-            // 대상 파일을 하나도 바꾸기 전에 실제 복호화가 되는지 시험한다.
-            try probeVaultDecryptable(directory: backup.directory, keyVersion: keyVersion, key: key)
         }
 
         var restoreNames: [String] = []
@@ -582,6 +585,36 @@ public final class BackupService: @unchecked Sendable {
         } catch {
             for item in prepared { try? fm.removeItem(at: item.temp) }
             throw BackupFailure.from(error)
+        }
+    }
+
+    /// Read-only verification: no metadata, revisions, drafts, or unexpected schema
+    /// may be mistaken for a never-initialized vault. The schema source stays VaultSchema.
+    private static func verifyUninitializedVault(directory: URL, schemaVersion: Int) throws {
+        do {
+            guard VaultSchema.migrations.contains(where: { $0.version == schemaVersion }) else {
+                throw BackupFailure.vaultKeyMissing(keyVersion: nil)
+            }
+            let db = try SQLiteDatabase(path: directory.appendingPathComponent(vaultFileName).path, readOnly: true)
+            defer { db.close() }
+            guard db.userVersion == schemaVersion else { throw BackupFailure.vaultKeyMissing(keyVersion: nil) }
+            let expected = try SQLiteDatabase(path: ":memory:")
+            defer { expected.close() }
+            try Migrator.migrate(expected, migrations: VaultSchema.migrations.filter { $0.version <= schemaVersion })
+            let schemaSQL = "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name"
+            let actualSchema = try db.query(schemaSQL).map { [$0.string("type"), $0.string("name"), $0.string("tbl_name"), $0.string("sql")] }
+            let expectedSchema = try expected.query(schemaSQL).map { [$0.string("type"), $0.string("name"), $0.string("tbl_name"), $0.string("sql")] }
+            guard actualSchema == expectedSchema,
+                  try db.scalarInt("""
+                    SELECT (SELECT COUNT(*) FROM vault_meta)
+                         + (SELECT COUNT(*) FROM secret_group)
+                         + (SELECT COUNT(*) FROM secret_item)
+                         + (SELECT COUNT(*) FROM secret_revision)
+                         + (SELECT COUNT(*) FROM secret_draft)
+                    """) == 0 else { throw BackupFailure.vaultKeyMissing(keyVersion: nil) }
+        } catch {
+            // Do not disclose Secret metadata or allow a damaged/missing schema.
+            throw BackupFailure.vaultKeyMissing(keyVersion: nil)
         }
     }
 

@@ -22,6 +22,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
         let transport = FakeCompatibleTransport(responses: [try response()])
         let provider = OpenAICompatibleProvider(settings: settings, credentials: credentials, transport: transport)
         let result = try await provider.run(input)
+        XCTAssertEqual(credentials.interactionPolicies, [false], "Scheduled AI work must not open Keychain authentication UI")
         XCTAssertEqual(result.rawJSON, #"{"query":"fixture"}"#)
         XCTAssertEqual(result.providerRef, "fixture-response")
         let requests = await transport.requests
@@ -90,6 +91,7 @@ final class OpenAICompatibleProviderTests: XCTestCase {
             body: Data(#"{"data":[{"id":"fixture"},{"id":"fixture"},{"id":"second"}]}"#.utf8))])
         let provider = OpenAICompatibleProvider(settings: settings, credentials: credentials, transport: transport)
         let models = try await provider.listAvailableModels()
+        XCTAssertEqual(credentials.interactionPolicies, [true], "Explicit model lookup can authorize an existing Keychain item")
         XCTAssertEqual(models.map(\.id), ["fixture", "second"])
         XCTAssertEqual(models.first?.isDefault, true)
         XCTAssertEqual(models.first?.supportedEfforts, [])
@@ -100,6 +102,11 @@ final class FakeServiceCredentials: ServiceCredentialStore, @unchecked Sendable 
     private let lock = NSLock()
     private var values: [String: String] = [:]
     private(set) var reads = 0
+    private(set) var interactionPolicies: [Bool] = []
+    func read(account: String, allowAuthenticationUI: Bool) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        reads += 1; interactionPolicies.append(allowAuthenticationUI); return values[account]
+    }
     func read(account: String) throws -> String? {
         lock.lock(); defer { lock.unlock() }; reads += 1; return values[account]
     }

@@ -29,7 +29,7 @@ mkdir "$check_dir/sources"
 # a Swift input halfway through this independent verification process.
 for source in MeetingAudioArchive MeetingImportedAudioArchive MeetingAudioCapture MeetingPCMReader MeetingLocalModels \
               MeetingModelRegistry MeetingWhisperEngine MeetingDiarizationEngine \
-              MeetingPostProcessing MeetingRecordingSession MeetingsModel MeetingAudioRecorder; do
+              MeetingPostProcessing MeetingRecordingSession MeetingsModel MeetingAudioRecorder AppDiagnostics; do
     cp "$repo_root/Sources/WorkLogApp/$source.swift" "$check_dir/sources/$source.swift"
 done
 cp "$repo_root/scripts/maclab/meeting-session-check.swift" "$check_dir/sources/meeting-session-check.swift"
@@ -38,4 +38,4 @@ xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" \
     "$bin_dir/WorkLogCore.o" "$bin_dir/Crypto.o" "$bin_dir/ArgmaxCore.o" \
     "$bin_dir/WhisperKit.o" "$bin_dir/SpeakerKit.o" \
     "$check_dir/sources/"*.swift -o "$check_dir/check"
-sandbox-exec -p '(version 1)(allow default)(deny network*)' "$check_dir/check" "$check_dir"
+WORKLOG_DIAGNOSTICS_DISABLED=1 sandbox-exec -p '(version 1)(allow default)(deny network*)' "$check_dir/check" "$check_dir"

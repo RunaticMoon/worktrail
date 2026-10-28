@@ -146,6 +146,7 @@ public final class VaultSession: @unchecked Sendable {
     /// 이미 unlocked(만료 전)면 인증 없이 활동만 갱신한다.
     /// 인증 결과가 success가 아니면 vaultLocked를 던지고 locked를 유지한다.
     public func unlock(reason: String) async throws {
+        try vault.prepareKey()
         guard vault.keyStatus == .ready else {
             throw WorkLogError.vaultKeyMissing
         }

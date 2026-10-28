@@ -84,10 +84,15 @@ public final class SQLiteDatabase: @unchecked Sendable {
     public let path: String
     private var handle: OpaquePointer?
     private let lock = NSRecursiveLock()
+    /// Error codes only: never pass SQL, bound values, paths, or SQLite error messages to diagnostics.
+    /// Runs while the connection is locked; consumers should enqueue work without re-entering SQLite.
+    private let onError: @Sendable (Int32) -> Void
 
     /// path가 ":memory:"이면 메모리 DB.
-    public init(path: String, readOnly: Bool = false) throws {
+    public init(path: String, readOnly: Bool = false,
+                onError: @escaping @Sendable (Int32) -> Void = { _ in }) throws {
         self.path = path
+        self.onError = onError
         if path != ":memory:" {
             let dir = (path as NSString).deletingLastPathComponent
             if !dir.isEmpty {
@@ -109,7 +114,7 @@ public final class SQLiteDatabase: @unchecked Sendable {
         guard rc == SQLITE_OK, let db else {
             let msg = db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
             sqlite3_close(db)
-            throw SQLiteError(code: rc, message: msg)
+            throw error(rc, message: msg)
         }
         handle = db
         sqlite3_busy_timeout(db, 5000)
@@ -139,20 +144,21 @@ public final class SQLiteDatabase: @unchecked Sendable {
 
     var rawHandle: OpaquePointer? { handle }
 
-    private func error(_ rc: Int32) -> SQLiteError {
-        SQLiteError(code: rc, message: handle.map { String(cString: sqlite3_errmsg($0)) } ?? "closed")
+    private func error(_ rc: Int32, message: String? = nil) -> SQLiteError {
+        onError(rc)
+        return SQLiteError(code: rc, message: message ?? handle.map { String(cString: sqlite3_errmsg($0)) } ?? "closed")
     }
 
     /// 여러 문장을 실행(파라미터 없음). migration DDL에 사용.
     public func execute(_ sql: String) throws {
         lock.lock(); defer { lock.unlock() }
-        guard let handle else { throw SQLiteError(code: SQLITE_MISUSE, message: "closed") }
+        guard let handle else { throw error(SQLITE_MISUSE) }
         var err: UnsafeMutablePointer<CChar>?
         let rc = sqlite3_exec(handle, sql, nil, nil, &err)
         if rc != SQLITE_OK {
             let msg = err.map { String(cString: $0) } ?? "exec failed"
             sqlite3_free(err)
-            throw SQLiteError(code: rc, message: msg)
+            throw error(rc, message: msg)
         }
     }
 
@@ -227,25 +233,25 @@ public final class SQLiteDatabase: @unchecked Sendable {
     /// 실행 중에도 일관된 snapshot을 dest 경로에 만든다 (SQLite Online Backup API).
     public func backup(to destinationPath: String) throws {
         lock.lock(); defer { lock.unlock() }
-        guard let handle else { throw SQLiteError(code: SQLITE_MISUSE, message: "closed") }
+        guard let handle else { throw error(SQLITE_MISUSE) }
         var dest: OpaquePointer?
         let rc = sqlite3_open_v2(destinationPath, &dest, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
-        guard rc == SQLITE_OK, let dest else { sqlite3_close(dest); throw SQLiteError(code: rc, message: "backup open failed") }
+        guard rc == SQLITE_OK, let dest else { sqlite3_close(dest); throw error(rc, message: "backup open failed") }
         defer { sqlite3_close(dest) }
         guard let b = sqlite3_backup_init(dest, "main", handle, "main") else {
-            throw SQLiteError(code: sqlite3_errcode(dest), message: String(cString: sqlite3_errmsg(dest)))
+            throw error(sqlite3_errcode(dest), message: String(cString: sqlite3_errmsg(dest)))
         }
         let step = sqlite3_backup_step(b, -1)
         let fin = sqlite3_backup_finish(b)
         guard step == SQLITE_DONE, fin == SQLITE_OK else {
-            throw SQLiteError(code: step == SQLITE_DONE ? fin : step, message: "backup step failed")
+            throw error(step == SQLITE_DONE ? fin : step, message: "backup step failed")
         }
         // 원본이 WAL이면 사본 헤더도 WAL로 남는다. macOS 시스템 SQLite는 -shm을 만들 수 없는
         // 읽기 전용 연결로 WAL DB를 열지 못하므로(SQLITE_CANTOPEN), 사본은 단일 파일(DELETE 저널)로 둔다.
         // 복원 후 읽기·쓰기로 열면 init에서 다시 WAL로 바뀐다.
         let mode = sqlite3_exec(dest, "PRAGMA journal_mode = DELETE", nil, nil, nil)
         guard mode == SQLITE_OK else {
-            throw SQLiteError(code: mode, message: String(cString: sqlite3_errmsg(dest)))
+            throw error(mode, message: String(cString: sqlite3_errmsg(dest)))
         }
     }
 
@@ -287,10 +293,10 @@ public final class SQLiteDatabase: @unchecked Sendable {
     }
 
     private func prepare(_ sql: String, _ params: [SQLBindable]) throws -> OpaquePointer {
-        guard let handle else { throw SQLiteError(code: SQLITE_MISUSE, message: "closed") }
+        guard let handle else { throw error(SQLITE_MISUSE) }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(handle, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK, let stmt else { throw error(rc) }
+        guard rc == SQLITE_OK, let stmt else { throw error(rc == SQLITE_OK ? SQLITE_MISUSE : rc) }
         let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         for (i, p) in params.enumerated() {
             let idx = Int32(i + 1)

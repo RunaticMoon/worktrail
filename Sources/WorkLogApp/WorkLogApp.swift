@@ -36,6 +36,19 @@ enum WorkLogEntryPoint {
         .commands {
             WorkLogFocusCommands()
             CommandGroup(after: .appInfo) { CheckForUpdatesButton() }
+            CommandGroup(after: .help) {
+                Button("진단 리포트 저장…") {
+                    Task {
+                        if let message = await DiagnosticReportExporter.save() {
+                            let alert = NSAlert()
+                            alert.messageText = "진단 리포트"
+                            alert.informativeText = message
+                            alert.addButton(withTitle: "확인")
+                            alert.runModal()
+                        }
+                    }
+                }
+            }
             CommandGroup(after: .sidebar) {
                 ForEach(Array(SidebarRoute.numbered.enumerated()), id: \.element.id) { index, route in
                     Button(route.title) { controller.navigate(to: route) }

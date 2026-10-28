@@ -600,6 +600,7 @@ actor MeetingLocalModelStore {
     }
 
     func prepare(_ role: MeetingModelRole) async throws {
+        AppDiagnostics.shared.record(.operationStarted, category: .transcription)
         guard !isPreparing else { throw MeetingLocalModelError.busy }
         generation += 1
         let expectedGeneration = generation
@@ -620,8 +621,10 @@ actor MeetingLocalModelStore {
             try await withTaskCancellationHandler { try await operation.value } onCancel: { operation.cancel() }
             try Task.checkCancellation()
             readyRoles.insert(role)
+            AppDiagnostics.shared.record(.operationSucceeded, category: .transcription)
             message = "\(role.label) 준비됨 · 음성은 이 Mac에서 처리됩니다."
         } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .transcription)
             message = error is CancellationError ? "모델 준비를 취소했습니다. 검증된 파일은 재시도에 사용합니다." : error.localizedDescription
             throw error
         }

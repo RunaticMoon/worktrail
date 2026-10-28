@@ -57,6 +57,8 @@ enum MeetingAudioCaptureError: LocalizedError {
     private var notificationObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var deviceObservers: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var sessionTimer: Timer?
+    private var microphoneConfiguration: MeetingMicrophoneConfigurationPolicy?
+    private var captureGeneration = 0
     private var starting = false
     private var stopRequested = false
     private var stopping: Task<MeetingAudioArchiveSnapshot?, Never>?
@@ -91,17 +93,25 @@ enum MeetingAudioCaptureError: LocalizedError {
                onEvent: @escaping @Sendable (MeetingCaptureEvent) -> Void) async throws {
         guard !starting, writer == nil, engine == nil, stream == nil else { throw MeetingAudioCaptureError.busy }
         starting = true; stopRequested = false; stopping = nil
+        captureGeneration += 1
+        let generation = captureGeneration
+        AppDiagnostics.shared.record(.operationStarted, category: .recording, fields: [.phase: .state(.starting)])
         defer { starting = false }
         guard Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") is String else { throw MeetingAudioCaptureError.missingUsageDescription }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: break
         case .notDetermined:
+            AppDiagnostics.shared.record(.permissionRequested, category: .recording)
             let permission = MeetingCaptureAuthorizationWait()
             let allowed = try await permission.wait { reply in AVCaptureDevice.requestAccess(for: .audio, completionHandler: reply) }
+            AppDiagnostics.shared.record(.permissionResult, category: .recording, fields: [.permissionGranted: .flag(allowed)])
             guard allowed else {
                 throw MeetingAudioCaptureError.microphonePermission
             }
-        default: throw MeetingAudioCaptureError.microphonePermission
+        default:
+            AppDiagnostics.shared.record(.permissionResult, category: .recording, level: .warning,
+                fields: [.permissionGranted: .flag(false)])
+            throw MeetingAudioCaptureError.microphonePermission
         }
         try checkStart()
         let microphoneUID: String
@@ -130,12 +140,19 @@ enum MeetingAudioCaptureError: LocalizedError {
         let originalWriter = try MeetingAudioArchiveWriter(archive: MeetingAudioArchive(root: archiveRoot),
             recordingID: recordingID, meetingID: meetingID, clock: wallClock, onPCM: onPCM,
             onLevel: { track, rms in onEvent(.level(track: track, rms: rms)) },
-            onFailure: { [weak self] error in Task { @MainActor in await self?.fail(error) } })
+            onFailure: { [weak self] error in Task { @MainActor in
+                guard let self, self.captureGeneration == generation else { return }
+                await self.fail(error)
+            } })
         writer = originalWriter
         let receiver = MeetingCaptureSink(writer: originalWriter, clock: clock,
-            onFailure: { [weak self] error in Task { @MainActor in await self?.fail(error) } })
+            onFailure: { [weak self] error in Task { @MainActor in
+                guard let self, self.captureGeneration == generation else { return }
+                await self.fail(error)
+            } })
         sink = receiver
         do {
+            var tapFormat: AVAudioFormat?
             if let filter {
                 let configuration = SCStreamConfiguration()
                 configuration.width = 2; configuration.height = 2
@@ -157,27 +174,37 @@ enum MeetingAudioCaptureError: LocalizedError {
             } else {
                 let capture = AVAudioEngine()
                 engine = capture
+                observe(NotificationCenter.default, name: .AVAudioEngineConfigurationChange, object: capture) { [weak self, weak capture] in
+                    guard let self, let capture, self.engine === capture, self.captureGeneration == generation else { return }
+                    await self.checkMicrophoneConfiguration(device: device)
+                }
                 try capture.inputNode.auAudioUnit.setDeviceID(device)
                 guard capture.inputNode.auAudioUnit.deviceID == device else { throw MeetingAudioCaptureError.missingDevice }
                 let format = capture.inputNode.outputFormat(forBus: 0)
                 guard format.sampleRate > 0, format.channelCount > 0 else { throw MeetingAudioCaptureError.invalidFormat }
+                tapFormat = format
                 capture.inputNode.installTap(onBus: 0, bufferSize: 8_192, format: format, block: MeetingMicrophoneTap.make { buffer, time in
                     receiver.receiveMicrophone(buffer, at: time)
                 })
                 microphoneTapInstalled = true
                 capture.prepare()
                 try capture.start()
-                observe(NotificationCenter.default, name: .AVAudioEngineConfigurationChange, object: capture) { [weak self] in
-                    await self?.fail("녹음 중 마이크 구성이 변경되었습니다. 자동 장치 전환 없이 원본을 보존하고 중단했습니다.")
-                }
             }
             try checkStart()
             // Selecting/starting a device can itself change its stream format.
             // Observe external changes only after that startup has completed.
+            guard let hardware = MeetingAudioDeviceCatalog.configuration(device) else { throw MeetingAudioCaptureError.missingDevice }
+            microphoneConfiguration = MeetingMicrophoneConfigurationPolicy(expected: .init(deviceID: device,
+                hardware: hardware, format: tapFormat))
             installObservers(device: device)
             installSessionMonitor(mode: mode, deviceID: device, receiver: receiver)
+            AppDiagnostics.shared.record(.recordingStarted, category: .recording, fields: [
+                .inputSampleRate: .decimal(hardware.sampleRate),
+                .inputChannelCount: .integer(hardware.channelCounts.reduce(0) { $0 + Int($1) }),
+                .engineRunning: .flag(engine?.isRunning ?? true)])
             onEvent(.started)
         } catch {
+            AppDiagnostics.shared.recordFailure(error, category: .recording)
             _ = await stop(reason: error.localizedDescription)
             throw error
         }
@@ -194,6 +221,7 @@ enum MeetingAudioCaptureError: LocalizedError {
         let captureStream = stream; stream = nil
         let startup = streamStartTask
         let originalWriter = writer
+        microphoneConfiguration = nil
         removeObservers()
         let event = onEvent
         let task = Task { @MainActor () -> MeetingAudioArchiveSnapshot? in
@@ -209,6 +237,9 @@ enum MeetingAudioCaptureError: LocalizedError {
             }
             guard let originalWriter else { return nil }
             let result = await originalWriter.finish(reason: failure)
+            AppDiagnostics.shared.record(.recordingStopped, category: .recording,
+                level: result.error == nil ? .info : .error,
+                fields: [.reason: .state(result.error == nil ? .stopped : .failed), .itemCount: .integer(result.tracks.count)])
             event?(.stopped(result))
             return result
         }
@@ -223,46 +254,116 @@ enum MeetingAudioCaptureError: LocalizedError {
         guard !stopRequested else { throw CancellationError() }
     }
 
-    private func fail(_ message: String) async {
+    private func fail(_ message: String, reason: DiagnosticState = .failed) async {
         guard writer != nil, stopping == nil else { return }
+        AppDiagnostics.shared.record(.operationFailed, category: .recording, level: .error,
+            fields: [.phase: .state(.running), .reason: .state(reason)])
         onEvent?(.failed(message))
         _ = await stop(reason: message)
     }
 
     private func observe(_ center: NotificationCenter, name: Notification.Name, object: AnyObject? = nil,
                          action: @escaping @MainActor () async -> Void) {
-        let token = center.addObserver(forName: name, object: object, queue: .main) { _ in Task { @MainActor in await action() } }
+        let generation = captureGeneration
+        let token = center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.captureGeneration == generation, self.writer != nil, self.stopping == nil else { return }
+                await action()
+            }
+        }
         notificationObservers.append((center, token))
     }
 
+    /// The engine notification covers output changes too, and can arrive after
+    /// our own startup. Only changes to the selected input invalidate this archive.
+    private func checkMicrophoneConfiguration(device: AudioObjectID) async {
+        guard writer != nil, stopping == nil, var policy = microphoneConfiguration else { return }
+        let current = MeetingAudioDeviceCatalog.configuration(device).map {
+            MeetingMicrophoneConfigurationPolicy.Configuration(deviceID: engine?.inputNode.auAudioUnit.deviceID ?? device,
+                hardware: $0, format: engine?.inputNode.outputFormat(forBus: 0))
+        }
+        let action = policy.action(current: current, engineRunning: engine?.isRunning,
+            microphoneBuffers: sink?.microphoneBufferCount ?? 0)
+        microphoneConfiguration = policy
+        var fields: [DiagnosticField: DiagnosticValue] = [
+            .inputDeviceMatches: .flag(current?.deviceID == policy.expected.deviceID),
+            .engineRunning: .flag(engine?.isRunning ?? true),
+            .bufferCount: .integer(Int(clamping: sink?.microphoneBufferCount ?? 0))]
+        if let current {
+            fields[.inputSampleRate] = .decimal(current.hardware.sampleRate)
+            fields[.inputChannelCount] = .integer(current.hardware.channelCounts.reduce(0) { $0 + Int($1) })
+            if let format = current.format {
+                fields[.engineSampleRate] = .decimal(format.sampleRate)
+                fields[.engineChannelCount] = .integer(Int(format.channelCount))
+            }
+        }
+        AppDiagnostics.shared.record(.audioConfigurationObserved, category: .recording, fields: fields)
+        switch action {
+        case .continueRecording:
+            AppDiagnostics.shared.record(.audioConfigurationIgnored, category: .recording, fields: [.reason: .state(.unchanged)])
+            return
+        case .deviceUnavailable:
+            AppDiagnostics.shared.record(.deviceUnavailable, category: .recording, level: .error)
+            await fail(MeetingAudioCaptureError.missingDevice.localizedDescription, reason: .missing)
+        case .inputChanged:
+            AppDiagnostics.shared.record(.audioConfigurationChanged, category: .recording, level: .error, fields: fields)
+            await fail("녹음 중 마이크 구성이 변경되었습니다. 자동 장치 전환 없이 원본을 보존하고 중단했습니다.", reason: .changed)
+        case .restartExhausted:
+            AppDiagnostics.shared.record(.operationFailed, category: .recording, level: .error,
+                fields: [.reason: .state(.unavailable), .recovered: .flag(false)])
+            await fail("마이크 엔진이 반복해서 중단되었습니다. 다른 장치로 전환하지 않고 저장된 원본을 보존했습니다.", reason: .unavailable)
+        case .restartSameInput:
+            guard let engine else { return }
+            do {
+                // Nodes and the tap remain attached after configuration changes.
+                // Do not select another device or alter the archive's PCM format.
+                engine.prepare()
+                try engine.start()
+                await checkMicrophoneConfiguration(device: device)
+                if self.engine === engine, engine.isRunning {
+                    AppDiagnostics.shared.record(.operationSucceeded, category: .recording,
+                        fields: [.recovered: .flag(true), .reason: .state(.unchanged)])
+                }
+            } catch {
+                AppDiagnostics.shared.recordFailure(error, category: .recording)
+                await fail("선택한 마이크의 녹음을 재개하지 못했습니다. 저장된 원본을 보존하고 중단했습니다.", reason: .unavailable)
+            }
+        }
+    }
+
     private func installObservers(device: AudioObjectID) {
+        let generation = captureGeneration
         observe(NSWorkspace.shared.notificationCenter, name: NSWorkspace.willSleepNotification) { [weak self] in
-            await self?.fail("Mac이 잠자기에 들어가 녹음을 종료했습니다. 저장된 원본은 보존했습니다.")
+            await self?.fail("Mac이 잠자기에 들어가 녹음을 종료했습니다. 저장된 원본은 보존했습니다.", reason: .stopped)
         }
         for selector in [kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreamConfiguration] {
             var address = AudioObjectPropertyAddress(mSelector: selector,
                 mScope: selector == kAudioDevicePropertyStreamConfiguration ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain)
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                Task { @MainActor in await self?.fail("선택한 마이크가 분리되었거나 형식이 변경되었습니다. 다른 마이크로 전환하지 않고 중단했습니다.") }
+                Task { @MainActor in
+                    guard let self, self.captureGeneration == generation else { return }
+                    await self.checkMicrophoneConfiguration(device: device)
+                }
             }
             if AudioObjectAddPropertyListenerBlock(device, &address, .main, block) == noErr { deviceObservers.append((device, address, block)) }
         }
     }
 
     private func installSessionMonitor(mode: MeetingCaptureMode, deviceID: AudioObjectID, receiver: MeetingCaptureSink) {
+        let generation = captureGeneration
         sessionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self, weak receiver] _ in
             Task { @MainActor in
-                guard let self, self.writer != nil, self.stopping == nil else { return }
+                guard let self, self.captureGeneration == generation, self.writer != nil, self.stopping == nil else { return }
                 if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-                    await self.fail(MeetingAudioCaptureError.microphonePermission.localizedDescription)
+                    await self.fail(MeetingAudioCaptureError.microphonePermission.localizedDescription, reason: .denied)
                 } else if !MeetingAudioDeviceCatalog.devices().contains(deviceID)
                             || (self.engine != nil && self.engine?.inputNode.auAudioUnit.deviceID != deviceID) {
-                    await self.fail(MeetingAudioCaptureError.missingDevice.localizedDescription)
+                    await self.fail(MeetingAudioCaptureError.missingDevice.localizedDescription, reason: .missing)
                 } else if case .online(let pid, _) = mode, NSRunningApplication(processIdentifier: pid)?.isTerminated != false {
-                    await self.fail(MeetingAudioCaptureError.missingApplication.localizedDescription)
+                    await self.fail(MeetingAudioCaptureError.missingApplication.localizedDescription, reason: .notFound)
                 } else if receiver?.microphoneStalled == true {
-                    await self.fail("선택한 마이크에서 8초 동안 PCM을 받지 못했습니다. 장치나 권한을 확인해 주세요. 저장한 원본을 보존하고 중단했습니다.")
+                    await self.fail("선택한 마이크에서 8초 동안 PCM을 받지 못했습니다. 장치나 권한을 확인해 주세요. 저장한 원본을 보존하고 중단했습니다.", reason: .timeout)
                 }
             }
         }
@@ -277,6 +378,44 @@ enum MeetingAudioCaptureError: LocalizedError {
         }
         deviceObservers.removeAll()
         sessionTimer?.invalidate(); sessionTimer = nil
+    }
+}
+
+/// Notifications are hints to inspect the input, not proof that it changed.
+/// One same-input restart is allowed until another microphone buffer arrives;
+/// a stopped engine cannot enter an endless notification/restart loop.
+struct MeetingMicrophoneConfigurationPolicy {
+    struct Hardware: Equatable {
+        let sampleRate: Double
+        let channelCounts: [UInt32]
+    }
+    struct Configuration {
+        let deviceID: AudioObjectID
+        let hardware: Hardware
+        let format: AVAudioFormat?
+
+        func hasSameInput(as other: Self) -> Bool {
+            guard hardware == other.hardware else { return false }
+            switch (format, other.format) {
+            case (nil, nil): return true
+            case (let left?, let right?): return left.isEqual(right)
+            default: return false
+            }
+        }
+    }
+    enum Action: Equatable { case continueRecording, restartSameInput, deviceUnavailable, inputChanged, restartExhausted }
+    let expected: Configuration
+    private var restartedAfterBufferCount: UInt64?
+
+    init(expected: Configuration) { self.expected = expected }
+
+    mutating func action(current: Configuration?, engineRunning: Bool?, microphoneBuffers: UInt64) -> Action {
+        guard let current, current.deviceID == expected.deviceID else { return .deviceUnavailable }
+        guard current.hasSameInput(as: expected) else { return .inputChanged }
+        guard engineRunning == false else { return .continueRecording }
+        guard restartedAfterBufferCount != microphoneBuffers else { return .restartExhausted }
+        restartedAfterBufferCount = microphoneBuffers
+        return .restartSameInput
     }
 }
 
@@ -340,6 +479,7 @@ private final class MeetingCaptureSink: NSObject, SCStreamOutput, SCStreamDelega
     private var closed = false
     private var reportedFailure = false
     private var lastMicrophoneTime: Double?
+    private var microphoneBuffers: UInt64 = 0
     private let onFailure: @Sendable (String) -> Void
 
     init(writer: MeetingAudioArchiveWriter, clock: any MeetingMonotonicClock,
@@ -354,6 +494,7 @@ private final class MeetingCaptureSink: NSObject, SCStreamOutput, SCStreamDelega
         lock.lock(); let last = lastMicrophoneTime ?? origin; lock.unlock()
         return clock.seconds() - last > 8
     }
+    var microphoneBufferCount: UInt64 { lock.lock(); defer { lock.unlock() }; return microphoneBuffers }
 
     func receiveMicrophone(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime) {
         guard !isClosed else { return }
@@ -394,7 +535,9 @@ private final class MeetingCaptureSink: NSObject, SCStreamOutput, SCStreamDelega
             let packet = try alreadyOwned
                 ? MeetingCapturedPCM(track: track, buffer: buffer, relativeStartSeconds: max(0, start))
                 : MeetingCapturedPCM.copy(track: track, buffer: buffer, relativeStartSeconds: max(0, start))
-            if track == .microphone { lock.lock(); lastMicrophoneTime = clock.seconds(); lock.unlock() }
+            if track == .microphone {
+                lock.lock(); lastMicrophoneTime = clock.seconds(); microphoneBuffers &+= 1; lock.unlock()
+            }
             _ = writer.enqueue(packet)
         } catch { fail(error) }
     }
@@ -410,6 +553,17 @@ private final class MeetingCaptureSink: NSObject, SCStreamOutput, SCStreamDelega
 }
 
 private enum MeetingAudioDeviceCatalog {
+    static func configuration(_ device: AudioObjectID) -> MeetingMicrophoneConfigurationPolicy.Hardware? {
+        guard uint32(device, selector: kAudioDevicePropertyDeviceIsAlive) == 1,
+              let channels = inputChannelCounts(device), channels.contains(where: { $0 > 0 }) else { return nil }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr,
+              rate.isFinite, rate > 0 else { return nil }
+        return .init(sampleRate: rate, channelCounts: channels)
+    }
     static func uint32(_ device: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
         var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var value: UInt32 = 0
@@ -437,13 +591,16 @@ private enum MeetingAudioDeviceCatalog {
         return returned.takeRetainedValue() as String
     }
     static func hasInput(_ device: AudioObjectID) -> Bool {
+        inputChannelCounts(device)?.contains { $0 > 0 } == true
+    }
+    private static func inputChannelCounts(_ device: AudioObjectID) -> [UInt32]? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration, mScope: kAudioObjectPropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size >= MemoryLayout<AudioBufferList>.size else { return false }
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size >= MemoryLayout<AudioBufferList>.size else { return nil }
         let memory = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { memory.deallocate() }
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, memory) == noErr else { return false }
-        return UnsafeMutableAudioBufferListPointer(memory.assumingMemoryBound(to: AudioBufferList.self)).contains { $0.mNumberChannels > 0 }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, memory) == noErr else { return nil }
+        return UnsafeMutableAudioBufferListPointer(memory.assumingMemoryBound(to: AudioBufferList.self)).map(\.mNumberChannels)
     }
 }
 #endif

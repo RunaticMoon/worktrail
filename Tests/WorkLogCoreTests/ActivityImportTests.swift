@@ -82,7 +82,9 @@ final class ActivityImportTests: XCTestCase {
         try ActivityIntegrationSettingsStore(dataRoot: root).save(settings)
         let model = ActivityIntegrationsModel(dataRoot: root, repo: repo, credentials: credentials,
             client: ActivityAPIClient(transport: transport))
+        XCTAssertEqual(credentials.interactionPolicies, [], "App initialization must not read credentials")
         await model.sync(); await model.sync()
+        XCTAssertEqual(credentials.interactionPolicies, [false])
         var count = await transport.calls; XCTAssertEqual(count, 1)
         XCTAssertTrue(model.message?.contains("한도") == true)
         XCTAssertFalse(model.message?.contains("should-not-display") == true)
@@ -92,8 +94,10 @@ final class ActivityImportTests: XCTestCase {
             client: ActivityAPIClient(transport: transport))
         await reopened.sync(); count = await transport.calls; XCTAssertEqual(count, 1)
         await reopened.sync(manual: true); count = await transport.calls; XCTAssertEqual(count, 2)
+        XCTAssertEqual(credentials.interactionPolicies, [false, true])
         clock.advance(by: 86_400)
         await reopened.sync(); count = await transport.calls; XCTAssertEqual(count, 3)
+        XCTAssertEqual(credentials.interactionPolicies, [false, true, false])
     }
 
     @MainActor func testDirtySettingsDoNotSendManualRequestsAndSavingStoresTokenSeparately() async throws {
@@ -164,7 +168,13 @@ final class ActivityImportTests: XCTestCase {
 private final class ImportTestCredentials: ServiceCredentialStore, @unchecked Sendable {
     private var values: [String: String] = [:]
     private let lock = NSLock()
+    private(set) var interactionPolicies: [Bool] = []
     func read(account: String) throws -> String? { lock.lock(); defer { lock.unlock() }; return values[account] }
+    func read(account: String, allowAuthenticationUI: Bool) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        interactionPolicies.append(allowAuthenticationUI)
+        return values[account]
+    }
     func write(_ credential: String, account: String) throws { lock.lock(); defer { lock.unlock() }; values[account] = credential }
     func delete(account: String) throws { lock.lock(); defer { lock.unlock() }; values[account] = nil }
 }

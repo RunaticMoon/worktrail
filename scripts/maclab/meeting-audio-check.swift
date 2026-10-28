@@ -196,7 +196,57 @@ private final class FakePermission: @unchecked Sendable {
         catch is CancellationError { }
         permission.grant() // a late system answer must not resume the completed continuation
         print("PASS: pending authorization cancellation returns before a response and ignores a late grant")
-        print("8 fake PCM suites passed. No microphone/system capture, account, model or network was used.")
+        try await checkConfigurationChanges(archive: archive)
+        print("9 fake PCM suites passed. No microphone/system capture, account, model or network was used.")
+    }
+
+    static func checkConfigurationChanges(archive: MeetingAudioArchive) async throws {
+        typealias Policy = MeetingMicrophoneConfigurationPolicy
+        let baseline = Policy.Configuration(deviceID: 42, hardware: .init(sampleRate: 48_000, channelCounts: [1]), format: pcm().format)
+        var policy = Policy(expected: baseline)
+        let original = try writer(archive, id: "configuration-notifications")
+        // The delayed notification from selecting/starting the device must not
+        // kill recording, even when it arrives before the first PCM callback.
+        for _ in 0..<3 {
+            try check(policy.action(current: baseline, engineRunning: true, microphoneBuffers: 0) == .continueRecording,
+                      "unchanged startup notifications must leave recording active")
+        }
+        try await original.appendForImport(packet(0))
+        try check(policy.action(current: baseline, engineRunning: false, microphoneBuffers: 1) == .restartSameInput,
+                  "output-only engine stop may restart the same unchanged microphone")
+        try check(policy.action(current: baseline, engineRunning: true, microphoneBuffers: 1) == .continueRecording,
+                  "notification after successful restart must not stop the engine")
+        try check(policy.action(current: baseline, engineRunning: false, microphoneBuffers: 1) == .restartExhausted,
+                  "without new PCM a repeated stop must fail instead of looping")
+        try await original.appendForImport(packet(0.2))
+        try check(policy.action(current: baseline, engineRunning: false, microphoneBuffers: 2) == .restartSameInput,
+                  "PCM progress permits another same-input recovery")
+        let preserved = await original.finish()
+        try check(preserved.status == .archived && preserved.tracks.first?.frameCount == 9_600 && preserved.tracks.first?.gaps.count == 1,
+                  "notification recovery preserves original frames and real interruption timing")
+
+        let otherDevice = Policy.Configuration(deviceID: 43, hardware: baseline.hardware, format: baseline.format)
+        try check(policy.action(current: otherDevice, engineRunning: true, microphoneBuffers: 3) == .deviceUnavailable,
+                  "an automatic device switch must never be accepted")
+        try check(policy.action(current: nil, engineRunning: false, microphoneBuffers: 3) == .deviceUnavailable,
+                  "missing or disconnected devices must stop capture")
+        for changed in [
+            Policy.Configuration(deviceID: 42, hardware: .init(sampleRate: 44_100, channelCounts: [1]), format: baseline.format),
+            Policy.Configuration(deviceID: 42, hardware: .init(sampleRate: 48_000, channelCounts: [2]), format: baseline.format),
+            Policy.Configuration(deviceID: 42, hardware: baseline.hardware, format: pcm(rate: 44_100).format),
+            Policy.Configuration(deviceID: 42, hardware: baseline.hardware, format: pcm(channels: 2).format),
+        ] {
+            try check(policy.action(current: changed, engineRunning: true, microphoneBuffers: 3) == .inputChanged,
+                      "actual hardware or tapped PCM format changes must preserve and stop")
+        }
+        let online = Policy.Configuration(deviceID: 42, hardware: baseline.hardware, format: nil)
+        var onlinePolicy = Policy(expected: online)
+        try check(onlinePolicy.action(current: online, engineRunning: nil, microphoneBuffers: 0) == .continueRecording,
+                  "unchanged CoreAudio notifications must also be harmless in online capture")
+        let changedOnline = Policy.Configuration(deviceID: 42, hardware: .init(sampleRate: 44_100, channelCounts: [1]), format: nil)
+        try check(onlinePolicy.action(current: changedOnline, engineRunning: nil, microphoneBuffers: 0) == .inputChanged,
+                  "online capture must still stop for an actual microphone format change")
+        print("PASS: delayed/duplicate startup notifications, same-input bounded restart, PCM preservation, device/format-change rejection")
     }
 }
 #endif

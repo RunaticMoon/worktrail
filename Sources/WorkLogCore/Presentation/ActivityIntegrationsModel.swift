@@ -14,19 +14,25 @@ public final class ActivityIntegrationsModel {
     private let credentials: any ServiceCredentialStore
     private var repo: WorkRepository?
     private let client: ActivityAPIClient
+    private let onDiagnostic: @Sendable (DiagnosticEvent, DiagnosticLevel, [DiagnosticField: DiagnosticValue]) -> Void
     public var isDirty: Bool { draft != saved || !githubToken.isEmpty || !jiraToken.isEmpty }
 
     public init(dataRoot: URL, repo: WorkRepository, credentials: any ServiceCredentialStore,
-                client: ActivityAPIClient = ActivityAPIClient()) {
+                client: ActivityAPIClient = ActivityAPIClient(),
+                onDiagnostic: @escaping @Sendable (DiagnosticEvent, DiagnosticLevel, [DiagnosticField: DiagnosticValue]) -> Void = { _, _, _ in }) {
         store = ActivityIntegrationSettingsStore(dataRoot: dataRoot)
         self.repo = repo; self.credentials = credentials; self.client = client
+        self.onDiagnostic = onDiagnostic
         load()
     }
 
     public func load() {
         guard repo != nil else { return }
         do { saved = try store.load(); draft = saved; isLoaded = true }
-        catch { message = "활동 수집 설정을 읽지 못했습니다. 기존 파일을 확인하세요." }
+        catch {
+            onDiagnostic(.operationFailed, .error, [.phase: .state(.starting)])
+            message = "활동 수집 설정을 읽지 못했습니다. 기존 파일을 확인하세요."
+        }
     }
 
     public func save() {
@@ -42,7 +48,8 @@ public final class ActivityIntegrationsModel {
                     throw WorkLogError.validation("\(connection.source.title) 토큰 형식을 확인하세요.")
                 }
             }
-            let prior = try updates.map { (account: $0.0.credentialAccount, value: try credentials.read(account: $0.0.credentialAccount)) }
+            let prior = try updates.map { (account: $0.0.credentialAccount,
+                value: try credentials.read(account: $0.0.credentialAccount, allowAuthenticationUI: true)) }
             var changed: [Int] = []
             do {
                 for (index, update) in updates.enumerated() {
@@ -63,7 +70,10 @@ public final class ActivityIntegrationsModel {
             }
             saved = draft; githubToken = ""; jiraToken = ""
             message = "활동 수집 설정을 저장했습니다. API 토큰은 Keychain에만 보관합니다."
-        } catch { message = safeMessage(error) }
+        } catch {
+            onDiagnostic(.operationFailed, .error, [:])
+            message = safeMessage(error)
+        }
     }
 
     public func removeToken(for source: ActivitySource) {
@@ -73,7 +83,10 @@ public final class ActivityIntegrationsModel {
             try credentials.delete(account: connection.credentialAccount)
             if source == .github { githubToken = "" } else { jiraToken = "" }
             message = "\(source.title) 토큰을 삭제했습니다. 수집을 계속하려면 새 토큰을 입력하세요."
-        } catch { message = "API 토큰을 삭제하지 못했습니다." }
+        } catch {
+            onDiagnostic(.operationFailed, .error, [:])
+            message = "API 토큰을 삭제하지 못했습니다."
+        }
     }
 
     /// One automatic attempt per work day. Manual sync is an explicit retry; no background retry loops.
@@ -87,19 +100,24 @@ public final class ActivityIntegrationsModel {
                 let attempted = try repo.activitySyncAttemptedOn(connection: connection)
                 if manual || attempted != today { connections.append(connection) }
             }
-        } catch { message = "활동 수집 상태를 읽지 못했습니다."; return }
+        } catch {
+            onDiagnostic(.operationFailed, .error, [.phase: .state(.starting)])
+            message = "활동 수집 상태를 읽지 못했습니다."; return
+        }
         guard !connections.isEmpty else {
             if manual { message = "수집할 서비스를 켜고 설정을 저장하세요." }
             return
         }
         isRunning = true
+        onDiagnostic(.operationStarted, .info, [.itemCount: .integer(connections.count)])
         defer { isRunning = false }
         var results: [String] = []
         for connection in connections {
             do {
                 try Task.checkCancellation()
                 try repo.recordActivitySyncAttempt(connection: connection)
-                guard let token = try credentials.read(account: connection.credentialAccount), !token.isEmpty else {
+                guard let token = try credentials.read(account: connection.credentialAccount,
+                                                       allowAuthenticationUI: manual), !token.isEmpty else {
                     throw WorkLogError.validation("\(connection.source.title) API 토큰을 입력하고 저장하세요.")
                 }
                 let last = try repo.activitySyncCompletedAt(connection: connection).map { repo.calendar.workDate(of: $0) }
@@ -110,11 +128,17 @@ public final class ActivityIntegrationsModel {
                 try Task.checkCancellation()
                 let count = try repo.importActivities(response.activities, connection: connection)
                 try repo.recordActivitySyncAttempt(connection: connection, completed: true)
+                onDiagnostic(.operationSucceeded, .info, [.itemCount: .integer(count)])
                 results.append("\(connection.source.title): 새 기록 \(count)개")
                 results.append(contentsOf: response.warnings)
                 if let last, last < earliest { results.append("30일 이전 누락 기록은 API 보존 범위 밖일 수 있습니다.") }
-            } catch is CancellationError { break }
-            catch { results.append(safeMessage(error)) }
+            } catch is CancellationError {
+                onDiagnostic(.operationFailed, .info, [.reason: .state(.cancelled)])
+                break
+            } catch {
+                onDiagnostic(.operationFailed, .error, [.reason: .state(.failed)])
+                results.append(safeMessage(error))
+            }
         }
         if !results.isEmpty { message = results.joined(separator: "\n") }
     }
@@ -126,6 +150,9 @@ public final class ActivityIntegrationsModel {
     }
 
     private func safeMessage(_ error: Error) -> String {
+        if let error = error as? AIProviderError, error.errorClass == .notLoggedIn {
+            return "Keychain 접근 승인이 필요합니다. 설정의 ‘지금 수집’을 눌러 승인하거나 API 토큰을 다시 저장하세요."
+        }
         if case WorkLogError.validation(let message) = error { return message }
         return "활동 수집을 완료하지 못했습니다. 설정·Keychain 접근·사내망 연결을 확인하세요."
     }

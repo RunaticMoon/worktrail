@@ -92,6 +92,11 @@ jobs:
           bash scripts/maclab/run-chatgpt-loopback-check.sh
           bash scripts/maclab/run-meeting-recording-recovery-check.sh
           bash scripts/maclab/run-meeting-termination-check.sh
+      - name: Test microphone configuration and diagnostic privacy with synthetic data
+        timeout-minutes: 6
+        run: |
+          bash scripts/maclab/run-meeting-audio-check.sh
+          bash scripts/maclab/run-diagnostics-privacy-check.sh
       - name: Assemble app without release credentials
         timeout-minutes: 15
         run: scripts/build-macos-app.sh release
