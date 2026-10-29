@@ -10,6 +10,7 @@ done
 check_dir="$(mktemp -d "${TMPDIR:-/tmp}/worklog-tokenizer-check.XXXXXX")"
 trap 'rm -rf "$check_dir"' EXIT
 python3 "$repo_root/scripts/maclab/extract-diagnostic-contracts.py" "$repo_root" "$check_dir/AIErrorContracts.swift"
+python3 "$repo_root/scripts/maclab/extract-meeting-error-contracts.py" "$repo_root" "$check_dir/MeetingErrorContracts.swift" --capture-only
 xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" -emit-library -emit-module -module-name WorkLogCore \
     "$repo_root/Sources/WorkLogCore/Support/Clock.swift" \
     "$repo_root/Sources/WorkLogCore/Support/MeetingMonotonicClock.swift" \
@@ -17,12 +18,15 @@ xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" -emit-librar
     "$check_dir/AIErrorContracts.swift" \
     "$repo_root/Sources/WorkLogCore/Diagnostics/"*.swift \
     "$repo_root/Sources/WorkLogCore/Meetings/MeetingPreviewPipeline.swift" \
+    "$repo_root/Sources/WorkLogCore/Meetings/MeetingOperationFailure.swift" \
     -emit-module-path "$check_dir/WorkLogCore.swiftmodule" -o "$check_dir/libWorkLogCore.dylib"
 xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macos26.0" \
     -I "$check_dir" -I "$sdk_products" -L "$check_dir" -lWorkLogCore -Xlinker -rpath -Xlinker "$check_dir" \
     "$sdk_products/WhisperKit.o" "$sdk_products/ArgmaxCore.o" \
     "$repo_root/Sources/WorkLogApp/MeetingLocalModels.swift" \
     "$repo_root/Sources/WorkLogApp/AppDiagnostics.swift" \
+    "$repo_root/Sources/WorkLogApp/MeetingFailurePresentation.swift" \
+    "$check_dir/MeetingErrorContracts.swift" \
     "$repo_root/Sources/WorkLogApp/MeetingModelRegistry.swift" \
     "$repo_root/Sources/WorkLogApp/MeetingWhisperEngine.swift" \
     "$repo_root/scripts/maclab/meeting-tokenizer-check.swift" -o "$check_dir/check"

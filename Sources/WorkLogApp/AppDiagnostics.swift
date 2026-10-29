@@ -52,7 +52,18 @@ final class AppDiagnostics: @unchecked Sendable {
     }
 
     /// Never serialize NSError descriptions, userInfo, domains, paths, or associated error text.
-    func recordFailure(_ error: Error, category: DiagnosticCategory) {
+    func recordFailure(_ error: Error, category: DiagnosticCategory, stage: DiagnosticState? = nil) {
+        if let failure = error as? MeetingOperationFailure {
+            var fields: [DiagnosticField: DiagnosticValue] = [
+                .phase: .state(failure.phase), .reason: .state(failure.reason),
+                .errorDomain: .state(failure.errorDomain)
+            ]
+            if let stage { fields[.stage] = .state(stage) }
+            if let code = failure.errorCode { fields[.errorCode] = .integer(code) }
+            record(.operationFailed, category: category,
+                   level: failure.reason == .cancelled ? .info : .error, fields: fields)
+            return
+        }
         let nsError = error as NSError
         let domain: DiagnosticState
         switch nsError.domain {
@@ -65,6 +76,7 @@ final class AppDiagnostics: @unchecked Sendable {
         var fields: [DiagnosticField: DiagnosticValue] = [
             .errorDomain: .state(domain), .reason: .state(Self.reason(for: error))
         ]
+        if let stage { fields[.stage] = .state(stage) }
         if domain != .other { fields[.errorCode] = .integer(nsError.code) }
         record(.operationFailed, category: category, level: error is CancellationError ? .info : .error, fields: fields)
     }

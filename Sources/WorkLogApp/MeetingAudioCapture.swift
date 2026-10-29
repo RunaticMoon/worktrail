@@ -205,7 +205,7 @@ enum MeetingAudioCaptureError: LocalizedError {
             onEvent(.started)
         } catch {
             AppDiagnostics.shared.recordFailure(error, category: .recording)
-            _ = await stop(reason: error.localizedDescription)
+            _ = await stop(reason: MeetingFailurePresentation.startupMessage(for: error))
             throw error
         }
     }

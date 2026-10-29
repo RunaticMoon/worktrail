@@ -19,14 +19,18 @@ actor MeetingWhisperEngine: MeetingPreviewEngine {
     }
 
     func transcribe(_ request: MeetingPreviewRequest) async throws -> [MeetingRecognizedSpan] {
-        guard request.sampleRate == 16_000 else { throw MeetingLocalModelError.invalidAudio }
+        guard request.sampleRate == 16_000 else {
+            throw classified(MeetingLocalModelError.invalidAudio, phase: .inference)
+        }
         return try await transcribe(samples: request.samples)
     }
 
     func transcribe(samples: [Float], language: String? = "ko") async throws -> [MeetingRecognizedSpan] {
-        guard !busy else { throw MeetingLocalModelError.busy }
+        guard !busy else { throw classified(MeetingLocalModelError.busy, phase: .inference) }
         guard profile != .diarization, !samples.isEmpty, samples.count <= 30 * 16_000,
-              samples.allSatisfy(\.isFinite) else { throw MeetingLocalModelError.invalidAudio }
+              samples.allSatisfy(\.isFinite) else {
+            throw classified(MeetingLocalModelError.invalidAudio, phase: .inference)
+        }
         busy = true
         let expectedGeneration = generation
         defer { busy = false }
@@ -56,8 +60,14 @@ actor MeetingWhisperEngine: MeetingPreviewEngine {
             return spans
         } catch {
             await finishUnloadIfRequested()
-            throw error
+            throw classified(error, phase: .inference)
         }
+    }
+
+    private func classified(_ error: Error, phase: DiagnosticState) -> Error {
+        if error is CancellationError || Task.isCancelled { return CancellationError() }
+        let failure = MeetingFailurePresentation.failure(for: error, phase: phase)
+        return failure.reason == .cancelled ? CancellationError() : failure
     }
 
     func unload() async {
@@ -76,28 +86,36 @@ actor MeetingWhisperEngine: MeetingPreviewEngine {
 
     private func loadedPipeline() async throws -> MeetingOfflineWhisperKit {
         if let pipeline { return pipeline }
-        let directory = try await models.verifiedDirectory(for: profile)
+        let directory: URL
+        do { directory = try await models.verifiedDirectory(for: profile) }
+        catch { throw classified(error, phase: .modelValidation) }
         try Task.checkCancellation()
         let tokenizerDirectory = directory.appendingPathComponent("tokenizer", isDirectory: true)
         // The explicit local factory never falls back to Hub downloads, even for corrupt JSON.
-        let tokenizer = try await AutoTokenizerWrapper.from(
-            modelFolder: tokenizerDirectory,
-            hubApi: HubApiWrapper(downloadBase: tokenizerDirectory, hfToken: ""))
-        let localTokenizer = try MeetingWhisperTokenizer(tokenizer)
+        let localTokenizer: MeetingWhisperTokenizer
+        do {
+            let tokenizer = try await AutoTokenizerWrapper.from(
+                modelFolder: tokenizerDirectory,
+                hubApi: HubApiWrapper(downloadBase: tokenizerDirectory, hfToken: ""))
+            localTokenizer = try MeetingWhisperTokenizer(tokenizer)
+        } catch { throw classified(error, phase: .tokenizer) }
+        try Task.checkCancellation()
         let config = WhisperKitConfig(modelFolder: directory.appendingPathComponent("model").path,
                                       tokenizerFolder: tokenizerDirectory,
                                       computeOptions: ModelComputeOptions(melCompute: .cpuAndGPU,
                                                                          audioEncoderCompute: .cpuAndNeuralEngine,
                                                                          textDecoderCompute: .cpuAndNeuralEngine),
                                       verbose: false, prewarm: false, load: false, download: false)
-        let pipe = try await MeetingOfflineWhisperKit(config)
+        let pipe: MeetingOfflineWhisperKit
+        do { pipe = try await MeetingOfflineWhisperKit(config) }
+        catch { throw classified(error, phase: .modelLoading) }
         pipe.tokenizer = localTokenizer
         do {
             try await pipe.loadModels()
             try Task.checkCancellation()
         } catch {
             await pipe.unloadModels()
-            throw error
+            throw classified(error, phase: .modelLoading)
         }
         pipeline = pipe
         return pipe
@@ -110,7 +128,7 @@ final class MeetingOfflineWhisperKit: WhisperKit {
     override func loadTokenizerIfNeeded() async throws {
         // Both pinned large-v3 models use the multilingual 51,866-token vocabulary.
         guard tokenizer != nil, textDecoder.logitsSize == 51_866 else {
-            throw MeetingLocalModelError.invalidTokenizer
+            throw MeetingFailurePresentation.failure(for: MeetingLocalModelError.invalidTokenizer, phase: .tokenizer)
         }
         textDecoder.isModelMultilingual = true
     }

@@ -330,7 +330,9 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
                 models: session.modelStore, preferences: changedPreferences, mode: .diarizationOnly, sourceRunID: refined.id,
                 transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
             throw SessionCheckError("Changed settings must not reuse a refined result")
-        } catch is WorkLogError { }
+        } catch let failure as MeetingFinalizationFailure {
+            try check(failure.underlying is WorkLogError, "Expected persisted-source validation failure")
+        }
         let mismatchSteps = await mismatchOrder.steps
         try check(mismatchSteps.isEmpty, "Incompatible settings must fail before inference")
         try (sourceBytes + Data([0])).write(to: secondURL)
@@ -339,7 +341,9 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
                 models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
                 transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
             throw SessionCheckError("Changed original bytes must not reuse a refined result")
-        } catch is WorkLogError { }
+        } catch let failure as MeetingFinalizationFailure {
+            try check(failure.underlying is WorkLogError, "Expected persisted-source validation failure")
+        }
         try sourceBytes.write(to: secondURL)
         print("PASS: diarization retry calls no Whisper; changed settings/original SHA256 reject reuse before inference; active transcript unchanged")
         let edited = try session.store.editSegment(id: originalSegment.id, expectedRevision: originalSegment.revision, text: "사용자 검토 수정")
@@ -348,7 +352,9 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
                 models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly, sourceRunID: refined.id,
                 transcriber: FakeFileTranscriber(mismatchOrder), speakerEngine: FakeFileDiarizer(mismatchOrder, fails: false), progress: { _ in })
             throw SessionCheckError("User-edited refined transcript must require an explicit new run")
-        } catch is WorkLogError { }
+        } catch let failure as MeetingFinalizationFailure {
+            try check(failure.underlying is WorkLogError, "Expected persisted-source validation failure")
+        }
         let successfulOrder = FakeInferenceOrder()
         try await MeetingPostProcessing.run(recordingID: secondRecording, store: session.store, archive: session.archive,
             models: session.modelStore, preferences: session.preferences,
@@ -482,7 +488,9 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
-        print("15 native session suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
+        try await checkMeetingErrorSessions(at: root.appendingPathComponent("error-sessions"))
+        try await checkMeetingFinalizationFailures(at: root.appendingPathComponent("finalization-errors"))
+        print("15 existing native session suites plus issue #50 failure regression suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")
     }
 }
 #endif

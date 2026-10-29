@@ -29,6 +29,35 @@ struct MeetingRunConfiguration: Encodable {
 
 enum MeetingProcessingMode { case refinedOnly, refinedAndDiarized, diarizationOnly }
 
+enum MeetingFinalizationPhase { case refined, diarization }
+
+/// Retry advice is tied to the persisted source used by this attempt, never to an
+/// unrelated older completed run. The underlying error is classified before display/logging.
+struct MeetingFinalizationFailure: Error {
+    let phase: MeetingFinalizationPhase
+    let underlying: Error
+    let retryRefinedRunID: String?
+
+    var diagnostic: MeetingOperationFailure {
+        MeetingFailurePresentation.failure(for: underlying, phase: phase == .refined ? .refined : .diarization)
+    }
+
+    var message: String {
+        let remedy = MeetingFailurePresentation.modelRemedy(for: diagnostic).map { " " + $0 } ?? ""
+        switch phase {
+        case .refined:
+            return "정밀 전사를 완료하지 못했습니다. 원본과 기존 전사·메모는 보존했습니다." + remedy
+                + " 원본 상태를 확인한 뒤 ‘정밀 전사만’ 새로 실행해 주세요."
+        case .diarization where retryRefinedRunID != nil:
+            return "화자 분리를 완료하지 못했습니다. 완료된 정밀 전사와 원본·메모는 보존했습니다." + remedy
+                + " 저장된 정밀 전사에 화자 분리만 재시도할 수 있습니다."
+        case .diarization:
+            return "화자 분리를 완료하지 못했습니다. 현재 원본·모델·설정에 맞는 정밀 전사를 재사용할 수 없습니다." + remedy
+                + " 원본 상태를 확인한 뒤 ‘정밀 전사만’ 새로 실행해 주세요. 기존 전사·메모는 보존했습니다."
+        }
+    }
+}
+
 /// Bounded file windows; large-v3 is completely unloaded before SpeakerKit loads.
 enum MeetingPostProcessing {
     static func run(recordingID: String, store: MeetingAudioStore, archive: MeetingAudioArchive,
@@ -36,6 +65,35 @@ enum MeetingPostProcessing {
                     mode: MeetingProcessingMode = .refinedAndDiarized, sourceRunID: String? = nil,
                     transcriber: (any MeetingFileTranscribing)? = nil, speakerEngine: (any MeetingFileDiarizing)? = nil,
                     progress: @escaping @Sendable (String) async -> Void) async throws {
+        var completedRefined: MeetingTranscriptRun?
+        do {
+            try await process(recordingID: recordingID, store: store, archive: archive, models: models,
+                preferences: preferences, mode: mode, sourceRunID: sourceRunID,
+                transcriber: transcriber, speakerEngine: speakerEngine,
+                didCompleteRefined: { completedRefined = $0 }, progress: progress)
+        } catch {
+            if isCancellation(error) { throw CancellationError() }
+            let retrySource: MeetingTranscriptRun?
+            if let completedRefined, mode != .refinedOnly {
+                retrySource = try? await reusableRefinedRun(recordingID: recordingID, store: store,
+                    archive: archive, models: models, preferences: preferences,
+                    sourceRunID: completedRefined.id, expectedRevision: completedRefined.revision)
+            } else {
+                retrySource = nil
+            }
+            try Task.checkCancellation()
+            throw MeetingFinalizationFailure(
+                phase: completedRefined != nil || mode == .diarizationOnly ? .diarization : .refined,
+                underlying: error, retryRefinedRunID: retrySource?.id)
+        }
+    }
+
+    private static func process(recordingID: String, store: MeetingAudioStore, archive: MeetingAudioArchive,
+                                models: MeetingLocalModelStore, preferences: MeetingAudioPreferences,
+                                mode: MeetingProcessingMode, sourceRunID: String?,
+                                transcriber: (any MeetingFileTranscribing)?, speakerEngine: (any MeetingFileDiarizing)?,
+                                didCompleteRefined: (MeetingTranscriptRun) -> Void,
+                                progress: @escaping @Sendable (String) async -> Void) async throws {
         guard let recording = try store.recording(id: recordingID) else { throw WorkLogError.notFound("녹음") }
         let allTracks = try store.tracks(recordingID: recordingID)
         guard !allTracks.isEmpty, allTracks.allSatisfy({ $0.fileState == .available }) else {
@@ -46,15 +104,8 @@ enum MeetingPostProcessing {
         let fingerprint = try sourceFingerprint(tracks, archive: archive)
         let settings = try StableJSON.string(MeetingRunConfiguration(preferences: preferences, stage: "refined", sourceFingerprint: fingerprint))
         let existing = try store.runs(meetingID: recording.meetingID)
-        let reusable = try existing.first { run in
-            if let sourceRunID, run.id != sourceRunID { return false }
-            guard run.stage == .refined, run.status == .completed, run.recordingID == recordingID,
-                  run.modelIdentifier == descriptor.modelID, run.modelRevision == descriptor.revision,
-                  run.settingsJSON == settings else { return false }
-            return MeetingProcessingReuse.isReusable(run, recordingID: recordingID, modelIdentifier: descriptor.modelID,
-                modelRevision: descriptor.revision, settingsJSON: settings,
-                hasUserEdits: try store.segments(runID: run.id).contains(where: \.isUserEdited))
-        }
+        let reusable = try reusableRefinedRun(in: existing, store: store, recordingID: recordingID,
+            descriptor: descriptor, settings: settings, sourceRunID: sourceRunID)
         let refined: MeetingTranscriptRun
         let total = tracks.reduce(0) { $0 + ($1.duration ?? 0) }
         if mode != .refinedOnly, let reusable {
@@ -86,11 +137,12 @@ enum MeetingPostProcessing {
                 }
                 refined = try store.finishRun(id: created.id)
             } catch {
-                _ = try? store.finishRun(id: created.id, status: error is CancellationError ? .cancelled : .failed)
+                _ = try? store.finishRun(id: created.id, status: isCancellation(error) ? .cancelled : .failed)
                 await whisper.unload(); throw error
             }
             await whisper.unload()
         }
+        didCompleteRefined(refined)
         guard mode != .refinedOnly else { return }
         try Task.checkCancellation()
         await progress("정밀 전사 저장됨 · 로컬 화자 분리 중…")
@@ -124,11 +176,47 @@ enum MeetingPostProcessing {
             }
             _ = try store.finishRun(id: diarized.id)
         } catch {
-            _ = try? store.finishRun(id: diarized.id, status: error is CancellationError ? .cancelled : .failed)
+            _ = try? store.finishRun(id: diarized.id, status: isCancellation(error) ? .cancelled : .failed)
             await diarizer.unload(); throw error
         }
         await diarizer.unload()
     }
+    private static func isCancellation(_ error: Error) -> Bool {
+        Task.isCancelled || MeetingOperationFailure.sanitized(error, phase: .refined).reason == .cancelled
+    }
+
+    /// Performs the same authoritative checks as the processing entry point.
+    /// A supplied revision pins retry advice to the exact completed source of a failed attempt.
+    static func reusableRefinedRun(recordingID: String, store: MeetingAudioStore, archive: MeetingAudioArchive,
+                                   models: MeetingLocalModelStore, preferences: MeetingAudioPreferences,
+                                   sourceRunID: String? = nil, expectedRevision: Int? = nil) async throws -> MeetingTranscriptRun? {
+        guard let recording = try store.recording(id: recordingID) else { return nil }
+        let tracks = try store.tracks(recordingID: recordingID)
+        guard !tracks.isEmpty, tracks.allSatisfy({ $0.fileState == .available }) else { return nil }
+        let descriptor = try await models.descriptor(for: .final)
+        let fingerprint = try sourceFingerprint(tracks, archive: archive)
+        let settings = try StableJSON.string(MeetingRunConfiguration(preferences: preferences,
+            stage: "refined", sourceFingerprint: fingerprint))
+        return try reusableRefinedRun(in: store.runs(meetingID: recording.meetingID), store: store,
+            recordingID: recordingID, descriptor: descriptor, settings: settings,
+            sourceRunID: sourceRunID, expectedRevision: expectedRevision)
+    }
+
+    private static func reusableRefinedRun(in runs: [MeetingTranscriptRun], store: MeetingAudioStore,
+                                          recordingID: String, descriptor: MeetingModelDescriptor,
+                                          settings: String, sourceRunID: String?, expectedRevision: Int? = nil) throws -> MeetingTranscriptRun? {
+        try runs.first { run in
+            if let sourceRunID, run.id != sourceRunID { return false }
+            if let expectedRevision, run.revision != expectedRevision { return false }
+            guard run.stage == .refined, run.status == .completed, run.recordingID == recordingID,
+                  run.modelIdentifier == descriptor.modelID, run.modelRevision == descriptor.revision,
+                  run.settingsJSON == settings else { return false }
+            return MeetingProcessingReuse.isReusable(run, recordingID: recordingID, modelIdentifier: descriptor.modelID,
+                modelRevision: descriptor.revision, settingsJSON: settings,
+                hasUserEdits: try store.segments(runID: run.id).contains(where: \.isUserEdited))
+        }
+    }
+
     private struct DiarizationConfiguration: Encodable {
         let sourceRevision: Int
         let sourceFingerprint: String
