@@ -1,5 +1,6 @@
 #if os(macOS) && DEBUG
 import Foundation
+import UserNotifications
 import WorkLogCore
 
 final class FixtureServiceCredentials: ServiceCredentialStore, @unchecked Sendable {
@@ -28,6 +29,99 @@ enum UITestFixture: String {
             throw WorkLogError.validation("UI 테스트 데이터는 empty, few, many 중에서 선택하세요.")
         }
         return fixture
+    }
+
+    /// Opt-in, synthetic OS notifications for the task-navigation regression.
+    /// A fresh launch checks one response, avoiding timing dependencies between alerts.
+    /// This cannot run in the production bundle or outside the disposable fixture.
+    static func prepareTaskNotificationCheck(controller: AppController) async throws {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--ui-test-task-notification") else { return }
+        guard arguments.filter({ $0 == "--ui-test-task-notification" }).count == 1,
+              arguments.indices.contains(index + 1),
+              ["cancel", "discard", "same"].contains(arguments[index + 1]),
+              try requested(arguments: arguments) == .many,
+              Bundle.main.bundleIdentifier == "dev.worklog.TaskNavigationReview",
+              let environment = controller.environment, let model = controller.taskDetail,
+              environment.options.paths.dataRoot.deletingLastPathComponent().lastPathComponent.hasPrefix("WorkLog-UI-many-") else {
+            throw WorkLogError.validation("알림 검증은 전용 가짜 데이터 리뷰 앱에서만 실행합니다.")
+        }
+        let mode = arguments[index + 1]
+        let dispatchIndex = arguments.firstIndex(of: "--ui-test-task-notification-dispatch")
+        let usesCallback = dispatchIndex != nil
+        if let dispatchIndex {
+            guard arguments.filter({ $0 == "--ui-test-task-notification-dispatch" }).count == 1,
+                  arguments.indices.contains(dispatchIndex + 1), arguments[dispatchIndex + 1] == "callback",
+                  ["/tmp/worktrail-issue-52-review", "/private/tmp/worktrail-issue-52-review"].contains(
+                    Bundle.main.bundleURL.deletingLastPathComponent().resolvingSymlinksInPath().path) else {
+                throw WorkLogError.validation("가짜 알림 콜백 검증 인자가 올바르지 않습니다.")
+            }
+        }
+        let tasks = try environment.repo.tasks()
+        guard let taskA = tasks.first(where: { $0.title == "여러 프로젝트에 함께 적용하는 배포 파이프라인 개선과 긴 한국어 업무명 표시·줄바꿈 검증" }),
+              let taskB = tasks.first(where: { $0.title == "검색 결과에서 원문을 확인하고 입력하던 검색 조건으로 돌아오는 흐름 점검" }) else {
+            throw WorkLogError.validation("알림 검증용 업무가 없습니다.")
+        }
+        let center = UNUserNotificationCenter.current()
+        if !usesCallback {
+            let settings = await center.notificationSettings()
+            var authorized = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+            if settings.authorizationStatus == .notDetermined {
+                do { authorized = try await center.requestAuthorization(options: [.alert]) }
+                catch {
+                    throw WorkLogError.validation("가짜 알림 권한 요청 실패 (코드 \((error as NSError).code))")
+                }
+            }
+            guard authorized else {
+                throw WorkLogError.validation("가짜 업무 알림 검증을 위한 알림 권한이 없습니다.")
+            }
+            // Only these review-bundle identifiers are removed. Never enumerate or
+            // modify other notifications, and keep the production reminder prefix separate.
+            let identifiers = ["cancel", "discard", "same"].map { "worklog.ui-test.task-navigation.\($0)" }
+            center.removePendingNotificationRequests(withIdentifiers: identifiers)
+            center.removeDeliveredNotifications(withIdentifiers: identifiers)
+        }
+        await Task.yield()
+        controller.openTask(taskA.id)
+        guard model.detail?.task.id == taskA.id,
+              let project = model.detail?.projects.first(where: { $0.project.name == "공통 플랫폼" })?.project else {
+            throw WorkLogError.validation("알림 검증용 업무 상세를 열지 못했습니다.")
+        }
+        model.activityText = "WorkLog issue 52 synthetic activity for task A"
+        model.checklistText = "WorkLog issue 52 synthetic checklist for task A"
+        model.workDate = WorkDate("2026-10-09")!
+        model.activityProjectId = project.id
+        model.statusNote = "WorkLog issue 52 synthetic reason for task A"
+        let targetID = mode == "same" ? taskA.id : taskB.id
+        if usesCallback {
+            // A separately requested fallback for hosts rejecting review-bundle
+            // notifications. Reuse the production callback; never label this an OS click.
+            guard controller.taskNotifications?.onOpenTask != nil else {
+                throw WorkLogError.validation("가짜 알림 콜백이 준비되지 않았습니다.")
+            }
+            let evidenceURL = Bundle.main.bundleURL.deletingLastPathComponent()
+                .appendingPathComponent("notification-callback-\(ProcessInfo.processInfo.processIdentifier).json")
+            try Data("{\"callbackInvoked\":false}".utf8).write(to: evidenceURL, options: .atomic)
+            Task { @MainActor [weak controller] in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard let callback = controller?.taskNotifications?.onOpenTask else { return }
+                callback(targetID)
+                let evidence: [String: Any] = ["callbackInvoked": true, "mode": mode, "target": mode == "same" ? "A" : "B"]
+                try? JSONSerialization.data(withJSONObject: evidence).write(to: evidenceURL, options: .atomic)
+            }
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "WorkLog issue 52 \(mode) fixture"
+        content.body = "가짜 업무 알림 · 실제 기록을 사용하지 않습니다."
+        content.userInfo = ["taskID": targetID]
+        do {
+            try await center.add(UNNotificationRequest(
+                identifier: "worklog.ui-test.task-navigation.\(mode)", content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 20, repeats: false)))
+        } catch {
+            throw WorkLogError.validation("가짜 알림 예약 실패 (코드 \((error as NSError).code))")
+        }
     }
 
     func makeEnvironment() async throws -> AppEnvironment {

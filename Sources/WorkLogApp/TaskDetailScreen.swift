@@ -6,6 +6,10 @@ import WorkLogCore
 @MainActor struct TaskDetailScreen: View {
     @Bindable var model: TaskDetailModel
     let onClose: () -> Void
+    var confirmsTaskNavigation: Binding<Bool> = .constant(false)
+    var onCancelTaskNavigation: () -> Void = {}
+    var onDiscardInputAndNavigate: () -> Void = {}
+    var onEditorPresentationChanged: (Bool) -> Void = { _ in }
     var taskNames: [String: String] = [:]
     var onOpenTask: ((String) -> Void)? = nil
     var meetingRepository: WorkRepository? = nil
@@ -25,7 +29,11 @@ import WorkLogCore
     @FocusState private var actionsFocused: Bool
 
     private var hasUnsavedInput: Bool {
-        !model.activityText.isEmpty || !model.checklistText.isEmpty
+        model.hasUnsavedInput
+    }
+    private var hasPresentedEditor: Bool {
+        editingProperties || editingChecklist != nil || correctingEvent != nil
+            || model.completionCheck != nil || confirmsDiscardInput
     }
 
     var body: some View {
@@ -122,6 +130,8 @@ import WorkLogCore
         .onChange(of: model.detail?.task.id, initial: true) { _, _ in
             initializeSectionExpansion()
         }
+        .onChange(of: hasPresentedEditor) { _, presented in onEditorPresentationChanged(presented) }
+        .onDisappear { onEditorPresentationChanged(false) }
         .sheet(isPresented: $editingProperties) {
             if let draft = model.propertiesDraft { TaskPropertiesEditor(model: model, initial: draft) }
         }
@@ -129,17 +139,27 @@ import WorkLogCore
         .sheet(item: $correctingEvent) { StatusCorrectionEditor(model: model, event: $0) }
         .interactiveDismissDisabled(hasUnsavedInput)
         .background(WorkLogKeyHandler(handle: handleKey))
+        .background {
+            Color.clear.alert("다른 업무로 이동할까요?", isPresented: confirmsTaskNavigation) {
+                Button("계속 편집", role: .cancel) { onCancelTaskNavigation(); resumeEditing() }
+                    .keyboardShortcut(.cancelAction)
+                Button("입력 버리고 이동", role: .destructive) { onDiscardInputAndNavigate() }
+            } message: {
+                Text("저장하지 않은 진행 기록·체크리스트·상태 변경 사유가 있습니다. 계속 편집하여 저장하거나 입력을 버린 뒤 이동하세요.")
+            }
+        }
         .alert("업무 입력을 버리고 닫을까요?", isPresented: $confirmsDiscardInput) {
             Button("계속 편집", role: .cancel, action: resumeEditing)
                 .keyboardShortcut(.cancelAction)
             Button("입력 버리고 닫기", role: .destructive, action: discardInputAndClose)
                 .keyboardShortcut("d", modifiers: .command)
         } message: {
-            Text("저장하지 않은 진행 기록 또는 추가하지 않은 체크리스트 입력이 있습니다. 계속 편집하여 각각 저장하거나 입력을 버린 뒤 닫으세요.")
+            Text("저장하지 않은 진행 기록·체크리스트·상태 변경 사유가 있습니다. 계속 편집하여 저장하거나 입력을 버린 뒤 닫으세요.")
         }
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
+        guard !confirmsTaskNavigation.wrappedValue else { return false }
         guard !editingProperties, editingChecklist == nil, correctingEvent == nil else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers == .command, event.keyCode == 13 {
@@ -188,7 +208,7 @@ import WorkLogCore
     }
 
     private func requestClose() {
-        guard !hasMarkedText else { return }
+        guard !hasMarkedText, !confirmsTaskNavigation.wrappedValue else { return }
         if model.completionCheck != nil {
             model.cancelCompletion()
         } else if hasUnsavedInput {
@@ -210,8 +230,7 @@ import WorkLogCore
 
     private func discardInputAndClose() {
         guard !hasMarkedText else { return }
-        model.activityText = ""
-        model.checklistText = ""
+        model.discardInput()
         onClose()
     }
 

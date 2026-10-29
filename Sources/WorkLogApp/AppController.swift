@@ -37,6 +37,11 @@ import WorkLogCore
     private var isRestoring = false
     var route: SidebarRoute? = .day
     var selectedTaskId: String?
+    private(set) var pendingTaskNavigation: (id: String, asOf: WorkDate?)?
+    var confirmsTaskNavigation = false
+    private var taskEditorIsPresented = false
+    private var deferredTaskNavigation: (id: String, asOf: WorkDate?)?
+    private var taskNavigationWait: Task<Void, Never>?
     var selectedMemoId: String?
     private(set) var taskList: TaskListModel?
     private(set) var projects: ProjectsModel?
@@ -88,18 +93,16 @@ import WorkLogCore
                     onDiagnostic: { event, level, fields in
                         AppDiagnostics.shared.record(event, category: .integrations, level: level, fields: fields)
                     })
-                if Bundle.main.bundleIdentifier != nil {
-                    taskNotifications = TaskNotificationScheduler()
-                    taskNotifications?.onOpenTask = { [weak self] id in
-                        self?.openMainWindow?(); NSApp.activate(); self?.openTask(id)
-                    }
-                }
+                installTaskNotifications()
             }
             #if DEBUG
             if usesFixture {
                 activityIntegrations = ActivityIntegrationsModel(dataRoot: env.options.paths.dataRoot,
                     repo: env.repo, credentials: FixtureServiceCredentials(),
                     client: ActivityAPIClient(transport: FixtureActivityTransport()))
+                if ProcessInfo.processInfo.arguments.contains("--ui-test-task-notification") {
+                    installTaskNotifications()
+                }
             }
             #endif
             taskDetail?.onChanged = { [weak self] in self?.refreshBackgroundServices() }
@@ -135,6 +138,15 @@ import WorkLogCore
             // Scheduled reports bypass the editors, including any saved before a failure.
             reportLibrary?.load()
             AppDiagnostics.shared.record(.appReady, category: .application)
+            #if DEBUG
+            if usesFixture {
+                do { try await UITestFixture.prepareTaskNotificationCheck(controller: self) }
+                catch {
+                    startupError = "가짜 알림 검증 준비 실패: " + ((error as? WorkLogError)?.localizedDescription
+                        ?? "알림 예약 오류 (코드 \((error as NSError).code))")
+                }
+            }
+            #endif
         } catch {
             AppDiagnostics.shared.recordFailure(error, category: .storage)
             clearRegistrations()
@@ -182,6 +194,10 @@ import WorkLogCore
         navigate(to: routes[(current + offset + routes.count) % routes.count])
     }
     private func clearRegistrations() {
+        taskNavigationWait?.cancel(); taskNavigationWait = nil
+        deferredTaskNavigation = nil
+        taskEditorIsPresented = false
+        cancelTaskNavigation()
         maintenanceTimer?.invalidate(); maintenanceTimer = nil
         maintenanceTask?.cancel()
         notificationTask?.cancel()
@@ -230,8 +246,67 @@ import WorkLogCore
         }
     }
     func openTask(_ id: String, asOf: WorkDate? = nil) {
-        selectedTaskId = id
-        taskDetail?.load(taskId: id, asOf: asOf)
+        // Keep the selection and its editor together until the user resolves a
+        // pending switch. Repeated notifications must not replace that request.
+        guard pendingTaskNavigation == nil, deferredTaskNavigation == nil, let taskDetail else { return }
+        guard selectedTaskId != id || taskDetail.detail?.task.id != id || taskDetail.asOf != asOf else { return }
+        if taskEditorIsPresented || worklogHasMarkedText {
+            if deferredTaskNavigation == nil { deferredTaskNavigation = (id, asOf) }
+            if worklogHasMarkedText, taskNavigationWait == nil {
+                taskNavigationWait = Task { [weak self] in
+                    while !Task.isCancelled && worklogHasMarkedText {
+                        do { try await Task.sleep(for: .milliseconds(100)) }
+                        catch { return }
+                    }
+                    guard !Task.isCancelled else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    self?.taskNavigationWait = nil
+                    self?.resumeDeferredTaskNavigation()
+                }
+            }
+            return
+        }
+        if taskDetail.load(taskId: id, asOf: asOf) {
+            selectedTaskId = id
+        } else {
+            pendingTaskNavigation = (id, asOf)
+            confirmsTaskNavigation = true
+        }
+    }
+    func cancelTaskNavigation() {
+        pendingTaskNavigation = nil
+        confirmsTaskNavigation = false
+    }
+    func closeTask() {
+        taskNavigationWait?.cancel(); taskNavigationWait = nil
+        deferredTaskNavigation = nil
+        taskEditorIsPresented = false
+        cancelTaskNavigation()
+        selectedTaskId = nil
+    }
+    func setTaskEditorPresented(_ presented: Bool) {
+        taskEditorIsPresented = presented
+        if !presented { resumeDeferredTaskNavigation() }
+    }
+    private func resumeDeferredTaskNavigation() {
+        guard !taskEditorIsPresented, !worklogHasMarkedText,
+              let request = deferredTaskNavigation else { return }
+        deferredTaskNavigation = nil
+        openTask(request.id, asOf: request.asOf)
+    }
+    func discardInputAndNavigateTask() {
+        guard let request = pendingTaskNavigation else { return }
+        cancelTaskNavigation()
+        taskDetail?.discardInput()
+        openTask(request.id, asOf: request.asOf)
+    }
+    private func installTaskNotifications() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        taskNotifications = TaskNotificationScheduler()
+        taskNotifications?.onOpenTask = { [weak self] id in
+            self?.activateMainWindow(); self?.openTask(id)
+        }
     }
     func openMeeting(_ hit: MeetingLocalSearchHit) {
         guard meetings?.save() == true else { showMeetingsWindow(); return }
@@ -240,6 +315,9 @@ import WorkLogCore
     }
     private func showMeetingsWindow() {
         route = .meetings
+        activateMainWindow()
+    }
+    private func activateMainWindow() {
         NSApp.activate()
         if let window = (NSApp.orderedWindows + NSApp.windows).first(where: {
             $0.accessibilityIdentifier() == Self.mainWindowAccessibilityIdentifier
