@@ -227,6 +227,18 @@ import Observation
 
     public var isTruncated: Bool { snapshot.isTruncated }
 
+    /// 화면에 실제 표시 중인 스냅샷의 시각적 밀집도. 목록 검색은 캔버스를 줄이지 않는다.
+    public var isDense: Bool {
+        Self.isDense(nodeCount: snapshot.nodes.count, edgeCount: snapshot.edges.count)
+    }
+
+    /// 노드 100개 또는 연결 300개부터 범위 축소를 안내한다.
+    /// 수학적 그래프 밀도가 아닌 가독성 휴리스틱이며, 250개 잘림 여부와 독립적이다.
+    /// 노드 수는 겹치는 기호, 연결 수는 선의 혼잡을 각각 감지한다.
+    public nonisolated static func isDense(nodeCount: Int, edgeCount: Int) -> Bool {
+        nodeCount > 0 && (nodeCount >= 100 || edgeCount >= 300)
+    }
+
     /// 앱 종료·백업 복원 시 DB를 붙잡지 않도록 참조를 놓는다. 이후 `reload()`는 무해하다.
     ///
     /// 진행 중이던 비동기 좌표 계산 결과는 `generation`을 올려 버린다.

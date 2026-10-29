@@ -71,31 +71,35 @@ public final class SettingsStore {
     public static func validate(_ settings: AppSettings) -> [String] {
         var problems: [String] = []
 
+        // 사용자에게 보이는 문구에는 내부 프로퍼티 이름을 넣지 않는다.
+        // SettingsScreen에 노출된 필드는 화면 레이블(미사용 시 자동 잠금, 복사 후 클립보드 지우기,
+        // 백업 보관 기간, 월요일 검토 알림, 빠른 입력·검색 단축키)을 따른다.
+        // 화면 조작이 없는 maxQuizQuestions·aiConcurrency는 서술형 한국어 문구를 쓴다.
         if !(1...1440).contains(settings.secretIdleLockMinutes) {
-            problems.append("Secret 자동 잠금 시간(secretIdleLockMinutes)은 1~1440분이어야 합니다. "
-                + "현재 \(settings.secretIdleLockMinutes)")
+            problems.append("미사용 시 자동 잠금 시간은 1~1440분이어야 합니다. "
+                + "현재 \(settings.secretIdleLockMinutes)분")
         }
         if !(10...3600).contains(settings.clipboardClearSeconds) {
-            problems.append("클립보드 지우기 시간(clipboardClearSeconds)은 10~3600초여야 합니다. "
-                + "현재 \(settings.clipboardClearSeconds)")
+            problems.append("복사 후 클립보드 지우기는 10~3600초여야 합니다. "
+                + "현재 \(settings.clipboardClearSeconds)초")
         }
         if !(1...3650).contains(settings.backupRetentionDays) {
-            problems.append("백업 보존 일수(backupRetentionDays)는 1~3650일이어야 합니다. "
-                + "현재 \(settings.backupRetentionDays)")
+            problems.append("백업 보관 기간은 1~3650일이어야 합니다. "
+                + "현재 \(settings.backupRetentionDays)일")
         }
         if !isTimeOfDay(settings.mondayReminderTime) {
-            problems.append("월요일 알림 시각(mondayReminderTime)은 \"HH:mm\"(00:00~23:59) 형식이어야 합니다. "
+            problems.append("월요일 검토 알림 시각은 \"HH:mm\"(00:00~23:59) 형식이어야 합니다. "
                 + "현재 \(settings.mondayReminderTime)")
         }
         if !(0...3).contains(settings.maxQuizQuestions) {
-            problems.append("성과 질문 최대 개수(maxQuizQuestions)는 0~3이어야 합니다. "
-                + "현재 \(settings.maxQuizQuestions)")
+            problems.append("성과 질문 최대 개수는 0~3이어야 합니다. "
+                + "현재 \(settings.maxQuizQuestions)개")
         }
         if !(1...4).contains(settings.aiConcurrency) {
-            problems.append("AI 동시 실행 수(aiConcurrency)는 1~4여야 합니다. 현재 \(settings.aiConcurrency)")
+            problems.append("AI 동시 실행 수는 1~4여야 합니다. 현재 \(settings.aiConcurrency)개")
         }
         if TimeZone(identifier: settings.timeZoneIdentifier) == nil {
-            problems.append("시간대(timeZoneIdentifier)가 올바르지 않습니다: \(settings.timeZoneIdentifier)")
+            problems.append("업무 시간대가 올바르지 않습니다: \(settings.timeZoneIdentifier)")
         }
 
         let capture = settings.captureHotkey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,28 +107,28 @@ public final class SettingsStore {
 
         var captureBinding: HotkeyBinding?
         if capture.isEmpty {
-            problems.append("캡처 단축키(captureHotkey)는 비어 있을 수 없습니다.")
+            problems.append("빠른 입력 단축키는 비어 있을 수 없습니다.")
         } else {
             do {
                 captureBinding = try HotkeyBinding(parsing: capture)
             } catch {
-                problems.append("입력 단축키(captureHotkey) 형식 오류: \(error.localizedDescription)")
+                problems.append("빠른 입력 단축키 형식 오류: \(error.localizedDescription)")
             }
         }
 
         var searchBinding: HotkeyBinding?
         if search.isEmpty {
-            problems.append("검색 단축키(searchHotkey)는 비어 있을 수 없습니다.")
+            problems.append("검색 단축키는 비어 있을 수 없습니다.")
         } else {
             do {
                 searchBinding = try HotkeyBinding(parsing: search)
             } catch {
-                problems.append("검색 단축키(searchHotkey) 형식 오류: \(error.localizedDescription)")
+                problems.append("검색 단축키 형식 오류: \(error.localizedDescription)")
             }
         }
 
         if let captureBinding, let searchBinding, captureBinding == searchBinding {
-            problems.append("캡처 단축키와 검색 단축키는 서로 달라야 합니다.")
+            problems.append("빠른 입력 단축키와 검색 단축키는 서로 달라야 합니다.")
         }
 
         return problems

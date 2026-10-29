@@ -34,7 +34,7 @@ import WorkLogCore
     private var needsNotificationRefresh = false
     private(set) var chatGPTLogin: ChatGPTLoginCoordinator?
     private var protectionTimer: Timer?
-    private var isRestoring = false
+    private(set) var isRestoring = false
     var route: SidebarRoute? = .day
     var selectedTaskId: String?
     private(set) var pendingTaskNavigation: (id: String, asOf: WorkDate?)?
@@ -178,7 +178,14 @@ import WorkLogCore
             })
     }
 
-    func retryStart() async { didStart = false; startupError = nil; await start() }
+    func retryStart() async {
+        // While a restore is closing the stores the notice is the progress surface; retrying
+        // then would only unmount it and show empty screens, so ignore the click.
+        guard !isRestoring else { return }
+        didStart = false
+        startupError = nil
+        await start()
+    }
     func dismissNotice() { notice = nil }
     func navigate(to route: SidebarRoute) {
         guard let window = NSApp.keyWindow, !(window is NSPanel),
@@ -536,6 +543,11 @@ import WorkLogCore
             return
         }
         isRestoring = true
+        // Publish the restoring state before any teardown or await so every window drops its
+        // model-backed screens first. AppRootView draws RecoveryNotice whenever startupError is
+        // set, which releases the models held by view values (`@Bindable`/`@State`/closures)
+        // while we still have references to detach and diagnose.
+        startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
         AppDiagnostics.shared.record(.operationStarted, category: .backup)
         activityIntegrations?.detach()
         maintenanceTask?.cancel()
@@ -546,6 +558,10 @@ import WorkLogCore
         notificationTask = nil
         activityIntegrations = nil; taskNotifications = nil
         // Weak lifetime checks ensure SQLite deinit has closed both databases before file replacement.
+        // Slot order is the bitmask order reported when the close times out:
+        // environment, captureSession, graph, prompts, day, taskList, projects, search,
+        // taskDetail, memoDetail, reportModel, performanceReports, reportLibrary, plan, quiz.
+        var watch = CloseLifetimeWatch()
         weak var previousEnvironment = environment
         weak var previousCapture = captureSession
         weak var previousGraph = graph
@@ -561,6 +577,21 @@ import WorkLogCore
         weak var previousReportLibrary = reportLibrary
         weak var previousPlan = plan
         weak var previousQuiz = quiz
+        watch.track("environment") { previousEnvironment != nil }
+        watch.track("captureSession") { previousCapture != nil }
+        watch.track("graph") { previousGraph != nil }
+        watch.track("prompts") { previousPrompts != nil }
+        watch.track("day") { previousDay != nil }
+        watch.track("taskList") { previousTaskList != nil }
+        watch.track("projects") { previousProjects != nil }
+        watch.track("search") { previousSearch != nil }
+        watch.track("taskDetail") { previousTask != nil }
+        watch.track("memoDetail") { previousMemo != nil }
+        watch.track("reportModel") { previousReports != nil }
+        watch.track("performanceReports") { previousPerformanceReports != nil }
+        watch.track("reportLibrary") { previousReportLibrary != nil }
+        watch.track("plan") { previousPlan != nil }
+        watch.track("quiz") { previousQuiz != nil }
         selectedTaskId = nil; selectedMemoId = nil
         capturePanel?.teardown(); capturePanel = nil
         captureSession?.detach(); graph?.detach(); prompts?.detach()
@@ -577,16 +608,40 @@ import WorkLogCore
         day = nil; search = nil; taskDetail = nil; memoDetail = nil
         reportModel = nil; performanceReports = nil; reportLibrary = nil; plan = nil; quiz = nil
         secrets = nil; settingsModel = nil; backups = nil; environment = nil
-        startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
-        for _ in 0..<30 {
-            if previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousReportLibrary == nil && previousPlan == nil && previousQuiz == nil { break }
-            try? await Task.sleep(for: .milliseconds(100))
+        // A fixed 3 s wait was too short when a window update or a winding-down task released its
+        // models late. Poll with a 50ms -> 250ms backoff for up to 6 s instead, and yield to the
+        // main run loop on every poll so AppKit/SwiftUI can actually dismantle the old screens.
+        let policy = CloseWaitPolicy.restoreClose
+        var polls = 0
+        while !watch.isQuiescent, polls < policy.maximumPolls {
+            if Task.isCancelled { break }
+            try? await Task.sleep(for: .milliseconds(policy.intervalMilliseconds(forPoll: polls)))
+            polls += 1
         }
-        guard previousEnvironment == nil && previousCapture == nil && previousGraph == nil && previousPrompts == nil && previousDay == nil && previousTaskList == nil && previousProjects == nil && previousSearch == nil && previousTask == nil && previousMemo == nil && previousReports == nil && previousPerformanceReports == nil && previousReportLibrary == nil && previousPlan == nil && previousQuiz == nil else {
-            AppDiagnostics.shared.record(.operationFailed, category: .backup, level: .error)
+        let waitedMilliseconds = policy.elapsedMilliseconds(afterPolls: polls)
+        let aliveSlots = watch.aliveNames
+        guard aliveSlots.isEmpty else {
+            // Diagnostics stay content-free: encode surviving connections as a bitmask
+            // (slot order above) plus their count, poll count and waited time.
+            AppDiagnostics.shared.record(.operationFailed, category: .backup, level: .error, fields: [
+                .phase: .state(.stopping),
+                .reason: .state(Task.isCancelled ? .cancelled : .failed),
+                .itemCount: .integer(aliveSlots.count),
+                .errorCode: .integer(watch.aliveMask),
+                .attempt: .integer(polls),
+                .durationMilliseconds: .integer(waitedMilliseconds)
+            ])
             startupError = "저장소 연결을 안전하게 닫지 못해 복원을 중단했습니다. 앱을 다시 열고 시도하세요."
             isRestoring = false
             return
+        }
+        if polls > 0 {
+            AppDiagnostics.shared.record(.maintenanceCompleted, category: .backup, fields: [
+                .phase: .state(.stopping),
+                .attempt: .integer(polls),
+                .durationMilliseconds: .integer(waitedMilliseconds),
+                .itemCount: .integer(0)
+            ])
         }
         let restored = await model.restoreAfterClosing(backup, into: options.paths, keyStore: options.keyStore,
             includeVault: includeVault, clock: options.clock)

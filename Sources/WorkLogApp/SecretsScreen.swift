@@ -395,7 +395,7 @@ import WorkLogCore
     }
 }
 
-/// Reusable by the Secret screen sheet and the sidebar's future trash destination.
+/// Reusable by the Secret screen sheet and the sidebar's trash destination.
 /// Claims ownership only when needed; it never releases an enclosing screen's claim.
 @MainActor struct SecretTrashList: View {
     @Bindable var model: SecretsModel
@@ -441,9 +441,12 @@ import WorkLogCore
                                 .focusable()
                                 .worklogKeyboardActivation { purgeId = item.id }
                                 .accessibilityLabel(Text("\(item.title) 영구 삭제")).worklogHelp("현재 보관함에서 영구 삭제")
-                        }.disabled(!canMutate)
+                        }
                     }.padding(.vertical, 4)
                 }
+                // Read lifecycle state in this body, outside the lazy row closure,
+                // so onAppear invalidates the list and updates every row action.
+                .disabled(!canMutate)
             }
         }
         .onAppear { isActive = true; model.tick(); prepare() }
