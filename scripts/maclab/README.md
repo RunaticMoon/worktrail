@@ -2,6 +2,18 @@
 
 실제 macOS 화면과 키보드 동선을 확인하는 가짜 데이터 전용 도구다. 스크립트가 있다는 사실이나 구문 검사 통과를 GUI 검증 성공으로 간주하지 않는다. 각 실행의 종료 코드, JSON, 스크린샷을 함께 확인한다.
 
+## 업무 알림 전환 회귀
+
+`swift build --build-tests` 뒤 `bash scripts/maclab/run-task-navigation-check.sh`는 실제 AppController와 Core 모델을 가짜 저장소로 검사한다. 전역 핫키는 대역이며 화면·OS 알림·IME 검증을 대신하지 않는다.
+
+`task-notification-navigation-check.js`는 별도의 DEBUG 리뷰 번들(`dev.worklog.TaskNavigationReview`, `/tmp/worktrail-issue-52-review/TaskNavigationReview.app`)만 허용한다. `--ui-test-fixture many --ui-test-task-notification cancel|discard|same`로 매번 새 프로세스를 실행한 직후 아래 명령을 실행한다. 첫 알림 권한 허용과 화면 깨우기는 호출자가 처리한다. 실제 사용자 앱에는 이 인자를 사용하지 않는다.
+
+```sh
+osascript -l JavaScript scripts/maclab/task-notification-navigation-check.js --pid <fixture-pid> --action cancel
+```
+
+OS 권한 요청이 실패하면 자동 우회하지 않는다. 콜백만 검사하려면 앱에 추가로 `--ui-test-task-notification-dispatch callback`, helper에 `--dispatch callback`을 명시한다. 결과의 `actualNotificationClicked`와 `callbackInvoked`를 구분해 기록한다. 실행 결과와 남은 검증은 [업무 알림 보호 문서](../../docs/task-notification-navigation.md)를 따른다.
+
 ## 준비와 실행
 
 - 기존 Maclab 플러그인 연결, 계정·예산 설정, `.build/maclab` 업로드 허용이 필요하다. 이 도구는 계정이나 예산 설정을 생성·변경하지 않는다.

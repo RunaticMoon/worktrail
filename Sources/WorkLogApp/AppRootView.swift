@@ -96,12 +96,16 @@ struct AppRootView: View {
                     workspace(environment)
                 }
                 .sheet(isPresented: Binding(get: { controller.selectedTaskId != nil },
-                    set: { if !$0 { controller.selectedTaskId = nil } }), onDismiss: { refreshAfterDetailDismissal() }) {
+                    set: { if !$0 { controller.closeTask() } }), onDismiss: { refreshAfterDetailDismissal() }) {
                     if let detail = controller.taskDetail {
-                        TaskDetailScreen(model: detail, onClose: { controller.selectedTaskId = nil },
+                        TaskDetailScreen(model: detail, onClose: controller.closeTask,
+                            confirmsTaskNavigation: $controller.confirmsTaskNavigation,
+                            onCancelTaskNavigation: controller.cancelTaskNavigation,
+                            onDiscardInputAndNavigate: controller.discardInputAndNavigateTask,
+                            onEditorPresentationChanged: controller.setTaskEditorPresented,
                             taskNames: taskNames, onOpenTask: { controller.openTask($0, asOf: detail.asOf) },
                             meetingRepository: environment.repo, onOpenMeeting: { hit in
-                                controller.selectedTaskId = nil
+                                controller.closeTask()
                                 controller.openMeeting(hit)
                             })
                             .buttonStyle(.bordered)

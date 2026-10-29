@@ -8,6 +8,7 @@ import Observation
     public private(set) var asOf: WorkDate?
     public var workDate: WorkDate
     public var statusNote = ""
+    private var savedStatusNote = ""
     public private(set) var statusEvents: [DomainEvent] = []
     public private(set) var noticeMessage: String?
     public private(set) var checklistUndoCount = 0
@@ -25,10 +26,21 @@ import Observation
         self.environment = environment
         workDate = environment.calendar.workDate(of: environment.options.clock.now())
     }
-    public func load(taskId: String, asOf: WorkDate? = nil) {
-        // 다른 업무를 열면 이전 업무의 범위 선택이 새 업무로 새지 않게 한다.
+    public var hasUnsavedInput: Bool {
+        !activityText.isEmpty || !checklistText.isEmpty || statusNote != savedStatusNote
+    }
+
+    public func discardInput() {
+        activityText = ""; checklistText = ""; statusNote = ""; savedStatusNote = ""
+    }
+
+    /// false면 선택과 입력을 그대로 유지한다. true는 조회 성공 여부가 아닌 선택 수락 여부다.
+    @discardableResult public func load(taskId: String, asOf: WorkDate? = nil) -> Bool {
+        guard (self.taskId == taskId && self.asOf == asOf) || !hasUnsavedInput else { return false }
+        // 다른 업무의 입력·범위·실행 취소 이력을 새 업무로 넘기지 않는다.
         if self.taskId != taskId {
-            activityProjectId = nil; workDate = today; statusNote = ""; noticeMessage = nil
+            discardInput()
+            activityProjectId = nil; workDate = today; noticeMessage = nil
             checklistUndo = []; checklistUndoCount = 0
         }
         self.taskId = taskId; self.asOf = asOf; completionCheck = nil
@@ -43,7 +55,11 @@ import Observation
                !(detail?.projects.contains { $0.project.id == selected } ?? false) {
                 activityProjectId = nil
             }
-        } catch { detail = nil; errorMessage = "업무를 불러오지 못했습니다. 다시 선택하세요." }
+        } catch {
+            detail = nil; statusEvents = []
+            errorMessage = "업무를 불러오지 못했습니다. 다시 선택하세요."
+        }
+        return true
     }
     @discardableResult private func update(_ action: (String) throws -> Void) -> Bool {
         guard asOf == nil, let taskId else { return false }
@@ -67,13 +83,18 @@ import Observation
     }
 
     public func changeStatus(_ kind: DomainEventKind) {
-        update { try environment.tasks.changeTaskStatus(taskId: $0, kind: kind, workDate: workDate, note: statusNote.isEmpty ? nil : statusNote) }
+        if update({ try environment.tasks.changeTaskStatus(taskId: $0, kind: kind, workDate: workDate, note: statusNote.isEmpty ? nil : statusNote) }) {
+            savedStatusNote = statusNote
+        }
     }
     public func complete(confirmRemaining: Bool = false) {
         guard asOf == nil, let taskId else { return }
         do {
             let result = try environment.tasks.completeTask(taskId: taskId, workDate: workDate, confirmRemaining: confirmRemaining, note: statusNote.isEmpty ? nil : statusNote)
-            if result.completed { load(taskId: taskId); onChanged?() } else { completionCheck = result; errorMessage = nil }
+            if result.completed {
+                savedStatusNote = statusNote
+                load(taskId: taskId); onChanged?()
+            } else { completionCheck = result; errorMessage = nil }
         } catch { errorMessage = (error as? WorkLogError)?.localizedDescription ?? "완료하지 못했습니다. 업무 상태를 확인하세요." }
     }
     public func cancelCompletion() { completionCheck = nil }
@@ -84,7 +105,9 @@ import Observation
         update { _ = try environment.tasks.addChecklistItem(taskId: $0, text: checklistText); checklistText = "" }
     }
     public func changeProjectStatus(projectId: String, kind: DomainEventKind) {
-        update { try environment.tasks.changeProjectStatus(taskId: $0, projectId: projectId, kind: kind, workDate: workDate, note: statusNote.isEmpty ? nil : statusNote) }
+        if update({ try environment.tasks.changeProjectStatus(taskId: $0, projectId: projectId, kind: kind, workDate: workDate, note: statusNote.isEmpty ? nil : statusNote) }) {
+            savedStatusNote = statusNote
+        }
     }
     public func addActivity() {
         guard !activityText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
