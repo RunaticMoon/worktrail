@@ -46,7 +46,7 @@ final class SettingsHotkeyValidationTests: XCTestCase {
         var settings = AppSettings()
         settings.captureHotkey = "ctrl+opt+tab"
         let problems = SettingsStore.validate(settings)
-        XCTAssertTrue(problems.contains { $0.contains("입력 단축키(captureHotkey) 형식 오류") },
+        XCTAssertTrue(problems.contains { $0.contains("빠른 입력 단축키 형식 오류") },
                       "형식 오류 문구가 필요합니다: \(problems)")
         XCTAssertTrue(problems.contains { $0.contains("지원하지 않는 키") }, "\(problems)")
     }
@@ -55,20 +55,20 @@ final class SettingsHotkeyValidationTests: XCTestCase {
         var settings = AppSettings()
         settings.searchHotkey = "super+d"
         let problems = SettingsStore.validate(settings)
-        XCTAssertTrue(problems.contains { $0.contains("검색 단축키(searchHotkey) 형식 오류") }, "\(problems)")
+        XCTAssertTrue(problems.contains { $0.contains("검색 단축키 형식 오류") }, "\(problems)")
         XCTAssertTrue(problems.contains { $0.contains("지원하지 않는 수정자") }, "\(problems)")
     }
 
     func testMissingModifierRejected() {
         var settings = AppSettings()
         settings.captureHotkey = "d"
-        XCTAssertTrue(SettingsStore.validate(settings).contains { $0.contains("입력 단축키(captureHotkey) 형식 오류") })
+        XCTAssertTrue(SettingsStore.validate(settings).contains { $0.contains("빠른 입력 단축키 형식 오류") })
     }
 
     func testMissingKeyRejected() {
         var settings = AppSettings()
         settings.searchHotkey = "ctrl+opt"
-        XCTAssertTrue(SettingsStore.validate(settings).contains { $0.contains("검색 단축키(searchHotkey) 형식 오류") })
+        XCTAssertTrue(SettingsStore.validate(settings).contains { $0.contains("검색 단축키 형식 오류") })
     }
 
     // MARK: - 별칭·순서만 다른 동일 조합 → 충돌
@@ -78,7 +78,7 @@ final class SettingsHotkeyValidationTests: XCTestCase {
         settings.captureHotkey = "command+control+F"
         settings.searchHotkey = "CTRL+CMD+f"
         let problems = SettingsStore.validate(settings)
-        XCTAssertTrue(problems.contains("캡처 단축키와 검색 단축키는 서로 달라야 합니다."), "\(problems)")
+        XCTAssertTrue(problems.contains("빠른 입력 단축키와 검색 단축키는 서로 달라야 합니다."), "\(problems)")
         XCTAssertFalse(problems.contains { $0.contains("형식 오류") }, "정상 파싱이어야 합니다: \(problems)")
     }
 
@@ -93,7 +93,7 @@ final class SettingsHotkeyValidationTests: XCTestCase {
         var settings = AppSettings()
         settings.captureHotkey = "   "
         let problems = SettingsStore.validate(settings)
-        XCTAssertTrue(problems.contains("캡처 단축키(captureHotkey)는 비어 있을 수 없습니다."), "\(problems)")
+        XCTAssertTrue(problems.contains("빠른 입력 단축키는 비어 있을 수 없습니다."), "\(problems)")
     }
 
     // MARK: - 정상값 정규화 저장

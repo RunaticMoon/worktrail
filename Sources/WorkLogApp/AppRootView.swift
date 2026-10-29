@@ -82,7 +82,17 @@ struct AppRootView: View {
 
     var body: some View {
         Group {
-            if let error = controller.startupError {
+            if controller.isRestoring, let progress = controller.startupError {
+                // Backup restore tears the models down before it awaits; this branch releases the
+                // model-backed screens (replacing RecoveryNotice, whose retry is inert while restoring).
+                ProgressView {
+                    Text(progress)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(Text(progress))
+                .frame(maxWidth: 540)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = controller.startupError {
                 RecoveryNotice(failed: error,
                     preserved: "기존 기록은 삭제하지 않았습니다. 저장소 권한과 설정 파일을 확인하세요.",
                     retry: { Task { await controller.retryStart() } })

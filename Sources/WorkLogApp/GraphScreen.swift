@@ -37,6 +37,10 @@ struct GraphScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12).padding(.bottom, 12)
             }
+            if model.phase == .loaded, model.isDense {
+                densityGuidance
+                    .padding(.horizontal, 12).padding(.bottom, 12)
+            }
             Divider()
             content
             Divider()
@@ -61,6 +65,37 @@ struct GraphScreen: View {
     }
 
     // MARK: - Filters and states
+
+    private var densityGuidance: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            InlineNotice(message: "노드와 연결이 많아 관계가 겹쳐 보입니다. 기간이나 종류를 줄이거나, 노드를 선택해 주변 보기를 사용하세요. 목록 검색은 그래프를 줄이지 않습니다.")
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { densityActions }
+                VStack(alignment: .leading, spacing: 8) { densityActions }
+            }
+            .disabled(model.isRecomputing)
+        }
+    }
+
+    @ViewBuilder private var densityActions: some View {
+        Button("최근 7일로 보기") { showRecentWeek() }
+            .focusable()
+            .worklogKeyboardActivation(showRecentWeek)
+            .disabled(model.rangePreset == .week)
+            .accessibilityHint("그래프 조회 기간을 최근 7일로 변경합니다.")
+        Button("선택한 노드 주변 보기", systemImage: "scope") { model.focusOnSelection() }
+            .focusable()
+            .worklogKeyboardActivation { model.focusOnSelection() }
+            .disabled(model.selectedNodeID == nil || model.selectedNodeID == model.focus)
+            .accessibilityHint("선택한 노드에서 두 단계까지 연결된 기록을 표시합니다.")
+    }
+
+    private func showRecentWeek() {
+        model.rangePreset = .week
+        // 안내가 사라져도 기간 컨트롤에서 키보드 조작을 이어갈 수 있다.
+        periodFocused = true
+    }
 
     private var filters: some View {
         VStack(alignment: .leading, spacing: 8) {

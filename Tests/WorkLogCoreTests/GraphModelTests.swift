@@ -18,6 +18,60 @@ final class GraphModelTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - 밀집 안내
+
+    func testDensityThresholdBoundariesAndReportedGraph() {
+        XCTAssertFalse(GraphModel.isDense(nodeCount: 0, edgeCount: 0))
+        XCTAssertFalse(GraphModel.isDense(nodeCount: 1, edgeCount: 0))
+        XCTAssertFalse(GraphModel.isDense(nodeCount: 99, edgeCount: 299))
+        XCTAssertTrue(GraphModel.isDense(nodeCount: 100, edgeCount: 0))
+        XCTAssertTrue(GraphModel.isDense(nodeCount: 99, edgeCount: 300))
+        XCTAssertTrue(GraphModel.isDense(nodeCount: 197, edgeCount: 990),
+                      "The reported graph must show guidance before the 250-node cap")
+        XCTAssertTrue(GraphModel.isDense(nodeCount: 250, edgeCount: 0))
+    }
+
+    @MainActor
+    func testDensityUsesVisibleSnapshotRatherThanListSearchAndClearsWhenNarrowed() async throws {
+        let env = try makeEnvironment()
+        let olderDate = env.calendar.adding(days: -10, to: today)
+        for index in 0..<100 {
+            try seedMemo(env, id: "dense-\(index)", body: "밀집 메모 \(index)", date: olderDate)
+        }
+        try seedTask(env, id: "recent-task", title: "최근 업무", date: today)
+        let model = GraphModel(environment: env)
+        XCTAssertFalse(model.isDense)
+        await model.reload().value
+        XCTAssertTrue(model.isDense)
+        XCTAssertFalse(model.isTruncated)
+
+        model.searchText = "일치하지 않는 제목"
+        XCTAssertTrue(model.listedNodes.isEmpty)
+        XCTAssertTrue(model.isDense, "List search does not reduce the canvas")
+        model.searchText = ""
+
+        model.rangePreset = .week
+        await model.reload().value
+        XCTAssertEqual(model.snapshot.nodes.count, 1)
+        XCTAssertFalse(model.isDense)
+
+        model.rangePreset = .month
+        await model.reload().value
+        XCTAssertTrue(model.isDense)
+        model.visibleKinds = [.task]
+        await model.reload().value
+        XCTAssertFalse(model.isDense)
+
+        model.visibleKinds = GraphModel.defaultVisibleKinds
+        await model.reload().value
+        model.select(node(.memo, "dense-0"))
+        await model.focusOnSelection().value
+        XCTAssertEqual(model.snapshot.nodes.count, 1)
+        XCTAssertFalse(model.isDense)
+        await model.clearFocus().value
+        XCTAssertTrue(model.isDense)
+    }
+
     // MARK: - 픽스처
 
     /// 고정 시각이 오늘이 되도록 하는 AppEnvironment.

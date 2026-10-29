@@ -85,6 +85,11 @@ import WorkLogCore
             if !model.isLocked { _ = model.acquireEditor(.main) }
             model.searchTitles()
         }
+        // The incoming destination can appear before the outgoing .main host
+        // releases its claim. Reacquire only while this screen is still active.
+        .onChange(of: isActive && !model.isLocked && !model.canEdit(from: .main)) { _, needsEditor in
+            if needsEditor { _ = model.acquireEditor(.main) }
+        }
         .onChange(of: model.isLocked) { _, locked in
             if locked {
                 showsTrash = false
@@ -395,7 +400,7 @@ import WorkLogCore
     }
 }
 
-/// Reusable by the Secret screen sheet and the sidebar's future trash destination.
+/// Reusable by the Secret screen sheet and the sidebar's trash destination.
 /// Claims ownership only when needed; it never releases an enclosing screen's claim.
 @MainActor struct SecretTrashList: View {
     @Bindable var model: SecretsModel
@@ -441,15 +446,23 @@ import WorkLogCore
                                 .focusable()
                                 .worklogKeyboardActivation { purgeId = item.id }
                                 .accessibilityLabel(Text("\(item.title) 영구 삭제")).worklogHelp("현재 보관함에서 영구 삭제")
-                        }.disabled(!canMutate)
+                        }
                     }.padding(.vertical, 4)
                 }
+                // Read lifecycle state in this body, outside the lazy row closure,
+                // so onAppear invalidates the list and updates every row action.
+                .disabled(!canMutate)
             }
         }
         .onAppear { isActive = true; model.tick(); prepare() }
         .onChange(of: focusRevision) { _, _ in focusFirstAction() }
         .onChange(of: model.trashItems.map(\.id)) { _, _ in
             if focusedAction != nil { focusFirstAction() }
+        }
+        // A departing Secret screen may release .main after prepare() reused it.
+        // prepare() records a replacement claim so disappearance releases it too.
+        .onChange(of: isActive && !model.isLocked && !model.canEdit(from: .main)) { _, needsEditor in
+            if needsEditor { prepare() }
         }
         .onChange(of: model.isLocked) { _, locked in
             if locked { purgeId = nil; ownsClaim = false }

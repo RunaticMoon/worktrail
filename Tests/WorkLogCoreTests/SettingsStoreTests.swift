@@ -36,6 +36,11 @@ final class SettingsStoreTests: XCTestCase {
         return value?.intValue ?? -1
     }
 
+    /// `AppSettings`의 저장 프로퍼티 이름. 검증 문구에 내부 식별자가 새지 않았는지 검사하는 기준이다.
+    private func appSettingsPropertyNames() -> [String] {
+        Mirror(reflecting: AppSettings()).children.compactMap(\.label)
+    }
+
     // MARK: 1 — 파일 없음 → 기본값, 파일 생성 안 됨
 
     func testLoadWithoutFileReturnsDefaultsAndCreatesNothing() throws {
@@ -147,6 +152,68 @@ final class SettingsStoreTests: XCTestCase {
 
     func testValidateReturnsEmptyForDefaults() {
         XCTAssertTrue(SettingsStore.validate(AppSettings()).isEmpty)
+    }
+
+    // MARK: 5b — 검증 문구는 화면 레이블을 쓰고 내부 프로퍼티 이름을 노출하지 않는다
+
+    func testBackupRetentionValidationMessageUsesVisibleLabel() throws {
+        var settings = AppSettings()
+        settings.backupRetentionDays = 0
+
+        let problems = SettingsStore.validate(settings)
+
+        XCTAssertFalse(problems.isEmpty, "백업 보관 기간 위반이 보고되지 않음")
+        let message = try XCTUnwrap(problems.first)
+        XCTAssertTrue(message.contains("백업 보관 기간"), message)
+        XCTAssertTrue(message.contains("1~3650일"), "범위 정보가 유지돼야 합니다: \(message)")
+        XCTAssertTrue(message.contains("현재 0일"), "현재 값 정보가 유지돼야 합니다: \(message)")
+        for name in appSettingsPropertyNames() {
+            XCTAssertFalse(message.contains(name), "내부 프로퍼티 이름이 노출됨: \(name) in \(message)")
+        }
+        XCTAssertNil(message.range(of: "[a-z]+[A-Z]", options: .regularExpression),
+                     "내부 camelCase 이름이 노출됨: \(message)")
+    }
+
+    /// 모든 필드를 위반 값으로 채워 나오는 모든 검증 문구에 `AppSettings` 프로퍼티 이름이 없어야 한다.
+    /// (단축키는 파싱 실패와 빈 값 두 경로가 있어 각각 확인한다.)
+    func testEveryValidationMessageAvoidsInternalPropertyNames() {
+        let hotkeyVariants: [(String, (inout AppSettings) -> Void)] = [
+            ("파싱 실패", { $0.captureHotkey = "ctrl+opt+tab"; $0.searchHotkey = "super+d" }),
+            ("빈 값", { $0.captureHotkey = "   "; $0.searchHotkey = "\n" }),
+        ]
+        // 위반한 필드의 화면/서술형 문구가 모두 보고되는지 확인한다(문제 개수 고정값에 의존하지 않는다).
+        let expectedLabels = ["미사용 시 자동 잠금", "복사 후 클립보드 지우기", "백업 보관 기간",
+                              "월요일 검토 알림", "성과 질문 최대 개수", "AI 동시 실행 수",
+                              "업무 시간대", "빠른 입력 단축키", "검색 단축키"]
+        let propertyNames = appSettingsPropertyNames()
+        XCTAssertFalse(propertyNames.isEmpty, "AppSettings 프로퍼티 이름을 찾지 못했습니다")
+
+        for (variant, mutateHotkeys) in hotkeyVariants {
+            var settings = AppSettings()
+            settings.secretIdleLockMinutes = 0
+            settings.clipboardClearSeconds = 0
+            settings.backupRetentionDays = 0
+            settings.mondayReminderTime = "99:99"
+            settings.maxQuizQuestions = 9
+            settings.aiConcurrency = 9
+            settings.timeZoneIdentifier = "No/Such_Zone"
+            mutateHotkeys(&settings)
+
+            let problems = SettingsStore.validate(settings)
+            let joined = problems.joined(separator: "\n")
+            for label in expectedLabels {
+                XCTAssertTrue(joined.contains(label),
+                              "[\(variant)] \(label) 위반이 보고돼야 합니다: \(problems)")
+            }
+            for message in problems {
+                for name in propertyNames {
+                    XCTAssertFalse(message.contains(name),
+                                   "[\(variant)] 내부 프로퍼티 이름이 노출됨: \(name) in \(message)")
+                }
+                XCTAssertNil(message.range(of: "[a-z]+[A-Z]", options: .regularExpression),
+                             "[\(variant)] 내부 camelCase 이름이 노출됨: \(message)")
+            }
+        }
     }
 
     // MARK: 6 — 상위 디렉터리 없으면 0700으로 생성
