@@ -85,6 +85,11 @@ import WorkLogCore
             if !model.isLocked { _ = model.acquireEditor(.main) }
             model.searchTitles()
         }
+        // The incoming destination can appear before the outgoing .main host
+        // releases its claim. Reacquire only while this screen is still active.
+        .onChange(of: isActive && !model.isLocked && !model.canEdit(from: .main)) { _, needsEditor in
+            if needsEditor { _ = model.acquireEditor(.main) }
+        }
         .onChange(of: model.isLocked) { _, locked in
             if locked {
                 showsTrash = false
@@ -453,6 +458,11 @@ import WorkLogCore
         .onChange(of: focusRevision) { _, _ in focusFirstAction() }
         .onChange(of: model.trashItems.map(\.id)) { _, _ in
             if focusedAction != nil { focusFirstAction() }
+        }
+        // A departing Secret screen may release .main after prepare() reused it.
+        // prepare() records a replacement claim so disappearance releases it too.
+        .onChange(of: isActive && !model.isLocked && !model.canEdit(from: .main)) { _, needsEditor in
+            if needsEditor { prepare() }
         }
         .onChange(of: model.isLocked) { _, locked in
             if locked { purgeId = nil; ownsClaim = false }
