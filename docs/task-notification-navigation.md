@@ -27,13 +27,37 @@ DB·마이그레이션·Secret·AI 입력 계약은 바꾸지 않는다. #50의 
 
 DEBUG 전용 `--ui-test-fixture many --ui-test-task-notification cancel|discard|same`은 `dev.worklog.TaskNavigationReview` 번들과 임시 가짜 저장소에서만 동작한다. 실제 OS 알림을 선택적으로 예약하며, helper는 정확한 합성 알림 제목만 클릭한다.
 
-이 M1에서는 리뷰 번들의 알림 **권한 요청**이 코드 1(`UNErrorCodeNotificationsNotAllowed`)로 실패했다. `usernoted`의 해당 bundle 로그도 클라이언트 식별자 검증 실패를 나타냈다. OS 권한이나 사용자 알림 설정을 변경하지 않았다. 따라서 **실제 알림 센터 클릭 수용 검증은 미완료**다. 콜백/모델 통과를 실제 알림 클릭 통과로 해석하지 않는다.
+2026-10-29에는 리뷰 번들의 알림 **권한 요청**이 코드 1(`UNErrorCodeNotificationsNotAllowed`)로 실패했다. 2026-10-31 재진단 결과 원인은 번들 위치였다. `/tmp`(`/private/tmp`)의 앱은 LaunchServices에 `in-temp-dir`로 등록되고, `usernoted`의 `LSCopyApplicationURLsForBundleIdentifier`가 `kLSApplicationNotFoundErr`를 반환한 뒤 "Failed to find or validate client"로 요청을 거절한다. 서명(ad-hoc)이나 OS 설정 문제가 아니었다.
+
+따라서 실제 OS 알림 방식은 같은 리뷰 번들을 `ditto`로 임시 디렉터리 밖(helper 기준 `~/.local/state/worktrail-issue-52-review/TaskNavigationReview.app`)에 두고 실행한다. 아래 실행은 같은 번들을 `~/.local/state/gh52-noti-20261031/review/`에 두고 helper 경로 검사만 그 위치로 바꾼 로컬 사본으로 했다. 임시 디렉터리 밖에서는 시스템 알림 권한 배너가 표시되었다. 권한은 가짜 리뷰 번들 `dev.worklog.TaskNavigationReview`의 배너에서만 허용했고, 다른 앱 알림·개인정보 보호(TCC)·운영 `dev.worklog.WorkLog` 설정은 변경하지 않았다.
 
 OS 알림을 사용할 수 없는 검증 환경에는 명시적 `--ui-test-task-notification-dispatch callback` 옵션을 제공한다. 같은 스케줄러의 운영 `onOpenTask` 콜백을 호출하고 helper 결과에 `actualNotificationClicked=false`, `callbackInvoked=true`를 구분한다. 이 옵션 없이 OS 검사가 실패했다고 자동으로 콜백 방식으로 넘어가지는 않는다.
 
-이 명시적 콜백 방식의 실제 macOS 화면 검사 **3건(cancel/discard/same)이 모두 종료 코드 0으로 통과**했다. 취소(Escape) 후 A의 입력·날짜·범위·사유 유지, 입력 폐기 후 B의 빈 입력과 저장/추가 비활성, 동일 업무 알림 후 입력 유지와 A에 대한 진행 기록·체크리스트 저장을 확인했다. 키보드와 AX 버튼 액션을 함께 사용했다. 가짜 알림 클라이언트 제한 때문에 `UNUserNotificationCenterDelegate`에 실제 OS 클릭 응답이 들어오는 구간은 실행하지 않았다.
+2026-10-29에는 이 명시적 콜백 방식의 실제 macOS 화면 검사 **3건(cancel/discard/same)이 모두 종료 코드 0으로 통과**했다. 취소(Escape) 후 A의 입력·날짜·범위·사유 유지, 입력 폐기 후 B의 빈 입력과 저장/추가 비활성, 동일 업무 알림 후 입력 유지와 A에 대한 진행 기록·체크리스트 저장을 확인했다. 키보드와 AX 버튼 액션을 함께 사용했다. 당시 권한 거절 때문에 `UNUserNotificationCenterDelegate`에 실제 OS 클릭 응답이 들어오는 구간은 실행하지 못했고, 위 2026-10-31 실행에서 확인했다.
 
-실제 한글 IME 조합 중 알림 클릭과 사용자 설치본에서도 추가 확인이 필요하다. 일반 입력·키보드 확인과 모델 테스트는 그 검증을 대신하지 않는다.
+### 실제 알림 센터 클릭 결과 (2026-10-31 KST)
+
+`b0a50df` 빌드 리뷰 번들(v0.16.2 태그 `a7b52bb`와 소스 트리 동일, CDHash `3832f8679f651b50bd1cb12ab76a7288d4ea0bb3`)과 가짜 `many` 저장소만 사용했다. helper가 알림 센터의 정확한 합성 제목 배너를 실제 마우스 이벤트로 클릭했고, 결과는 모두 `actualNotificationClicked=true`, `callbackInvoked=false`, `realDataRead=false`다.
+
+| 동작 | 결과 | 확인 내용 |
+| --- | --- | --- |
+| cancel | 통과 | 이동 확인창 표시, 계속 편집 후 A·진행 기록·체크리스트·날짜·프로젝트 범위·상태 사유 유지 |
+| discard | 통과 | 입력 버리고 이동 후 B 표시, B 입력 비어 있음, A 문구 없음, 빈 입력 저장/추가 비활성 |
+| same | 통과 | 확인창 없음, 입력 유지, A에 진행 기록과 체크리스트 저장 |
+
+이 M1 화면에는 다른 작업이 남긴 시스템 창 두 개가 앞에 떠 있었다. 2026-10-29 15:18 KST `swift-package`가 요청한 키체인 SecurityAgent 대화상자(요청 프로세스는 이미 종료)와 다른 앱의 충돌 보고 창이다. 이 창들을 건드리지 않았다. SecurityAgent 창이 키보드 초점을 가져가 System Events 키 입력이 앱에 전달되지 않았다(같은 Escape를 앱 프로세스에 직접 보내면 확인창이 정상 종료됨). 그래서 이번 실행은 로컬 helper 사본에서 키 입력만 `CGEventPostToPid`로, 확인창 버튼은 겹침을 피하려 AX `AXPress`로 보냈다. 알림 클릭 자체는 실제 HID 마우스 이벤트다. 저장소의 helper는 기본 System Events 키 입력을 유지한다.
+
+### 한글 IME 조합 중 알림 (부분 확인)
+
+두벌식 입력으로 A의 진행 기록 끝에 `하`를 조합한 상태에서 실제 알림을 클릭했다. 클릭 직후 이동 확인창이 표시되었고, 계속 편집 후 A의 진행 기록은 기존 문구 + `하`로 유지되었다. 입력 손실이나 B로의 이동은 없었다. 실행 후 입력 소스는 ABC로 복원했다.
+
+다만 "조합이 끝날 때까지 대기" 경로는 이 화면에서 검증하지 못했다. 알림 클릭 없이 콜백만 호출한 경우에도 조합 문자가 보이는 상태에서 확인창이 바로 표시되었다. 대기 판정은 `NSApp.keyWindow`의 first responder를 확인하는데, 위 SecurityAgent 창이 키 창 상태를 가져간 것으로 보이며(앱의 AX focused window가 비어 있음) 이 환경에서는 조합 중 여부를 판정할 수 없다. 따라서 실제 알림 클릭이 조합을 먼저 확정했는지, 대기 경로가 정상 동작하는지는 **미확정**이다. 남은 시스템 대화상자를 사용자가 닫은 뒤 일반 키 입력으로 재검증해야 한다.
+
+### 사용자 설치본
+
+과거 사용자 설치본의 버전은 알 수 없다. 운영 바이너리는 저장소를 `FileManager.homeDirectoryForCurrentUser` 기준 `~/Library/Application Support/WorkLog`로 고정하고, 금고 키를 로그인 키체인의 `dev.worklog.WorkLog` 서비스에 둔다. `HOME` 환경 변수로는 홈 경로가 바뀌지 않아(2026-10-31 확인) 같은 macOS 계정에서는 저장소를 격리할 수 없다. 운영 마감 알림은 알림일 09:00(업무 시간대)에만 예약되므로 즉시 재현할 수 없다.
+
+따라서 정식 v0.16.2 바이너리에서의 실제 알림 클릭 확인은 **미실행**이다. 실행하려면 별도 macOS 사용자 계정의 빈 저장소, 또는 이미 가짜 데이터만 있는 설치 검증 저장소에 가짜 업무 A/B를 추가하고 다음 09:00 알림을 클릭하는 방식이 필요하다. 가짜 리뷰 번들 결과·일반 입력·모델 테스트는 그 검증을 대신하지 않는다.
 
 ## 배포와 롤백
 

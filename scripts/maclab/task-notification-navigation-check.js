@@ -5,8 +5,13 @@
  *   --pid PID --action cancel|discard|same
  * Each action requires a fresh launch; the synthetic notification arrives 20s
  * after authorization. No production app, real records, clipboard or credentials.
+ * OS mode requires the bundle outside temp dirs: copy it with ditto to
+ * ~/.local/state/worktrail-issue-52-review/ and launch it with open. A /tmp bundle
+ * is marked in-temp-dir by LaunchServices and usernoted then rejects it, so copy
+ * instead of running from /tmp.
  * If the OS rejects review-app notifications, explicitly launch with
- * --ui-test-task-notification-dispatch callback and pass --dispatch callback here.
+ * --ui-test-task-notification-dispatch callback and pass --dispatch callback here;
+ * callback mode keeps using /tmp/worktrail-issue-52-review.
  * That path verifies the production navigation callback, not an OS notification click.
  * NotificationCenter queries use exact synthetic-text predicates; unrelated
  * notification text is never fetched, printed, clicked or dismissed.
@@ -164,7 +169,16 @@ function run(args) {
         need(Number.isInteger(pid) && pid > 1 && ['cancel', 'discard', 'same'].indexOf(action) >= 0, 'ARGUMENTS');
         app = need($.NSRunningApplication.runningApplicationWithProcessIdentifier(pid), 'FIXTURE_NOT_RUNNING');
         need(navigationString(app.bundleIdentifier) === 'dev.worklog.TaskNavigationReview', 'FIXTURE_BUNDLE');
-        need(/^\/(?:private\/)?tmp\/worktrail-issue-52-review\/TaskNavigationReview\.app$/.test(navigationString(app.bundleURL.path)), 'FIXTURE_PATH');
+        // Callback fixtures must stay under /tmp (UITestFixture.swift only allows
+        // that). OS notifications need a bundle outside temp dirs, because
+        // LaunchServices marks /tmp bundles in-temp-dir and usernoted rejects them.
+        var bundlePath = navigationString(app.bundleURL.path);
+        if (usesCallback) {
+            need(/^\/(?:private\/)?tmp\/worktrail-issue-52-review\/TaskNavigationReview\.app$/.test(bundlePath), 'FIXTURE_PATH');
+        } else {
+            var reviewHome = navigationString($.NSHomeDirectory());
+            need(bundlePath === reviewHome + '/.local/state/worktrail-issue-52-review/TaskNavigationReview.app', 'FIXTURE_PATH');
+        }
         var automation = Application.currentApplication(); automation.includeStandardAdditions = true;
         var command = automation.doShellScript('/bin/ps -ww -p ' + pid + ' -o command=');
         need(/(?:^|\s)--ui-test-fixture\s+many(?:\s|$)/.test(command), 'FIXTURE_ARGUMENT');
