@@ -6,9 +6,11 @@
  * Each action requires a fresh launch; the synthetic notification arrives 20s
  * after authorization. No production app, real records, clipboard or credentials.
  * OS mode requires the bundle outside temp dirs: copy it with ditto to
- * ~/.local/state/worktrail-issue-52-review/ and launch it with open. A /tmp bundle
- * is marked in-temp-dir by LaunchServices and usernoted then rejects it, so copy
- * instead of running from /tmp.
+ * ~/.local/state/worktrail-issue-52-review/ and only ever launch it with the
+ * fixture arguments above (open -n ... --args ...). Never launch the review bundle
+ * without --ui-test-fixture: a DEBUG build without it opens the standard user
+ * storage and Keychain. A /tmp bundle is marked in-temp-dir by LaunchServices and
+ * usernoted then rejects it, so copy instead of running from /tmp.
  * If the OS rejects review-app notifications, explicitly launch with
  * --ui-test-task-notification-dispatch callback and pass --dispatch callback here;
  * callback mode keeps using /tmp/worktrail-issue-52-review.

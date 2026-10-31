@@ -6,7 +6,7 @@
 
 `swift build --build-tests` 뒤 `bash scripts/maclab/run-task-navigation-check.sh`는 실제 AppController와 Core 모델을 가짜 저장소로 검사한다. 전역 핫키는 대역이며 화면·OS 알림·IME 검증을 대신하지 않는다.
 
-`task-notification-navigation-check.js`는 별도의 DEBUG 리뷰 번들(`dev.worklog.TaskNavigationReview`)만 허용한다. 실제 OS 알림 모드는 `~/.local/state/worktrail-issue-52-review/TaskNavigationReview.app` 경로를 요구한다. 번들은 `ditto`로 복사하고 `open`으로 한 번 실행해 LaunchServices에 등록한다. `/tmp` 아래 번들은 in-temp-dir로 표시되어 usernoted가 `UNErrorCodeNotificationsNotAllowed`로 거부하므로 임시 디렉터리에서는 실행하지 않는다. `--ui-test-fixture many --ui-test-task-notification cancel|discard|same`로 매번 새 프로세스를 실행한 직후 아래 명령을 실행한다. 첫 알림 권한 허용과 화면 깨우기는 호출자가 처리한다. 실제 사용자 앱에는 이 인자를 사용하지 않는다.
+`task-notification-navigation-check.js`는 별도의 DEBUG 리뷰 번들(`dev.worklog.TaskNavigationReview`)만 허용한다. 실제 OS 알림 모드는 `~/.local/state/worktrail-issue-52-review/TaskNavigationReview.app` 경로를 요구한다. 번들은 `ditto`로 복사하고 항상 `open -n <번들> --args --ui-test-fixture many --ui-test-task-notification <동작>`처럼 fixture 인자와 함께 실행한다. 인자 없이 실행하면 DEBUG 빌드도 실제 사용자 저장소와 키체인을 열므로 등록만 필요하면 실행 대신 `lsregister -f <번들>`을 쓴다. `/tmp` 아래 번들은 in-temp-dir로 표시되어 usernoted가 `UNErrorCodeNotificationsNotAllowed`로 거부하므로 임시 디렉터리에서는 실행하지 않는다. `--ui-test-fixture many --ui-test-task-notification cancel|discard|same`로 매번 새 프로세스를 실행한 직후 아래 명령을 실행한다. 첫 알림 권한 허용과 화면 깨우기는 호출자가 처리한다. 실제 사용자 앱에는 이 인자를 사용하지 않는다.
 
 ```sh
 osascript -l JavaScript scripts/maclab/task-notification-navigation-check.js --pid <fixture-pid> --action cancel
