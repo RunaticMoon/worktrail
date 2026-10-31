@@ -29,7 +29,7 @@ DEBUG 전용 `--ui-test-fixture many --ui-test-task-notification cancel|discard|
 
 2026-10-29에는 리뷰 번들의 알림 **권한 요청**이 코드 1(`UNErrorCodeNotificationsNotAllowed`)로 실패했다. 2026-10-31 재진단 결과 원인은 번들 위치였다. `/tmp`(`/private/tmp`)의 앱은 LaunchServices에 `in-temp-dir`로 등록되고, `usernoted`의 `LSCopyApplicationURLsForBundleIdentifier`가 `kLSApplicationNotFoundErr`를 반환한 뒤 "Failed to find or validate client"로 요청을 거절한다. 서명(ad-hoc)이나 OS 설정 문제가 아니었다.
 
-따라서 실제 OS 알림 방식은 같은 리뷰 번들을 `ditto`로 임시 디렉터리 밖(helper 기준 `~/.local/state/worktrail-issue-52-review/TaskNavigationReview.app`)에 두고 실행한다. 아래 실행은 같은 번들을 `~/.local/state/gh52-noti-20261031/review/`에 두고 로컬 helper 사본으로 했다. 사본은 경로 검사 위치, 키 입력 전달, 확인창 버튼 누르기 방식만 다르고(아래 설명) 알림 검색·클릭과 판정 항목은 저장소 helper와 같다. 커밋된 helper 자체는 GUI에서 다시 실행하지 않았다(구문 검사만 통과). 임시 디렉터리 밖에서는 시스템 알림 권한 배너가 표시되었다. 권한은 가짜 리뷰 번들 `dev.worklog.TaskNavigationReview`의 배너에서만 허용했고, 다른 앱 알림·개인정보 보호(TCC)·운영 `dev.worklog.WorkLog` 설정은 변경하지 않았다.
+따라서 실제 OS 알림 방식은 같은 리뷰 번들을 `ditto`로 임시 디렉터리 밖(helper 기준 `~/.local/state/worktrail-issue-52-review/TaskNavigationReview.app`)에 두고 실행한다. 아래 실행은 같은 번들을 `~/.local/state/gh52-noti-20261031/review/`에 두고 로컬 helper 사본으로 했다. 사본은 경로 검사 위치, 키 입력 전달, 확인창 버튼 누르기 방식만 다르고(아래 설명) 알림 검색·클릭과 판정 항목은 저장소 helper와 같다. 커밋된 helper 자체와 새 OS 모드 경로 검사, System Events 키 입력·좌표 클릭 경로는 GUI에서 다시 실행하지 않았다(구문 검사만 통과). 임시 디렉터리 밖에서는 시스템 알림 권한 배너가 표시되었다. 권한은 가짜 리뷰 번들 `dev.worklog.TaskNavigationReview`의 배너에서만 허용했고, 다른 앱 알림·개인정보 보호(TCC)·운영 `dev.worklog.WorkLog` 설정은 변경하지 않았다.
 
 OS 알림을 사용할 수 없는 검증 환경에는 명시적 `--ui-test-task-notification-dispatch callback` 옵션을 제공한다. 같은 스케줄러의 운영 `onOpenTask` 콜백을 호출하고 helper 결과에 `actualNotificationClicked=false`, `callbackInvoked=true`를 구분한다. 이 옵션 없이 OS 검사가 실패했다고 자동으로 콜백 방식으로 넘어가지는 않는다.
 
@@ -59,7 +59,7 @@ OS 알림을 사용할 수 없는 검증 환경에는 명시적 `--ui-test-task-
 
 따라서 정식 v0.16.2 바이너리에서의 실제 알림 클릭 확인은 **미실행**이다. 일반 HID 키 입력으로 확인하는 한글 조합 대기 경로도 **미실행**이다. 가짜 리뷰 번들 결과·콜백 검사·일반 입력·모델 테스트는 이 두 검증을 대신하지 않는다.
 
-선택 후속 절차(사용자가 선택한 경우에만, 별도 #50 설치 검증이 끝난 뒤): 가짜 데이터만 있는 설치 검증 저장소에 가짜 업무 A·B·C를 추가하고, B와 C는 마감 2026-11-01·당일 알림(0일 전)으로 두어 2026-11-01 09:00 KST에 각각 한 번씩 알림이 오게 한다. 알림 직전 A 상세에 미저장 진행 기록·체크리스트를 입력하고, B 알림 클릭 후 계속 편집(A 입력 유지), C 알림 클릭 후 입력 버리고 이동(C에 A 문구 없음)을 확인한다. 알림 하나는 한 번의 응답만 검사할 수 있으므로 두 알림을 쓴다. 끝나면 A·B·C를 휴지통으로 옮기고 남은 마감 알림 예약이 없는지 확인한다. 공유 저장소·키체인을 바꾸거나 다른 검증 데이터를 재사용하지 않는다.
+선택 후속 절차(사용자가 선택한 경우에만, 별도 #50 설치 검증이 끝난 뒤): 가짜 데이터만 있는 설치 검증 저장소에 가짜 업무 A·B·C를 추가하고, B와 C는 마감 2026-11-01·당일 알림(0일 전)으로 두어 2026-11-01 09:00 KST에 각각 한 번씩 알림이 오게 한다. 알림 직전 A 상세에 미저장 진행 기록·체크리스트를 입력하고, B 알림 클릭 후 계속 편집(A 입력 유지), C 알림 클릭 후 입력 버리고 이동(C에 A 문구 없음)을 확인한다. 알림 하나는 한 번의 응답만 검사할 수 있으므로 두 알림을 쓴다. 지난 시각은 예약되지 않으므로 준비가 2026-11-01 09:00 KST를 넘기면 마감일을 다음 날로 옮기고, 실행 전에 두 알림이 실제로 예약되었는지 확인한다. 끝나면 A·B·C를 휴지통으로 옮기고 남은 마감 알림 예약이 없는지 확인한다. 공유 저장소·키체인을 바꾸거나 다른 검증 데이터를 재사용하지 않는다.
 
 ## 배포와 롤백
 
