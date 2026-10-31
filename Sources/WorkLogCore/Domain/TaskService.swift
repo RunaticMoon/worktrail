@@ -390,13 +390,12 @@ public final class TaskService: @unchecked Sendable {
         let events = try repo.events(taskId: taskId)
         let result = StateReplay.replay(events, through: asOf, knownAt: knownAt)
 
-        let activeLinks = try repo.taskProjects(taskId: taskId, includeRemoved: asOf != nil).filter { link in
-            if let asOf, link.linkedOn > asOf { return false }
-            if let removed = link.removedOn {
-                if let asOf { return removed > asOf }
-                return false
-            }
-            return true
+        // 연결 이력: asOf가 있으면 그 날짜에 유효했던 연결, 없으면 현재 활성 연결.
+        let activeLinks: [TaskProject]
+        if let asOf {
+            activeLinks = try repo.taskProjects(taskId: taskId, activeOn: asOf)
+        } else {
+            activeLinks = try repo.taskProjects(taskId: taskId)
         }
         var projects: [(project: Project, link: TaskProject, status: TaskStatus?)] = []
         for link in activeLinks {

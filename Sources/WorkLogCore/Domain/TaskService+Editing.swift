@@ -50,17 +50,32 @@ extension TaskService {
             for tagId in tagIds { try repo.db.runV("INSERT INTO task_tag (task_id, tag_id) VALUES (?, ?)", taskId, tagId) }
             let date = repo.calendar.workDate(of: repo.clock.now())
             for id in currentIds.subtracting(draft.projectIds) {
-                try repo.db.runV("UPDATE task_project SET removed_on = ? WHERE task_id = ? AND project_id = ?", date, taskId, id)
+                guard let linkId = try repo.db.queryOneV("""
+                    SELECT id FROM task_project
+                    WHERE task_id = ? AND project_id = ? AND removed_on IS NULL
+                    """, taskId, id)?.string("id") else {
+                    throw WorkLogError.notFound("active link task=\(taskId) project=\(id)")
+                }
+                try repo.db.runV("""
+                    UPDATE task_project SET removed_on = ?
+                    WHERE task_id = ? AND project_id = ? AND removed_on IS NULL
+                    """, date, taskId, id)
+                try repo.closeTaskProjectInterval(taskProjectId: linkId, on: date)
             }
             for id in draft.projectIds.subtracting(currentIds) {
                 // Reuse the connection row and all project events; no automatic status propagation.
-                if try repo.db.queryOneV("SELECT id FROM task_project WHERE task_id = ? AND project_id = ?", taskId, id) != nil {
+                if let existingId = try repo.db.queryOneV("""
+                    SELECT id FROM task_project WHERE task_id = ? AND project_id = ?
+                    """, taskId, id)?.string("id") {
                     try repo.db.runV("UPDATE task_project SET removed_on = NULL WHERE task_id = ? AND project_id = ?", taskId, id)
+                    try repo.openTaskProjectInterval(taskProjectId: existingId, on: date)
                 } else {
+                    let newId = repo.ids.make()
                     try repo.db.runV("""
                         INSERT INTO task_project (id, task_id, project_id, tracking_enabled, linked_on, removed_on)
                         VALUES (?, ?, ?, ?, ?, NULL)
-                        """, repo.ids.make(), taskId, id, task.projectTrackingMode == .perProject, date)
+                        """, newId, taskId, id, task.projectTrackingMode == .perProject, date)
+                    try repo.openTaskProjectInterval(taskProjectId: newId, on: date)
                 }
             }
         }
