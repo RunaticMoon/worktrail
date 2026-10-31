@@ -104,6 +104,7 @@ extension WorkRepository {
                     UPDATE task_project SET tracking_enabled = ?, linked_on = ?, removed_on = NULL
                     WHERE id = ?
                     """, trackingEnabled, linkedOn, existingId)
+                try openTaskProjectInterval(taskProjectId: existingId, on: linkedOn)
                 changed = true
                 return TaskProject(id: existingId, taskId: taskId, projectId: projectId,
                                    trackingEnabled: trackingEnabled, linkedOn: linkedOn)
@@ -113,6 +114,7 @@ extension WorkRepository {
                 INSERT INTO task_project (id, task_id, project_id, tracking_enabled, linked_on, removed_on)
                 VALUES (?, ?, ?, ?, ?, NULL)
                 """, id, taskId, projectId, trackingEnabled, linkedOn)
+            try openTaskProjectInterval(taskProjectId: id, on: linkedOn)
             changed = true
             return TaskProject(id: id, taskId: taskId, projectId: projectId,
                                trackingEnabled: trackingEnabled, linkedOn: linkedOn)
@@ -123,11 +125,20 @@ extension WorkRepository {
 
     /// 연결 해제. 행을 지우지 않고 removed_on을 설정한다.
     public func unlinkProject(taskId: String, projectId: String, removedOn: WorkDate) throws {
-        let n = try db.runV("""
-            UPDATE task_project SET removed_on = ?
-            WHERE task_id = ? AND project_id = ? AND removed_on IS NULL
-            """, removedOn, taskId, projectId)
-        if n == 0 { throw WorkLogError.notFound("active link task=\(taskId) project=\(projectId)") }
+        try db.transaction {
+            guard let existingId = try db.queryOneV("""
+                SELECT id FROM task_project
+                WHERE task_id = ? AND project_id = ? AND removed_on IS NULL
+                """, taskId, projectId)?.string("id") else {
+                throw WorkLogError.notFound("active link task=\(taskId) project=\(projectId)")
+            }
+            let n = try db.runV("""
+                UPDATE task_project SET removed_on = ?
+                WHERE id = ? AND removed_on IS NULL
+                """, removedOn, existingId)
+            if n == 0 { throw WorkLogError.notFound("active link task=\(taskId) project=\(projectId)") }
+            try closeTaskProjectInterval(taskProjectId: existingId, on: removedOn)
+        }
         onSourceChanged?("task", taskId)
     }
 
@@ -319,7 +330,7 @@ extension WorkRepository {
                         dueReminderDaysBefore: row.int("due_reminder_days_before"))
     }
 
-    private func taskProjectRow(_ row: SQLRow) throws -> TaskProject {
+    func taskProjectRow(_ row: SQLRow) throws -> TaskProject {
         guard let id = row.string("id"), let taskId = row.string("task_id"),
               let projectId = row.string("project_id"),
               let linkedOn = row.workDate("linked_on") else {

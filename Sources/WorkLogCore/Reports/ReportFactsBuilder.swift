@@ -152,8 +152,8 @@ public final class ReportFactsBuilder: @unchecked Sendable {
                               allEvents: [DomainEvent], effective: [DomainEvent],
                               rangeActivities: [Activity], cutoffReplay: ReplayResult,
                               startReplay: ReplayResult, knownAt: Date) throws -> FactTask {
-        let links = try repo.taskProjects(taskId: task.id, includeRemoved: true)
-            .filter { $0.linkedOn <= through && ($0.removedOn == nil || $0.removedOn! > through) }
+        // through 날짜에 유효했던 연결(그 시점 이력)만 사용한다.
+        let links = try repo.taskProjects(taskId: task.id, activeOn: through)
             .sorted { ($0.linkedOn, $0.projectId) < ($1.linkedOn, $1.projectId) }
         let projectIds = links.map(\.projectId)
 

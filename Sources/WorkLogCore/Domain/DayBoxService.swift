@@ -189,11 +189,8 @@ public final class DayBoxService {
                 $0.kind == .completed || ($0.kind == .created && $0.toStatus == .completed)
             }
 
-            let projectIds = try repo.taskProjects(taskId: task.id, includeRemoved: true)
-                .filter { link in
-                    link.linkedOn <= date && (link.removedOn.map { $0 > date } ?? true)
-                }
-                .map { $0.projectId }
+            // 그 날짜에 유효했던 연결만 노출한다.
+            let projectIds = try repo.taskProjects(taskId: task.id, activeOn: date).map { $0.projectId }
 
             rows.append(DayTaskRow(taskId: task.id, title: task.title, status: status,
                                    startedOnDay: startedOnDay, completedOnDay: completedOnDay,
