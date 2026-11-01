@@ -307,8 +307,8 @@ private struct TaskNavigationCheckError: Error {
             model.discardInput()
             print("PASS: closing during IME composition cancels the wait and leaves navigation usable")
 
-            // G4: composition in an unrelated off-key window (e.g. a capture panel)
-            // is outside the task editor chain and must not hold task navigation.
+            // G4: composition in a window outside the main window and its sheet chain
+            // (e.g. a capture panel) must not hold task navigation.
             controller.closeTask()
             controller.openTask(a.id)
             try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id,

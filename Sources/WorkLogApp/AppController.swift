@@ -259,17 +259,19 @@ import WorkLogCore
     }
     /// Marked text that must hold task navigation. A notification activates the
     /// main window before opening the task, and the key window can be nil while
-    /// the app activates, so also inspect the main window and its sheet chain where
-    /// the task editor lives. Unrelated panels must not block navigation.
+    /// the app activates, so also inspect every main window and its sheet chain where
+    /// the task editor lives. Windows outside that chain must not block navigation.
     private var taskEditorHasMarkedText: Bool {
         #if DEBUG
         if let markedTextOverrideForChecks { return markedTextOverrideForChecks() }
         #endif
         if worklogHasMarkedText { return true }
-        var window = NSApp.windows.first { $0.accessibilityIdentifier() == Self.mainWindowAccessibilityIdentifier }
-        while let current = window {
-            if (current.firstResponder as? NSTextInputClient)?.hasMarkedText() == true { return true }
-            window = current.attachedSheet
+        for main in NSApp.windows where main.accessibilityIdentifier() == Self.mainWindowAccessibilityIdentifier {
+            var window: NSWindow? = main
+            while let current = window {
+                if (current.firstResponder as? NSTextInputClient)?.hasMarkedText() == true { return true }
+                window = current.attachedSheet
+            }
         }
         return false
     }
