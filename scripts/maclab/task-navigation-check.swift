@@ -307,9 +307,34 @@ private struct TaskNavigationCheckError: Error {
             model.discardInput()
             print("PASS: closing during IME composition cancels the wait and leaves navigation usable")
 
+            // G4: composition in an unrelated off-key window (e.g. a capture panel)
+            // is outside the task editor chain and must not hold task navigation.
+            controller.closeTask()
+            controller.openTask(a.id)
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id,
+                        "G4 setup must select A without drafts")
+            let fakePanel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 120),
+                                     styleMask: [.titled], backing: .buffered, defer: true)
+            fakePanel.isReleasedWhenClosed = false
+            let panelEditor = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
+            fakePanel.contentView = panelEditor
+            try require(fakePanel.makeFirstResponder(panelEditor),
+                        "G4 fake panel must accept its editor as first responder")
+            panelEditor.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0),
+                                      replacementRange: NSRange(location: NSNotFound, length: 0))
+            try require(panelEditor.hasMarkedText() && !fakePanel.isVisible && NSApp.keyWindow == nil,
+                        "G4 panel composition must stay off screen without a key window")
+            controller.openTask(b.id)
+            try require(controller.selectedTaskId == b.id && model.detail?.task.id == b.id
+                        && controller.pendingTaskNavigation == nil && !controller.confirmsTaskNavigation,
+                        "G4 composition outside the task editor chain must not defer navigation (selected=\(controller.selectedTaskId ?? "nil"))")
+            panelEditor.unmarkText()
+            fakePanel.close()
+            print("PASS: composition in an unrelated window does not hold task navigation")
+
             try require(NSApp.windows.allSatisfy { !$0.isVisible },
                         "The fake window must never be ordered on screen")
-            print("10 task navigation controller suites passed; fake local data, inert hotkeys and off-screen fake windows only. SwiftUI presentation, real notifications and a real IME are not tested.")
+            print("11 task navigation controller suites passed; fake local data, inert hotkeys and off-screen fake windows only. SwiftUI presentation, real notifications and a real IME are not tested.")
         } catch let error as TaskNavigationCheckError {
             print("FAIL: \(error.message)")
             exit(1)
