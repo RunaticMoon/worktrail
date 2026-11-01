@@ -42,6 +42,11 @@ import WorkLogCore
     private var taskEditorIsPresented = false
     private var deferredTaskNavigation: (id: String, asOf: WorkDate?)?
     private var taskNavigationWait: Task<Void, Never>?
+    #if DEBUG
+    /// Headless navigation checks simulate IME composition with an off-screen
+    /// fake editor; release builds always read the window chain.
+    @ObservationIgnored var markedTextOverrideForChecks: (() -> Bool)?
+    #endif
     var selectedMemoId: String?
     private(set) var taskList: TaskListModel?
     private(set) var projects: ProjectsModel?
@@ -252,16 +257,24 @@ import WorkLogCore
             self?.maintenanceTask = nil
         }
     }
+    /// Marked text that must hold task navigation. Only the task editor's window
+    /// chain matters here; unrelated panels must not block navigation.
+    private var taskEditorHasMarkedText: Bool {
+        #if DEBUG
+        if let markedTextOverrideForChecks { return markedTextOverrideForChecks() }
+        #endif
+        return worklogHasMarkedText
+    }
     func openTask(_ id: String, asOf: WorkDate? = nil) {
         // Keep the selection and its editor together until the user resolves a
         // pending switch. Repeated notifications must not replace that request.
         guard pendingTaskNavigation == nil, deferredTaskNavigation == nil, let taskDetail else { return }
         guard selectedTaskId != id || taskDetail.detail?.task.id != id || taskDetail.asOf != asOf else { return }
-        if taskEditorIsPresented || worklogHasMarkedText {
+        if taskEditorIsPresented || taskEditorHasMarkedText {
             if deferredTaskNavigation == nil { deferredTaskNavigation = (id, asOf) }
-            if worklogHasMarkedText, taskNavigationWait == nil {
+            if taskEditorHasMarkedText, taskNavigationWait == nil {
                 taskNavigationWait = Task { [weak self] in
-                    while !Task.isCancelled && worklogHasMarkedText {
+                    while !Task.isCancelled && self?.taskEditorHasMarkedText == true {
                         do { try await Task.sleep(for: .milliseconds(100)) }
                         catch { return }
                     }
@@ -297,7 +310,7 @@ import WorkLogCore
         if !presented { resumeDeferredTaskNavigation() }
     }
     private func resumeDeferredTaskNavigation() {
-        guard !taskEditorIsPresented, !worklogHasMarkedText,
+        guard !taskEditorIsPresented, !taskEditorHasMarkedText,
               let request = deferredTaskNavigation else { return }
         deferredTaskNavigation = nil
         openTask(request.id, asOf: request.asOf)

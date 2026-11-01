@@ -43,6 +43,16 @@ private struct TaskNavigationCheckError: Error {
         guard try condition() else { throw TaskNavigationCheckError(message: message) }
     }
 
+    /// Polls the main actor so the controller's deferred-navigation waiter can run.
+    @MainActor static func waitForTaskConfirmation(_ controller: AppController,
+                                                   attempts: Int = 40) async -> Bool {
+        for _ in 0..<attempts {
+            if controller.confirmsTaskNavigation { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return controller.confirmsTaskNavigation
+    }
+
     @MainActor static func main() async {
         do {
             try require(Array(CommandLine.arguments.dropFirst()) == ["--ui-test-fixture", "many"],
@@ -192,7 +202,114 @@ private struct TaskNavigationCheckError: Error {
                         "The same-selection shortcut must allow retry after a failed load")
             try require(NSApp.windows.isEmpty, "Headless checks must not create or activate windows")
             print("PASS: same-ID retry recovers from a missing-task load failure")
-            print("7 task navigation controller suites passed; fake local data and inert hotkeys only. SwiftUI presentation, real notifications and IME are not tested.")
+
+            // The remaining suites are the only ones that create windows. They are
+            // created off screen, never ordered or activated, and closed again.
+            // G1: the notification path activates the main window, so keyWindow can
+            // still be nil while the task-editor editor composes text (D1).
+            controller.openTask(a.id)
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id,
+                        "G1 setup must select A")
+            model.activityText = "G1 activity draft"
+            model.checklistText = "G1 checklist draft"
+            model.statusNote = "G1 reason draft"
+            model.workDate = date
+            model.activityProjectId = projectId
+            let fakeMainWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+                                          styleMask: [.titled], backing: .buffered, defer: true)
+            fakeMainWindow.isReleasedWhenClosed = false
+            fakeMainWindow.setAccessibilityIdentifier(AppController.mainWindowAccessibilityIdentifier)
+            // A real attached sheet cannot be created without ordering it on screen,
+            // so the editor text view sits directly in the fake main window.
+            let fakeEditor = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+            fakeMainWindow.contentView = fakeEditor
+            try require(fakeMainWindow.makeFirstResponder(fakeEditor),
+                        "G1 fake main window must accept the editor as first responder")
+            fakeEditor.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0),
+                                     replacementRange: NSRange(location: NSNotFound, length: 0))
+            try require(fakeEditor.hasMarkedText(), "G1 fake editor must hold marked text")
+            try require(!fakeMainWindow.isVisible, "G1 fake window must stay off screen")
+            try require(NSApp.keyWindow == nil, "G1 headless check must not have a key window")
+            try require(!worklogHasMarkedText,
+                        "G1 documents the old gap: key-window-only detection misses the editor")
+            controller.openTask(b.id)
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id
+                        && controller.pendingTaskNavigation == nil && !controller.confirmsTaskNavigation,
+                        "G1 composing text in the task editor must defer navigation (selected=\(controller.selectedTaskId ?? "nil"), pending=\(controller.pendingTaskNavigation?.id ?? "nil"), confirms=\(controller.confirmsTaskNavigation))")
+            try require(model.activityText == "G1 activity draft" && model.checklistText == "G1 checklist draft"
+                        && model.statusNote == "G1 reason draft" && model.workDate == date
+                        && model.activityProjectId == projectId,
+                        "G1 deferred navigation must preserve every A draft")
+            controller.openTask(c.id)
+            try require(controller.selectedTaskId == a.id && controller.pendingTaskNavigation == nil,
+                        "G1 repeated notifications while composing must retain the first target")
+            fakeEditor.unmarkText()
+            let g1Confirmed = await waitForTaskConfirmation(controller)
+            try require(g1Confirmed && controller.pendingTaskNavigation?.id == b.id,
+                        "G1 ending composition must request confirmation for the first target (pending=\(controller.pendingTaskNavigation?.id ?? "nil"), confirms=\(controller.confirmsTaskNavigation))")
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id
+                        && model.activityText == "G1 activity draft",
+                        "G1 confirmation must keep A and its drafts until the user resolves it")
+            controller.cancelTaskNavigation()
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id
+                        && controller.pendingTaskNavigation == nil,
+                        "G1 cancelling the confirmation must keep A and clear the request")
+            fakeMainWindow.close()
+            model.discardInput()
+            print("PASS: marked text outside the key window defers navigation and preserves A drafts")
+
+            // G2: a deferred request must still start the composition waiter when
+            // the editor closes while text is marked (D2).
+            controller.markedTextOverrideForChecks = { false }
+            controller.openTask(a.id)
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id,
+                        "G2 setup must select A")
+            model.activityText = "G2 activity draft"
+            model.checklistText = "G2 checklist draft"
+            controller.setTaskEditorPresented(true)
+            controller.openTask(b.id)
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id
+                        && controller.pendingTaskNavigation == nil && !controller.confirmsTaskNavigation,
+                        "G2 an open editor must defer the selection without a competing alert")
+            controller.markedTextOverrideForChecks = { true }
+            controller.setTaskEditorPresented(false)
+            try require(controller.selectedTaskId == a.id && controller.pendingTaskNavigation == nil
+                        && !controller.confirmsTaskNavigation,
+                        "G2 closing the editor while composing must not confirm or drop the deferred request")
+            controller.markedTextOverrideForChecks = { false }
+            let g2Confirmed = await waitForTaskConfirmation(controller)
+            try require(g2Confirmed && controller.pendingTaskNavigation?.id == b.id,
+                        "G2 ending composition must resume the deferred request (pending=\(controller.pendingTaskNavigation?.id ?? "nil"), confirms=\(controller.confirmsTaskNavigation))")
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id
+                        && model.activityText == "G2 activity draft",
+                        "G2 resuming must keep A and its drafts until the user resolves the switch")
+            controller.cancelTaskNavigation()
+            model.discardInput()
+            print("PASS: ending composition after the editor closes resumes the deferred request")
+
+            // G3: closing the task while a composition wait is running must cancel
+            // the wait so later navigation is not blocked.
+            controller.markedTextOverrideForChecks = { true }
+            controller.openTask(b.id)
+            try require(controller.selectedTaskId == a.id && controller.pendingTaskNavigation == nil
+                        && !controller.confirmsTaskNavigation,
+                        "G3 composing text must defer the selection")
+            controller.closeTask()
+            controller.markedTextOverrideForChecks = { false }
+            try? await Task.sleep(for: .milliseconds(500))
+            try require(!controller.confirmsTaskNavigation && controller.pendingTaskNavigation == nil
+                        && controller.selectedTaskId == nil,
+                        "G3 closing while composing must cancel the wait without confirming (pending=\(controller.pendingTaskNavigation?.id ?? "nil"), confirms=\(controller.confirmsTaskNavigation), selected=\(controller.selectedTaskId ?? "nil"))")
+            controller.openTask(a.id)
+            try require(controller.selectedTaskId == a.id && model.detail?.task.id == a.id,
+                        "G3 a cancelled wait must not block later task navigation")
+            controller.markedTextOverrideForChecks = nil
+            model.discardInput()
+            print("PASS: closing during IME composition cancels the wait and leaves navigation usable")
+
+            try require(NSApp.windows.allSatisfy { !$0.isVisible },
+                        "The fake window must never be ordered on screen")
+            print("10 task navigation controller suites passed; fake local data, inert hotkeys and off-screen fake windows only. SwiftUI presentation, real notifications and a real IME are not tested.")
         } catch let error as TaskNavigationCheckError {
             print("FAIL: \(error.message)")
             exit(1)
