@@ -49,7 +49,7 @@ enum MeetingFailurePresentation {
         case .missingApplication: return "선택한 온라인 회의 앱을 찾을 수 없습니다. 회의 앱을 실행하고 녹음할 앱을 다시 선택해 주세요."
         case .invalidFormat: return "선택한 장치의 음성 형식을 확인하지 못했습니다. 마이크 연결과 입력 장치 설정을 확인해 주세요."
         case .modelMissing, .modelInvalid, .tokenizerInvalid:
-            return "로컬 전사 모델을 확인하지 못했습니다. 설정에서 모델 준비를 다시 실행한 뒤 녹음을 시작해 주세요."
+            return "로컬 전사 모델을 확인하지 못했습니다. 회의록 화면의 ‘로컬 모델 준비’에서 모델 준비를 다시 실행한 뒤 녹음을 시작해 주세요."
         case .cancelled: return "녹음 시작을 취소했습니다."
         default: return "녹음을 시작하지 못했습니다. 입력 장치·권한·저장 공간을 확인해 주세요."
         }
@@ -57,7 +57,7 @@ enum MeetingFailurePresentation {
 
     static func previewMessage(for failure: MeetingOperationFailure) -> String {
         if modelRemedy(for: failure) != nil {
-            return "실시간 전사 모델을 확인하지 못했습니다. 원본 녹음은 계속됩니다. 녹음 종료 후 설정에서 모델 준비를 다시 실행한 뒤 전사를 재시도해 주세요."
+            return "실시간 전사 모델을 확인하지 못했습니다. 원본 녹음은 계속됩니다. 녹음 종료 후 회의록 화면의 ‘로컬 모델 준비’에서 모델 준비를 다시 실행한 뒤 전사를 재시도해 주세요."
         }
         return "실시간 전사에 실패했습니다. 원본 녹음은 계속됩니다. 다음 전사를 기다리거나 녹음 종료 후 정밀 전사를 실행해 주세요."
     }
@@ -65,7 +65,7 @@ enum MeetingFailurePresentation {
     static func modelRemedy(for failure: MeetingOperationFailure) -> String? {
         if [.modelMissing, .modelInvalid, .tokenizerInvalid].contains(failure.reason)
             || [.modelValidation, .tokenizer, .modelLoading].contains(failure.phase) {
-            return "설정에서 모델 준비를 다시 실행해 주세요."
+            return "회의록 화면의 ‘로컬 모델 준비’에서 모델 준비를 다시 실행해 주세요."
         }
         return nil
     }

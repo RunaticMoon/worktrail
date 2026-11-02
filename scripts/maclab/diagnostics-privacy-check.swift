@@ -57,14 +57,29 @@ import WorkLogCore
                 requireThat(!MeetingFailurePresentation.previewMessage(for: failure).contains(value),
                             "A model path reached the preview message")
             }
+            // Only model-file failures are fixed by preparing the model again; other reasons keep their own advice.
+            if [.modelMissing, .modelInvalid, .tokenizerInvalid].contains(failure.reason) {
+                let remedy = MeetingFailurePresentation.modelRemedy(for: failure) ?? ""
+                requireThat(remedy.contains("로컬 모델 준비") && !remedy.contains("설정에서"),
+                            "A model remedy must name the on-screen ‘로컬 모델 준비’ section instead of Settings")
+                let preview = MeetingFailurePresentation.previewMessage(for: failure)
+                requireThat(preview.contains("로컬 모델 준비") && !preview.contains("설정에서"),
+                            "A preview model failure must name the on-screen ‘로컬 모델 준비’ section instead of Settings")
+                let startup = MeetingFailurePresentation.startupMessage(for: failure)
+                requireThat(startup.contains("로컬 모델 준비") && !startup.contains("설정에서"),
+                            "A startup model failure must name the on-screen ‘로컬 모델 준비’ section instead of Settings")
+            }
             diagnostics.recordFailure(failure, category: .transcription)
         }
         let loadingFailure = MeetingOperationFailure.sanitized(
             NSError(domain: NSCocoaErrorDomain, code: 260, userInfo: userInfo), phase: .modelLoading)
         let preserved = MeetingFailurePresentation.failure(for: loadingFailure, phase: .preview)
         requireThat(preserved == loadingFailure, "An outer layer replaced the failing model-loading phase")
-        requireThat(MeetingFailurePresentation.previewMessage(for: preserved).contains("모델 준비"),
+        let preservedPreview = MeetingFailurePresentation.previewMessage(for: preserved)
+        requireThat(preservedPreview.contains("모델 준비"),
                     "A loading failure must explain model preparation")
+        requireThat(preservedPreview.contains("로컬 모델 준비") && !preservedPreview.contains("설정에서"),
+                    "A loading failure must name the on-screen ‘로컬 모델 준비’ section instead of Settings")
         requireThat(MeetingFailurePresentation.previewMessage(for: .init(phase: .inference, reason: .failed))
             .contains("정밀 전사"), "An inference failure must explain the saved-audio retry path")
         diagnostics.recordFailure(preserved, category: .transcription)
