@@ -42,6 +42,11 @@ import WorkLogCore
     private var taskEditorIsPresented = false
     private var deferredTaskNavigation: (id: String, asOf: WorkDate?)?
     private var taskNavigationWait: Task<Void, Never>?
+    #if DEBUG
+    /// Headless navigation checks simulate IME composition with an off-screen
+    /// fake editor; release builds always read the window chain.
+    @ObservationIgnored var markedTextOverrideForChecks: (() -> Bool)?
+    #endif
     var selectedMemoId: String?
     private(set) var taskList: TaskListModel?
     private(set) var projects: ProjectsModel?
@@ -252,26 +257,48 @@ import WorkLogCore
             self?.maintenanceTask = nil
         }
     }
+    /// Marked text that must hold task navigation. A notification activates the
+    /// main window before opening the task, and the key window can be nil while
+    /// the app activates, so also inspect every main window and its sheet chain where
+    /// the task editor lives. Windows outside that chain must not block navigation.
+    private var taskEditorHasMarkedText: Bool {
+        #if DEBUG
+        if let markedTextOverrideForChecks { return markedTextOverrideForChecks() }
+        #endif
+        if worklogHasMarkedText { return true }
+        for main in NSApp.windows where main.accessibilityIdentifier() == Self.mainWindowAccessibilityIdentifier {
+            var window: NSWindow? = main
+            while let current = window {
+                if (current.firstResponder as? NSTextInputClient)?.hasMarkedText() == true { return true }
+                window = current.attachedSheet
+            }
+        }
+        return false
+    }
+    /// Resume the deferred request after composition ends. Started from both the
+    /// first deferral and an editor closing mid-composition so a request is never stranded.
+    private func waitForCompositionThenResume() {
+        guard taskNavigationWait == nil else { return }
+        taskNavigationWait = Task { [weak self] in
+            while !Task.isCancelled && self?.taskEditorHasMarkedText == true {
+                do { try await Task.sleep(for: .milliseconds(100)) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            self?.taskNavigationWait = nil
+            self?.resumeDeferredTaskNavigation()
+        }
+    }
     func openTask(_ id: String, asOf: WorkDate? = nil) {
         // Keep the selection and its editor together until the user resolves a
         // pending switch. Repeated notifications must not replace that request.
         guard pendingTaskNavigation == nil, deferredTaskNavigation == nil, let taskDetail else { return }
         guard selectedTaskId != id || taskDetail.detail?.task.id != id || taskDetail.asOf != asOf else { return }
-        if taskEditorIsPresented || worklogHasMarkedText {
+        if taskEditorIsPresented || taskEditorHasMarkedText {
             if deferredTaskNavigation == nil { deferredTaskNavigation = (id, asOf) }
-            if worklogHasMarkedText, taskNavigationWait == nil {
-                taskNavigationWait = Task { [weak self] in
-                    while !Task.isCancelled && worklogHasMarkedText {
-                        do { try await Task.sleep(for: .milliseconds(100)) }
-                        catch { return }
-                    }
-                    guard !Task.isCancelled else { return }
-                    await Task.yield()
-                    guard !Task.isCancelled else { return }
-                    self?.taskNavigationWait = nil
-                    self?.resumeDeferredTaskNavigation()
-                }
-            }
+            if taskEditorHasMarkedText { waitForCompositionThenResume() }
             return
         }
         if taskDetail.load(taskId: id, asOf: asOf) {
@@ -297,8 +324,9 @@ import WorkLogCore
         if !presented { resumeDeferredTaskNavigation() }
     }
     private func resumeDeferredTaskNavigation() {
-        guard !taskEditorIsPresented, !worklogHasMarkedText,
-              let request = deferredTaskNavigation else { return }
+        guard !taskEditorIsPresented, deferredTaskNavigation != nil else { return }
+        if taskEditorHasMarkedText { waitForCompositionThenResume(); return }
+        guard let request = deferredTaskNavigation else { return }
         deferredTaskNavigation = nil
         openTask(request.id, asOf: request.asOf)
     }
