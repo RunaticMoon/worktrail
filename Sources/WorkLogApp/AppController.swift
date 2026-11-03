@@ -33,6 +33,15 @@ import WorkLogCore
     private(set) var meetings: MeetingsModel?
     private(set) var activityIntegrations: ActivityIntegrationsModel?
     private(set) var taskNotifications: TaskNotificationScheduler?
+    /// Serializes the startup report catch-up with re-evaluation after activity imports (#62).
+    private var scheduledReports: ScheduledReportCoordinator?
+    /// Retained hand-off so a finished import never blocks collection on report generation.
+    private var reevaluationTask: Task<Void, Never>?
+    private var seenImportGeneration = 0
+    /// The first full launch collection pass. Report catch-up waits for it so the newest
+    /// imported evidence exists before D-1 and period reports are generated (#62).
+    private var launchCollectionDone = true
+    private var launchCollectionWaiters: [LaunchWaitGate] = []
     private var usesFixture = false
     private var maintenanceTimer: Timer?
     private var maintenanceTask: Task<Void, Never>?
@@ -86,6 +95,15 @@ import WorkLogCore
             let env = try await openEnvironment()
             let settings = env.settings
             environment = env
+            // Startup catch-up and imports that land before, during or after it share one
+            // coordinator so scheduled report generation is never duplicated.
+            scheduledReports = ScheduledReportCoordinator(
+                catchUp: { _ = try await env.runStartupCatchUp() },
+                reevaluate: { [weak self] range in
+                    _ = try await env.reevaluateScheduledReports(affecting: range)
+                    self?.reportLibrary?.load()
+                    self?.notifyReportSourcesChanged()
+                })
             captureSession = CaptureSessionModel(environment: env)
             graph = GraphModel(environment: env)
             prompts = PromptSettingsModel(templates: env.templates)
@@ -124,6 +142,7 @@ import WorkLogCore
                 }
             }
             #endif
+            seenImportGeneration = activityIntegrations?.importGeneration ?? 0
             taskDetail?.onChanged = { [weak self] in self?.refreshBackgroundServices() }
             installProtectionTimer()
             maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -136,6 +155,10 @@ import WorkLogCore
                 notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다."
             }
             if !usesFixture { launchCheckPending = true }
+            // Only a launch collection that will actually run holds report catch-up back.
+            if !usesFixture, activityIntegrations?.launchCredentialAccounts.isEmpty == false {
+                launchCollectionDone = false
+            }
             refresh()
             startLaunchConnectionCheck()
             installLifecycleObservers()
@@ -153,8 +176,10 @@ import WorkLogCore
             }
             // Scheduled AI reports read the API key without a dialog; give the launch approval a
             // bounded head start so an unanswered dialog cannot hold back reports indefinitely.
-            await waitForLaunchAuthorization(atMost: .seconds(20))
-            do { try await env.runStartupCatchUp() }
+            // The first collection pass runs after that approval, so catch-up waits for it too:
+            // the imported evidence must exist before D-1/period reports are generated (#62).
+            await waitForLaunchCollection(atMost: .seconds(20))
+            do { try await scheduledReports?.runCatchUp() }
             catch {
                 AppDiagnostics.shared.recordFailure(error, category: .ai)
                 notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다."
@@ -232,7 +257,12 @@ import WorkLogCore
         maintenanceTimer?.invalidate(); maintenanceTimer = nil
         maintenanceTask?.cancel()
         notificationTask?.cancel()
+        reevaluationTask?.cancel(); reevaluationTask = nil
+        scheduledReports = nil
         launchCheckTask?.cancel(); launchCheckTask = nil; launchAuthorization = nil
+        // Nothing may wait for a collection pass that this teardown cancelled.
+        markLaunchCollectionDone()
+        seenImportGeneration = 0
         protectionTimer?.invalidate(); protectionTimer = nil
         hotkeyCoordinator?.shutdown(); hotkeyCoordinator = nil
         hotkeys?.shutdown()
@@ -247,6 +277,8 @@ import WorkLogCore
     func refresh() {
         // Both report models reload through their screen's guarded loadSelection path.
         // Do not reset pending drafts or version requests during a general refresh.
+        // A manual import reaches here through onImported; a capture save also changes sources.
+        handleNewImports()
         day?.load()
         taskList?.load()
         projects?.load()
@@ -254,6 +286,7 @@ import WorkLogCore
         if let selectedTaskId { taskDetail?.load(taskId: selectedTaskId, asOf: taskDetail?.asOf) }
         search?.search()
         if let graph, graph.phase != .idle { graph.reload() }
+        notifyReportSourcesChanged()
         refreshBackgroundServices()
     }
 
@@ -274,7 +307,12 @@ import WorkLogCore
         launchAuthorization = Task { _ = await authorization.value }
         launchCheckTask = Task { [weak self] in
             let (_, aiPending) = await authorization.value
-            guard let self, !Task.isCancelled, !self.isRestoring else { return }
+            guard let self else { return }
+            guard !Task.isCancelled, !self.isRestoring else {
+                // This check will never clear launchCheckPending; release the bounded wait.
+                self.markLaunchCollectionDone()
+                return
+            }
             self.launchCheckPending = false
             // A maintenance pass that skipped collection while the check ran must run once more.
             if self.maintenanceTask != nil { self.maintenanceRerunRequested = true } else { self.refreshBackgroundServices() }
@@ -286,14 +324,46 @@ import WorkLogCore
         }
     }
 
-    private func waitForLaunchAuthorization(atMost limit: Duration) async {
-        guard let authorization = launchAuthorization else { return }
+    /// Waits for the first collection pass, bounded so an unanswered Keychain dialog cannot hold
+    /// report catch-up back indefinitely. Imports that arrive late are re-evaluated instead.
+    private func waitForLaunchCollection(atMost limit: Duration) async {
+        guard !launchCollectionDone else { return }
         let gate = LaunchWaitGate()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             gate.continuation = continuation
-            Task { await authorization.value; gate.resume() }
+            launchCollectionWaiters.append(gate)
             Task { try? await Task.sleep(for: limit); gate.resume() }
         }
+        launchCollectionWaiters.removeAll { $0 === gate }
+    }
+
+    /// Releases every bounded wait once the launch collection pass has finished (or was cancelled).
+    private func markLaunchCollectionDone() {
+        launchCollectionDone = true
+        let waiters = launchCollectionWaiters
+        launchCollectionWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// Hands newly imported records to the report coordinator without blocking collection. The
+    /// hand-off is retained and chained so ranges reach the coordinator in import order while the
+    /// coordinator coalesces requests that arrive during report generation.
+    private func handleNewImports() {
+        guard let model = activityIntegrations, model.importGeneration != seenImportGeneration else { return }
+        seenImportGeneration = model.importGeneration
+        notifyReportSourcesChanged()
+        guard let range = model.lastImportedRange, let coordinator = scheduledReports else { return }
+        let previous = reevaluationTask
+        reevaluationTask = Task {
+            await previous?.value
+            await coordinator.importsLanded(range)
+        }
+    }
+
+    /// Read-only freshness re-check for whichever report version is displayed; no AI, no new version.
+    private func notifyReportSourcesChanged() {
+        reportModel?.sourcesDidChange()
+        performanceReports?.sourcesDidChange()
     }
 
     private func refreshBackgroundServices() {
@@ -311,7 +381,15 @@ import WorkLogCore
         }
         guard maintenanceTask == nil else { return }
         maintenanceTask = Task { [weak self] in
-            if !Task.isCancelled, self?.launchCheckPending == false { await self?.activityIntegrations?.sync() }
+            if !Task.isCancelled, self?.launchCheckPending == false {
+                await self?.activityIntegrations?.sync()
+                if !Task.isCancelled {
+                    // Imported records are report sources; hand the affected range over and mark
+                    // the launch collection pass as done before any catch-up re-planning runs.
+                    self?.handleNewImports()
+                    self?.markLaunchCollectionDone()
+                }
+            }
             if !Task.isCancelled { self?.day?.load(); self?.search?.search() }
             self?.maintenanceTask = nil
             if !Task.isCancelled, self?.maintenanceRerunRequested == true {
@@ -644,10 +722,14 @@ import WorkLogCore
         launchCheckTask?.cancel(); launchCheckTask = nil; launchAuthorization = nil
         maintenanceTask?.cancel()
         notificationTask?.cancel()
+        reevaluationTask?.cancel()
         await maintenanceTask?.value
         await notificationTask?.value
+        await reevaluationTask?.value
         maintenanceTask = nil
         notificationTask = nil
+        reevaluationTask = nil
+        scheduledReports = nil
         activityIntegrations = nil; taskNotifications = nil
         // Weak lifetime checks ensure SQLite deinit has closed both databases before file replacement.
         // Slot order is the bitmask order reported when the close times out:
