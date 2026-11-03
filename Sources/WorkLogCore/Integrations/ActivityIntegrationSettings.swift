@@ -33,6 +33,55 @@ public struct ActivityConnection: Codable, Equatable, Sendable {
         return "activity-" + SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Imported-activity identity: the API the events were read from, not the spelling of the
+    /// configured address. Equivalent addresses and account casing deduplicate to one record.
+    /// Keychain accounts keep using `credentialAccount`, so tokens never move to another host.
+    public var importIdentity: String {
+        guard let canonical = Self.canonicalAPIBase(try? apiBaseURL()) else { return credentialAccount }
+        let trimmed = account.trimmingCharacters(in: .whitespacesAndNewlines)
+        // GitHub logins are case-insensitive; Jira accounts may be e-mail addresses.
+        let canonicalAccount = source == .github ? trimmed.lowercased() : trimmed
+        let value = "\(source.rawValue)\n\(canonical)\n\(canonicalAccount)"
+        return "activity-import-" + SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The API root every request for this connection is built on. One definition for the
+    /// API client and for `importIdentity`, so equivalent spellings cannot diverge.
+    public func apiBaseURL() throws -> URL {
+        var base = try normalizedEndpoint()
+        switch source {
+        case .github:
+            if base.host == "github.com" { base = URL(string: "https://api.github.com")! }
+            else if base.host != "api.github.com", !base.path.hasSuffix("/api/v3") {
+                base.appendPathComponent("api/v3")
+            }
+        case .jira:
+            if !base.path.hasSuffix("/rest/api/3") { base.appendPathComponent("rest/api/3") }
+        }
+        return base
+    }
+
+    /// Configured address without a trailing slash, as the API paths are appended to it.
+    func normalizedEndpoint() throws -> URL {
+        var parts = URLComponents(url: try endpoint(), resolvingAgainstBaseURL: false)!
+        while parts.path.hasSuffix("/") { parts.path.removeLast() }
+        return parts.url!
+    }
+
+    /// Case, default port and trailing slash do not change the API a URL addresses.
+    static func canonicalAPIBase(_ url: URL?) -> String? {
+        guard let url, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        parts.scheme = parts.scheme?.lowercased()
+        if let host = parts.host { parts.host = host.lowercased() }
+        if (parts.scheme == "https" && parts.port == 443) || (parts.scheme == "http" && parts.port == 80) {
+            parts.port = nil
+        }
+        while parts.path.hasSuffix("/") { parts.path.removeLast() }
+        parts.fragment = nil
+        parts.query = nil
+        return parts.string
+    }
+
     public func validate() throws {
         _ = try endpoint()
         guard !account.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

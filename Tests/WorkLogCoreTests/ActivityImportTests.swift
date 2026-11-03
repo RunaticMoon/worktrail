@@ -206,6 +206,262 @@ final class ActivityImportTests: XCTestCase {
         XCTAssertTrue(model.isDirty)
         XCTAssertNotNil(model.message)
     }
+    // MARK: - Import identity / legacy key adoption (issue #58)
+
+    func testImportIdentityIgnoresAddressSpellingAndGitHubAccountCase() throws {
+        var spelling = connection()
+        spelling.baseURL = "https://Git.EXAMPLE.test:443/"
+        spelling.account = " Sample-User "
+        XCTAssertEqual(spelling.importIdentity, connection().importIdentity)
+        // The Keychain account still identifies one exact configured spelling.
+        XCTAssertNotEqual(spelling.credentialAccount, connection().credentialAccount)
+
+        var jira = ActivityConnection(source: .jira)
+        jira.baseURL = "https://git.example.test"; jira.account = "sample-user"
+        jira.jiraJQL = "project = DEMO"
+        XCTAssertNotEqual(jira.importIdentity, connection().importIdentity)
+
+        var otherAccount = connection(); otherAccount.account = "other-user"
+        XCTAssertNotEqual(otherAccount.importIdentity, connection().importIdentity)
+
+        // Jira accounts may be e-mail addresses, so their casing is meaningful.
+        var upperJira = jira; upperJira.account = "Sample-User"
+        XCTAssertNotEqual(upperJira.importIdentity, jira.importIdentity)
+
+        // An invalid address keeps the previous behaviour instead of inventing a key.
+        var invalid = connection(); invalid.baseURL = "http://git.example.test"
+        XCTAssertEqual(invalid.importIdentity, invalid.credentialAccount)
+    }
+
+    func testLegacyRowsAreAdoptedAndReimportingTheSameEventIsANoOp() throws {
+        let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        let c = connection()
+        let day = WorkDate("2026-10-28")!
+        let memo = try TaskService(repo: repo).captureMemo(body: "legacy memo", workDate: day)
+        let occurredAt = try XCTUnwrap(SQLDate.parse("2026-10-27T16:00:00Z"))
+        try repo.db.runV("""
+            INSERT INTO imported_activity
+            (connection_key, external_id, source, memo_id, occurred_at, fetched_at, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, c.credentialAccount, "event-1", "github", memo.id, occurredAt, occurredAt, "https://git.example.test/x")
+        try repo.db.runV("INSERT INTO activity_sync_state (connection_key, attempted_on, completed_at) VALUES (?, ?, ?)",
+                         c.credentialAccount, day, Date(timeIntervalSince1970: 100))
+
+        XCTAssertEqual(try repo.importActivities([event()], connection: c), 0)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity").count, 1)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity WHERE connection_key = ?", c.importIdentity).count, 1)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity WHERE connection_key = ?", c.credentialAccount).count, 0)
+        XCTAssertEqual(try repo.activitySyncAttemptedOn(connection: c), day)
+        XCTAssertEqual(try XCTUnwrap(repo.activitySyncCompletedAt(connection: c)).timeIntervalSince1970, 100, accuracy: 0.001)
+        XCTAssertTrue(try repo.db.queryV("SELECT * FROM activity_sync_state WHERE connection_key = ?", c.credentialAccount).isEmpty)
+
+        // Adopting again changes nothing.
+        try repo.adoptLegacyActivityImportKey(for: c)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity").count, 1)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM activity_sync_state").count, 1)
+    }
+
+    func testAdoptionKeepsBothRowsWhenTheEventAlreadyExistsUnderTheCurrentKey() throws {
+        let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        let c = connection()
+        let day = WorkDate("2026-10-28")!
+        let service = TaskService(repo: repo)
+        let legacyMemo = try service.captureMemo(body: "legacy memo", workDate: day)
+        let currentMemo = try service.captureMemo(body: "current memo", workDate: day)
+        let occurredAt = try XCTUnwrap(SQLDate.parse("2026-10-27T16:00:00Z"))
+        for (key, memoID) in [(c.credentialAccount, legacyMemo.id), (c.importIdentity, currentMemo.id)] {
+            try repo.db.runV("""
+                INSERT INTO imported_activity
+                (connection_key, external_id, source, memo_id, occurred_at, fetched_at, source_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, key, "event-1", "github", memoID, occurredAt, occurredAt, "https://git.example.test/x")
+        }
+
+        try repo.adoptLegacyActivityImportKey(for: c)
+
+        // Nothing is deleted or merged: both memos and both rows survive, the conflict row stays legacy.
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity").count, 2)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity WHERE connection_key = ?", c.credentialAccount).count, 1)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity WHERE connection_key = ?", c.importIdentity).count, 1)
+        XCTAssertNotNil(try repo.memo(id: legacyMemo.id))
+        XCTAssertNotNil(try repo.memo(id: currentMemo.id))
+        XCTAssertEqual(try repo.importActivities([event()], connection: c), 0)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity").count, 2)
+    }
+
+    func testAdoptionKeepsTheLaterCompletedSyncState() throws {
+        let c = connection()
+        let day = WorkDate("2026-10-20")!
+
+        // A completed time wins over an attempt-only row, even an older one.
+        let attemptOnly = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        try attemptOnly.db.runV("INSERT INTO activity_sync_state (connection_key, attempted_on, completed_at) VALUES (?, ?, ?)",
+                                c.credentialAccount, day, SQLValue.null)
+        try attemptOnly.db.runV("INSERT INTO activity_sync_state (connection_key, attempted_on, completed_at) VALUES (?, ?, ?)",
+                                c.importIdentity, day, Date(timeIntervalSince1970: 200))
+        try attemptOnly.adoptLegacyActivityImportKey(for: c)
+        let kept = try XCTUnwrap(attemptOnly.db.queryOneV(
+            "SELECT * FROM activity_sync_state WHERE connection_key = ?", c.importIdentity))
+        XCTAssertEqual(try XCTUnwrap(kept.date("completed_at")).timeIntervalSince1970, 200, accuracy: 0.001)
+        XCTAssertEqual(try attemptOnly.db.queryV("SELECT * FROM activity_sync_state").count, 1)
+
+        // Two completed times keep the later one, under the current key.
+        let completed = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        try completed.db.runV("INSERT INTO activity_sync_state (connection_key, attempted_on, completed_at) VALUES (?, ?, ?)",
+                              c.credentialAccount, day, Date(timeIntervalSince1970: 300))
+        try completed.db.runV("INSERT INTO activity_sync_state (connection_key, attempted_on, completed_at) VALUES (?, ?, ?)",
+                              c.importIdentity, day, Date(timeIntervalSince1970: 200))
+        try completed.adoptLegacyActivityImportKey(for: c)
+        let winner = try XCTUnwrap(completed.db.queryOneV(
+            "SELECT * FROM activity_sync_state WHERE connection_key = ?", c.importIdentity))
+        XCTAssertEqual(try XCTUnwrap(winner.date("completed_at")).timeIntervalSince1970, 300, accuracy: 0.001)
+        XCTAssertEqual(try completed.db.queryV("SELECT * FROM activity_sync_state").count, 1)
+    }
+
+    func testAdoptionRollsBackWhenSyncStateCannotMove() throws {
+        let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        let c = connection()
+        let day = WorkDate("2026-10-28")!
+        let memo = try TaskService(repo: repo).captureMemo(body: "legacy memo", workDate: day)
+        let occurredAt = try XCTUnwrap(SQLDate.parse("2026-10-27T16:00:00Z"))
+        try repo.db.runV("""
+            INSERT INTO imported_activity
+            (connection_key, external_id, source, memo_id, occurred_at, fetched_at, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, c.credentialAccount, "event-1", "github", memo.id, occurredAt, occurredAt, "https://git.example.test/x")
+        try repo.db.runV("INSERT INTO activity_sync_state (connection_key, attempted_on) VALUES (?, ?)",
+                         c.credentialAccount, day)
+        try repo.db.execute("""
+            CREATE TEMP TRIGGER reject_adoption BEFORE UPDATE ON activity_sync_state
+            BEGIN SELECT RAISE(ABORT, 'fixture'); END;
+            """)
+
+        XCTAssertThrowsError(try repo.adoptLegacyActivityImportKey(for: c))
+        // The imported-event move is part of the same transaction and is rolled back with it.
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity WHERE connection_key = ?", c.credentialAccount).count, 1)
+        XCTAssertTrue(try repo.db.queryV("SELECT * FROM imported_activity WHERE connection_key = ?", c.importIdentity).isEmpty)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM activity_sync_state WHERE connection_key = ?", c.credentialAccount).count, 1)
+    }
+
+    @MainActor func testRemoveTokenDeletesTheSavedKeyAndTheDraftKey() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("activity-remove-token-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let saved = connection()
+        var settings = ActivityIntegrationSettings(); settings.github = saved
+        try ActivityIntegrationSettingsStore(dataRoot: root, ids: SequentialIDGenerator()).save(settings)
+        let credentials = ImportTestCredentials()
+        try credentials.write("saved-fake-token", account: saved.credentialAccount)
+        let model = ActivityIntegrationsModel(dataRoot: root, repo: try WorkRepository.inMemory(), credentials: credentials)
+        // A never-saved edit means collection still reads the saved key, not the draft one.
+        model.draft.github.baseURL = "https://other.example.test"
+        model.draft.github.account = "other-user"
+        let draftKey = model.draft.github.credentialAccount
+        try credentials.write("stale-fake-token", account: draftKey)
+        XCTAssertNotEqual(draftKey, saved.credentialAccount)
+
+        model.removeToken(for: .github)
+
+        XCTAssertNil(try credentials.read(account: saved.credentialAccount))
+        XCTAssertNil(try credentials.read(account: draftKey))
+        XCTAssertFalse(model.message?.isEmpty ?? true)
+    }
+
+    // MARK: - Acceptance pairs: equivalent spellings share one imported event (issue #58)
+
+    /// Imports `event-1` under `first`, applies `mutate` to the created memo, then imports the same
+    /// event under `second`. The second import must be a no-op: the memo keeps its identity and the
+    /// mutation, one memo exists in total, and exactly one `imported_activity` row (under the new
+    /// identity) maps to it.
+    private func importEventUnderBothSpellings(
+        _ first: ActivityConnection, _ second: ActivityConnection,
+        file: StaticString = #filePath, line: UInt = #line,
+        mutate: (WorkRepository, Memo, WorkDate) throws -> Void = { _, _, _ in }
+    ) throws -> (repo: WorkRepository, before: Memo, after: Memo) {
+        let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        let day = WorkDate("2026-10-28")!
+        XCTAssertEqual(first.importIdentity, second.importIdentity,
+                       "equivalent spellings must share an import identity", file: file, line: line)
+        // Keychain isolation is unchanged: each configured spelling keeps its own account.
+        XCTAssertNotEqual(first.credentialAccount, second.credentialAccount,
+                          "Keychain accounts must stay distinct", file: file, line: line)
+
+        XCTAssertEqual(try repo.importActivities([event()], connection: first), 1, file: file, line: line)
+        let memo = try XCTUnwrap(repo.importedActivityRecords(on: day).first?.memo, file: file, line: line)
+        try mutate(repo, memo, day)
+
+        XCTAssertEqual(try repo.importActivities([event()], connection: second), 0,
+                       "re-importing the same event must be a no-op", file: file, line: line)
+        let after = try XCTUnwrap(repo.memo(id: memo.id, includeDeleted: true), file: file, line: line)
+        XCTAssertEqual(after.id, memo.id, file: file, line: line)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM memo").count, 1, file: file, line: line)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity").count, 1, file: file, line: line)
+        XCTAssertEqual(try repo.db.queryV(
+            "SELECT * FROM imported_activity WHERE connection_key = ? AND memo_id = ?",
+            second.importIdentity, memo.id).count, 1, file: file, line: line)
+        XCTAssertTrue(try repo.db.queryV(
+            "SELECT * FROM imported_activity WHERE connection_key = ?", second.credentialAccount).isEmpty,
+            file: file, line: line)
+        return (repo, memo, after)
+    }
+
+    func testEquivalentSpellingPairsImportTheEventOnce() throws {
+        let enterprise = connection()
+        var enterpriseAPI = connection(); enterpriseAPI.baseURL = "https://git.example.test/api/v3"
+
+        var github = connection(); github.baseURL = "https://github.com"
+        var githubAPI = connection(); githubAPI.baseURL = "https://api.github.com"
+
+        var jira = ActivityConnection(source: .jira)
+        jira.enabled = true; jira.baseURL = "https://demo.atlassian.net"; jira.account = "fixture@example.test"
+        var jiraAPI = jira; jiraAPI.baseURL = "https://demo.atlassian.net/rest/api/3"
+
+        var lowerAccount = connection(); lowerAccount.account = "fixture"
+        var upperAccount = connection(); upperAccount.account = "FiXtUrE"
+
+        let pairs: [(String, ActivityConnection, ActivityConnection)] = [
+            ("GitHub Enterprise with and without /api/v3", enterprise, enterpriseAPI),
+            ("github.com and api.github.com", github, githubAPI),
+            ("Jira with and without /rest/api/3", jira, jiraAPI),
+            ("GitHub account casing", lowerAccount, upperAccount),
+        ]
+
+        for (name, first, second) in pairs {
+            // An edited memo must survive the second import, whichever spelling finds the event.
+            let edited = try importEventUnderBothSpellings(first, second) { repo, memo, day in
+                _ = try repo.updateMemoBody(id: memo.id, body: "사용자가 고친 기록", workDate: day)
+            }
+            XCTAssertEqual(edited.after.body, "사용자가 고친 기록", name)
+            XCTAssertEqual(edited.after.revision, edited.before.revision + 1, name)
+            XCTAssertNil(edited.after.deletedAt, name)
+
+            // A trashed memo stays trashed: the event is already known, so nothing is resurrected.
+            let trashed = try importEventUnderBothSpellings(first, second) { repo, memo, _ in
+                try repo.softDeleteMemo(id: memo.id)
+            }
+            XCTAssertEqual(trashed.after.body, trashed.before.body, name)
+            XCTAssertEqual(trashed.after.revision, trashed.before.revision, name)
+            XCTAssertNotNil(trashed.after.deletedAt, name)
+        }
+    }
+
+    func testDifferentServersAndAccountsStillImportSeparately() throws {
+        let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        let c = connection()
+        XCTAssertEqual(try repo.importActivities([event()], connection: c), 1)
+
+        var otherServer = c; otherServer.baseURL = "https://git.other.test"
+        XCTAssertNotEqual(otherServer.importIdentity, c.importIdentity)
+        XCTAssertEqual(try repo.importActivities([event()], connection: otherServer), 1)
+
+        var otherAccount = c; otherAccount.account = "another-user"
+        XCTAssertNotEqual(otherAccount.importIdentity, c.importIdentity)
+        XCTAssertEqual(try repo.importActivities([event()], connection: otherAccount), 1)
+
+        // Same external id, three genuinely different API scopes: three memos, three rows.
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM imported_activity").count, 3)
+        XCTAssertEqual(try repo.db.queryV("SELECT * FROM memo").count, 3)
+    }
+
 }
 
 private final class ImportTestCredentials: ServiceCredentialStore, @unchecked Sendable {

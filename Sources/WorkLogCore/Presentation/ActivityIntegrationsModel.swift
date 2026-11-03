@@ -33,10 +33,23 @@ public final class ActivityIntegrationsModel {
 
     public func load() {
         guard repo != nil else { return }
-        do { saved = try store.load(); draft = saved; isLoaded = true }
+        do {
+            saved = try store.load(); draft = saved; isLoaded = true
+            adoptLegacyImportKeys(saved)
+        }
         catch {
             onDiagnostic(.operationFailed, .error, [.phase: .state(.starting)])
             message = "활동 수집 설정을 읽지 못했습니다. 기존 파일을 확인하세요."
+        }
+    }
+
+    /// Older databases key imported events by the Keychain account spelling. Move those rows to the
+    /// current import identity once settings are known; a failure leaves the rows for the next attempt.
+    private func adoptLegacyImportKeys(_ settings: ActivityIntegrationSettings) {
+        guard let repo else { return }
+        for connection in settings.connections {
+            do { try repo.adoptLegacyActivityImportKey(for: connection) }
+            catch { onDiagnostic(.operationFailed, .error, [.phase: .state(.starting)]) }
         }
     }
 
@@ -83,9 +96,16 @@ public final class ActivityIntegrationsModel {
 
     public func removeToken(for source: ActivitySource) {
         guard repo != nil, !isRunning else { return }
-        let connection = source == .github ? draft.github : draft.jira
+        // Collection reads the SAVED connection's key. A draft edit may point somewhere never
+        // saved, so delete the saved key first and, when it differs, the draft key too — it can
+        // hold a token written by an earlier save of that spelling.
+        let savedConnection = source == .github ? saved.github : saved.jira
+        let draftConnection = source == .github ? draft.github : draft.jira
         do {
-            try credentials.delete(account: connection.credentialAccount)
+            try credentials.delete(account: savedConnection.credentialAccount)
+            if draftConnection.credentialAccount != savedConnection.credentialAccount {
+                try credentials.delete(account: draftConnection.credentialAccount)
+            }
             if source == .github { githubToken = "" } else { jiraToken = "" }
             message = "\(source.title) 토큰을 삭제했습니다. 수집을 계속하려면 새 토큰을 입력하세요."
         } catch {
