@@ -275,35 +275,100 @@ public final class AppEnvironment {
         }
     }
 
+    /// 활동 가져오기가 catch-up 뒤에 도착했을 때, 영향을 받은 기간의 성공한 예약 리포트만
+    /// 자동 모드로 다시 평가한다.
+    ///
+    /// - 먼저 `runStartupCatchUp`과 같은 계획·실행을 수행해, 첫 가져오기로 가장 이른 기록 업무일이
+    ///   앞당겨졌을 때 새로 생긴 업무일의 작업도 계획·실행한다(이미 있는 작업 키는 중복 생성하지 않는다).
+    /// - 이어서 `succeeded` 상태이면서 `range`와 겹치고 `range.endExclusive > floor`(오늘 - maxLookbackDays)
+    ///   인 작업만 다시 평가한다. 작업의 상태·시도 횟수는 바꾸지 않는다(성공 상태 유지).
+    /// - 자동 모드라 원본 digest가 같으면 AI 호출도 새 버전도 만들지 않는다. 확정본·편집본은
+    ///   덮어쓰지 않고 그 위에 새 버전을 만든다. 92일 catch-up 상한과 7일 AI 상한도 그대로 지킨다.
+    /// - 기간별 오류는 삼키고 다음 기간을 계속 평가한다(계획 단계 오류만 throw).
+    /// - 반환값: 다시 평가한 작업 중 새 버전을 만든 작업 수.
+    @discardableResult
+    public func reevaluateScheduledReports(affecting range: DateRange,
+                                           maxLookbackDays: Int = 92,
+                                           aiRecentDays: Int = 7) async throws -> Int {
+        // (a) 가장 이른 기록 업무일이 앞당겨진 경우를 포함해 누락 업무일을 계획·실행한다.
+        _ = try await runStartupCatchUp(maxLookbackDays: maxLookbackDays, aiRecentDays: aiRecentDays)
+
+        // (b) 영향 범위와 겹치는 성공 작업만 자동 모드로 다시 평가한다.
+        let now = options.clock.now()
+        let today = calendar.workDate(of: now)
+        let floor = calendar.adding(days: -max(0, maxLookbackDays), to: today)
+        let baseUseAI = aiRunner != nil && settings.aiEnabled
+        let aiCutoff = now.addingTimeInterval(-Double(max(0, aiRecentDays)) * 86_400)
+
+        let candidates = try repo.scheduledJobs(states: [.succeeded]).compactMap { job -> DueJob? in
+            guard let jobRange = SchedulePlanner.range(for: job.type, periodKey: job.periodKey,
+                                                       periods: periods),
+                  jobRange.endExclusive > floor,
+                  jobRange.intersection(range) != nil else { return nil }
+            return DueJob(type: job.type, periodKey: job.periodKey, range: jobRange,
+                          scheduledFor: job.scheduledFor)
+        }
+
+        var reevaluated = 0
+        for job in candidates {
+            let useAI = baseUseAI && job.scheduledFor >= aiCutoff
+            do {
+                if try await Self.handleScheduled(job, reports: reports, useAI: useAI) {
+                    reevaluated += 1
+                }
+            } catch {
+                // 개별 기간 실패는 다른 기간 재평가를 막지 않는다. 작업 상태는 건드리지 않는다.
+                continue
+            }
+        }
+        return reevaluated
+    }
+
     /// 공통 실행기. 작업별로 AI 사용 여부를 판정하는 클로저를 받아 처리한다.
     private func runScheduled(since: WorkDate, maxAttempts: Int = 3,
                               useAIFor: (DueJob) -> Bool) async throws -> [ScheduledJob] {
         let reports = self.reports
         return try await makeScheduler(since: since).runDue(maxAttempts: maxAttempts) { job in
-            try await Self.handleScheduled(job, reports: reports, useAI: useAIFor(job))
+            _ = try await Self.handleScheduled(job, reports: reports, useAI: useAIFor(job))
         }
     }
 
-    static func handleScheduled(_ job: DueJob, reports: ReportService, useAI: Bool) async throws {
+    /// 작업 하나를 처리한다. 새 버전을 만들었으면 true, 원본 변화가 없어 그대로면 false.
+    @discardableResult
+    static func handleScheduled(_ job: DueJob, reports: ReportService, useAI: Bool) async throws -> Bool {
         switch job.type {
         case .dailyClose:
-            _ = try await reports.generatePerformance(periodType: .daily, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .daily,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .weeklyPerformance:
-            _ = try await reports.generatePerformance(periodType: .weekly, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .weekly,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .monthlyPerformance:
-            _ = try await reports.generatePerformance(periodType: .monthly, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .monthly,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .quarterlyPerformance:
-            _ = try await reports.generatePerformance(periodType: .quarterly, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .quarterly,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .mondayReview:
             // range = 지난주 [월, 이번 월) → 보고 월요일은 endExclusive.
-            _ = try await reports.generateSubmission(reportDate: job.range.endExclusive,
-                                                     mode: .automatic, useAI: useAI)
+            let result = try await reports.generateSubmission(reportDate: job.range.endExclusive,
+                                                              mode: .automatic, useAI: useAI)
+            return created(result)
         case .backup:
-            break
+            return false
         }
+    }
+
+    private static func created(_ result: ReportGenerationResult) -> Bool {
+        if case .created = result.outcome { return true }
+        return false
     }
 }
