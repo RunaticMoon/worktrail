@@ -62,6 +62,31 @@ final class ReportsPlanPresentationTests: XCTestCase {
         XCTAssertEqual(model.pendingRegeneration?.version, 2)
         XCTAssertEqual(try env.repo.reportVersion(id: id)?.state, .confirmed)
     }
+    /// 수집이 새 기록을 가져와 화면을 다시 검사해도, 아직 저장 전인 대기 초안은 그대로 둔다.
+    /// (재생성 대기는 사용자가 확인/저장할 때만 사라져야 한다.)
+    @MainActor func testSourcesDidChangeKeepsPendingRegeneration() async throws {
+        let env = try environment(); let model = ReportsModel(environment: env)
+        await model.generate()
+        model.content = "검토한 제출용 문장"; model.saveEdits(); model.confirm()
+        await model.generate()
+        let pending = try XCTUnwrap(model.pendingRegeneration)
+        XCTAssertEqual(pending.version, 2)
+        let reportId = try XCTUnwrap(model.report?.id)
+        // 확정본 v1 + 사용자 확인을 기다리는 v2. 재검사는 여기에 새 버전을 더하지 않는다.
+        let before = try env.repo.reportVersions(reportId: reportId).count
+        XCTAssertEqual(before, 2)
+
+        let task = try env.tasks.createTask(title: "새 근거", initialStatus: .completed, workDate: prior)
+        _ = try env.tasks.addActivity(taskId: task.id, body: "수집이 가져온 새 근거", workDate: prior)
+        model.sourcesDidChange()
+
+        XCTAssertTrue(model.isStale, "새 근거가 생기면 확정본은 오래된 것으로 표시된다")
+        XCTAssertEqual(model.pendingRegeneration?.id, pending.id, "대기 초안은 그대로 유지된다")
+        XCTAssertEqual(model.pendingRegeneration?.content, pending.content)
+        XCTAssertEqual(try env.repo.reportVersions(reportId: reportId).count, before,
+                       "원본 변경 확인은 저장된 버전을 만들지 않는다")
+    }
+
     @MainActor func testUnstoredEditsSurviveReloadAndPreventRegeneration() async throws {
         let env = try environment(); let model = ReportsModel(environment: env)
         await model.generate()

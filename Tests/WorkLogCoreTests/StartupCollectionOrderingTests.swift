@@ -12,6 +12,8 @@ import XCTest
 /// 2. catch-up이 진행 중일 때 도착한 가져오기는 catch-up을 막지 않고, 끝난 뒤 합집합으로
 ///    한 번만 재평가한다. 원본이 이미 반영됐다면 새 버전을 만들지 않는다.
 /// 3. catch-up이 끝난 뒤 도착한 가져오기는 즉시 재평가해 새 버전을 만든다.
+/// 4. catch-up 전에 도착한 가져오기는 버리지 않고 보류했다가, 이전 세션에서 성공한 기간까지
+///    catch-up 뒤 한 번 재평가한다.
 final class StartupCollectionOrderingTests: XCTestCase {
 
     private var tempDirs: [URL] = []
@@ -132,6 +134,50 @@ final class StartupCollectionOrderingTests: XCTestCase {
             .sources.contains { $0.kind == .github })
         let job = try XCTUnwrap(env.repo.scheduledJob(type: .dailyClose, periodKey: dayBefore.iso))
         XCTAssertEqual(job.state, .succeeded, "재평가는 예약 작업을 실패로 만들지 않는다")
+    }
+
+    // MARK: - 4. 시작 직전 가져오기는 성공한 기간도 다시 평가한다
+
+    /// 앱 재시작 뒤에는 이전 세션이 성공시킨 업무일의 작업이 `succeeded`로 남아 있다. catch-up은
+    /// 성공한 기간을 다시 실행하지 않으므로, 시작 직전 가져오기를 버리면 그 근거가 영영 사라진다.
+    /// 조정자는 구간을 보류했다가 catch-up이 끝난 뒤 정확히 한 번 재평가해야 한다.
+    @MainActor
+    func testImportBeforeCatchUpReevaluatesSucceededPeriodFromPreviousSession() async throws {
+        let now = kst(2026, 10, 21, 10)
+        let env = try makeEnv(now: now)
+        let today = env.calendar.workDate(of: now)
+        let dayBefore = env.calendar.adding(days: -1, to: today)
+        _ = try env.tasks.captureMemo(body: "어제 기록", workDate: dayBefore)
+
+        // 이전 세션: catch-up이 D-1 리포트를 성공 상태로 만든다(아직 가져온 활동 없음).
+        _ = try await env.runStartupCatchUp()
+        let report = try XCTUnwrap(dailyReport(env, on: dayBefore))
+        let first = try XCTUnwrap(try versions(env, reportId: report.id).last)
+        XCTAssertFalse(try facts(env, snapshotId: first.sourceSnapshotId)
+            .sources.contains { $0.kind == .github })
+
+        // 새 세션: 가져오기가 catch-up보다 먼저 도착한다.
+        let coordinator = makeCoordinator(env)
+        XCTAssertEqual(try env.repo.importActivities(
+            [event(occurredAt: kst(2026, 10, 20, 12))], connection: connection()), 1)
+        await coordinator.importsLanded(DateRange(start: dayBefore, endExclusive: today))
+        XCTAssertEqual(try versions(env, reportId: report.id).count, 1,
+                       "재평가는 catch-up이 끝난 뒤에만 실행된다")
+
+        try await coordinator.runCatchUp()
+
+        let all = try versions(env, reportId: report.id)
+        XCTAssertEqual(all.count, 2, "보류한 구간을 catch-up 뒤 한 번 재평가해 새 버전을 만든다")
+        let after = try XCTUnwrap(all.last)
+        let imported = try facts(env, snapshotId: after.sourceSnapshotId)
+            .sources.filter { $0.kind == .github }
+        XCTAssertEqual(imported.count, 1)
+        XCTAssertTrue(imported[0].text.contains("PR #12"))
+
+        let job = try XCTUnwrap(env.repo.scheduledJob(type: .dailyClose, periodKey: dayBefore.iso))
+        XCTAssertEqual(job.state, .succeeded, "재평가는 예약 작업을 실패로 만들지 않는다")
+        XCTAssertEqual(job.attempts, 1, "catch-up은 이미 성공한 작업을 다시 실행하지 않는다")
+        XCTAssertNil(coordinator.lastError)
     }
 
     // MARK: - Helpers

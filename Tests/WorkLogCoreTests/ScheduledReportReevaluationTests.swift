@@ -274,6 +274,43 @@ final class ScheduledReportReevaluationTests: XCTestCase {
         XCTAssertNil(tooOldReport)
     }
 
+    /// 가져오기마다 92일 catch-up 계획을 다시 돌리면 실패로 남은 작업을 매번 재시도한다.
+    /// 가장 이른 기록 업무일이 그대로인 동안에는 재계획을 건너뛰고, 앞당겨졌을 때만 다시 계획한다.
+    func testUnchangedEarliestDateDoesNotReplayCatchUpPlan() async throws {
+        let now = kst(2026, 10, 21, 10)
+        let env = try makeEnv(now: now)
+        let today = env.calendar.workDate(of: now)
+        let dayBefore = env.calendar.adding(days: -1, to: today)
+        _ = try env.tasks.captureMemo(body: "어제 기록", workDate: dayBefore)
+        _ = try await env.runStartupCatchUp()
+
+        // 최근 92일 안에 실패로 남은 작업(시도 1회). 재계획이 돌면 실행기가 pending/failed에서 다시 집어 간다.
+        let threeDaysAgo = env.calendar.adding(days: -3, to: today)
+        XCTAssertTrue(try env.repo.insertScheduledJobIfAbsent(ScheduledJob(
+            id: env.repo.ids.make(), type: .dailyClose, periodKey: threeDaysAgo.iso,
+            scheduledFor: kst(2026, 10, 18, 23), state: .failed, attempts: 1)))
+
+        // 같은 업무일에 도착한 가져오기: 가장 이른 기록 업무일(D-1)이 그대로라 재계획하지 않는다.
+        XCTAssertEqual(try env.repo.importActivities(
+            [event(id: "gh-1", occurredAt: kst(2026, 10, 20, 12))], connection: connection()), 1)
+        _ = try await env.reevaluateScheduledReports(
+            affecting: DateRange(start: dayBefore, endExclusive: today))
+        var failed = try XCTUnwrap(env.repo.scheduledJob(type: .dailyClose, periodKey: threeDaysAgo.iso))
+        XCTAssertEqual(failed.state, .failed, "재계획이 없으면 실패 작업을 다시 시도하지 않는다")
+        XCTAssertEqual(failed.attempts, 1)
+
+        // 가장 이른 기록 업무일이 앞당겨지면 그때만 다시 계획해 실패 작업을 재시도한다.
+        let tenDaysAgo = env.calendar.adding(days: -10, to: today)
+        XCTAssertEqual(try env.repo.importActivities(
+            [event(id: "gh-10", occurredAt: kst(2026, 10, 11, 12))], connection: connection()), 1)
+        _ = try await env.reevaluateScheduledReports(
+            affecting: DateRange(start: tenDaysAgo,
+                                 endExclusive: env.calendar.adding(days: 1, to: tenDaysAgo)))
+        failed = try XCTUnwrap(env.repo.scheduledJob(type: .dailyClose, periodKey: threeDaysAgo.iso))
+        XCTAssertEqual(failed.attempts, 2, "가장 이른 기록이 앞당겨지면 재계획이 실패 작업을 다시 시도한다")
+        XCTAssertEqual(failed.state, .succeeded)
+    }
+
     func testAIOnlyWithinRecentDays() async throws {
         let now = kst(2026, 10, 21, 10)
         let provider = MockAIProvider()
@@ -311,16 +348,78 @@ final class ScheduledReportReevaluationTests: XCTestCase {
     // MARK: - 2. 조정자: catch-up과 가져오기 직렬화
 
     @MainActor
-    func testImportsBeforeCatchUpIsIgnored() async {
-        var calls = 0
+    func testImportsBeforeCatchUpAreMergedAndReevaluatedOnceAfterCatchUp() async throws {
+        let gate = CatchUpGate()
+        var seen: [DateRange] = []
+        let coordinator = ScheduledReportCoordinator(
+            catchUp: { await gate.wait() },
+            reevaluate: { seen.append($0) })
+
+        let first = DateRange(start: WorkDate("2026-10-01")!, endExclusive: WorkDate("2026-10-02")!)
+        let second = DateRange(start: WorkDate("2026-10-05")!, endExclusive: WorkDate("2026-10-06")!)
+        await coordinator.importsLanded(first)
+        await coordinator.importsLanded(second)
+        XCTAssertEqual(coordinator.phase, .notStarted)
+        XCTAssertTrue(seen.isEmpty, "catch-up 전에는 재평가하지 않는다")
+
+        let task = Task { try await coordinator.runCatchUp() }
+        await gate.waitUntilStarted()
+        XCTAssertEqual(coordinator.phase, .running)
+        XCTAssertTrue(seen.isEmpty, "catch-up이 끝나기 전에는 재평가하지 않는다")
+
+        await gate.open()
+        try await task.value
+        XCTAssertEqual(coordinator.phase, .finished)
+        XCTAssertEqual(seen, [DateRange(start: WorkDate("2026-10-01")!,
+                                        endExclusive: WorkDate("2026-10-06")!)],
+                       "catch-up 전 가져오기는 버리지 않고 보류했다가 합집합 한 번으로 재평가한다")
+        XCTAssertNil(coordinator.lastError)
+    }
+
+    @MainActor
+    func testCancellationStopsFurtherReevaluationsAndIsNotRecordedAsError() async throws {
+        let first = DateRange(start: WorkDate("2026-10-01")!, endExclusive: WorkDate("2026-10-02")!)
+        let second = DateRange(start: WorkDate("2026-10-05")!, endExclusive: WorkDate("2026-10-06")!)
+        let third = DateRange(start: WorkDate("2026-10-07")!, endExclusive: WorkDate("2026-10-08")!)
+        var seen: [DateRange] = []
+        var worker: Task<Void, Never>?
         let coordinator = ScheduledReportCoordinator(
             catchUp: {},
-            reevaluate: { _ in calls += 1 })
+            reevaluate: { range in
+                seen.append(range)
+                worker?.cancel()
+            })
+        try await coordinator.runCatchUp()
 
+        // 첫 재평가가 작업을 취소한다. 조정자는 남은 구간을 시작하지 않는다.
+        worker = Task {
+            await coordinator.importsLanded(first)
+            await coordinator.importsLanded(second)
+        }
+        await worker?.value
+        XCTAssertEqual(seen, [first], "취소 뒤에는 다음 구간을 시작하지 않는다")
+        XCTAssertNil(coordinator.lastError, "취소는 오류가 아니다")
+
+        // 취소로 미뤄 둔 구간은 다음 가져오기에서 잃지 않고 이어서 재평가한다.
+        // (새 가져오기 구간을 먼저 평가하고, 보류해 둔 구간을 바로 이어서 한 번 더 평가한다.)
+        await coordinator.importsLanded(third)
+        XCTAssertEqual(seen, [first, third, second],
+                       "취소로 보류한 구간은 다음 가져오기에서 이어서 재평가한다")
+    }
+
+    @MainActor
+    func testReevaluationFailureIsReportedToOnError() async throws {
+        var reported: [String] = []
+        let coordinator = ScheduledReportCoordinator(
+            catchUp: {},
+            reevaluate: { _ in throw WorkLogError.storage("재평가 실패") },
+            onError: { reported.append(String(describing: $0)) })
+        try await coordinator.runCatchUp()
         await coordinator.importsLanded(DateRange(start: WorkDate("2026-10-01")!,
                                                   endExclusive: WorkDate("2026-10-02")!))
-        XCTAssertEqual(coordinator.phase, .notStarted)
-        XCTAssertEqual(calls, 0, "catch-up 전 가져오기는 무시한다(곧 시작될 catch-up이 본다)")
+        XCTAssertEqual(reported.count, 1, "실패는 onError로 한 번 알린다")
+        XCTAssertTrue(reported[0].contains("재평가 실패"))
+        XCTAssertNotNil(coordinator.lastError)
     }
 
     @MainActor

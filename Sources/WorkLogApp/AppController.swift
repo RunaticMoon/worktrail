@@ -103,6 +103,9 @@ import WorkLogCore
                     _ = try await env.reevaluateScheduledReports(affecting: range)
                     self?.reportLibrary?.load()
                     self?.notifyReportSourcesChanged()
+                },
+                onError: { error in
+                    AppDiagnostics.shared.recordFailure(error, category: .ai)
                 })
             captureSession = CaptureSessionModel(environment: env)
             graph = GraphModel(environment: env)
@@ -329,11 +332,17 @@ import WorkLogCore
     private func waitForLaunchCollection(atMost limit: Duration) async {
         guard !launchCollectionDone else { return }
         let gate = LaunchWaitGate()
+        // The timeout is cancelled as soon as the real signal (or a short-circuit) resumes the
+        // continuation, so no stray task keeps the app awake for the rest of the launch window.
+        let timeout = Task {
+            do { try await Task.sleep(for: limit) } catch { return }
+            gate.resume()
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             gate.continuation = continuation
             launchCollectionWaiters.append(gate)
-            Task { try? await Task.sleep(for: limit); gate.resume() }
         }
+        timeout.cancel()
         launchCollectionWaiters.removeAll { $0 === gate }
     }
 
