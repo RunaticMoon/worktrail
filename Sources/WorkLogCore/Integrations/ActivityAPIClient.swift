@@ -110,7 +110,7 @@ public struct ActivityAPIClient: Sendable {
 
     private func githubWebURL(_ connection: ActivityConnection) -> URL {
         var url = try! connection.normalizedEndpoint()
-        if url.host == "api.github.com" { return URL(string: "https://github.com")! }
+        if url.host?.lowercased() == "api.github.com" { return URL(string: "https://github.com")! }
         if url.path.hasSuffix("/api/v3") { url.deleteLastPathComponent(); url.deleteLastPathComponent() }
         return url
     }

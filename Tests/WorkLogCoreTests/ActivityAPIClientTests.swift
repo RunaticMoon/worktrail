@@ -56,6 +56,22 @@ final class ActivityAPIClientTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fake-token" })
     }
 
+    /// The GitHub web origin is recognised regardless of host casing, so a typed `https://GitHub.com`
+    /// still talks to the public API and links to `https://github.com/...`.
+    func testGitHubWebOriginHostIsCaseInsensitive() async throws {
+        let transport = ActivityAPIFixtureTransport(try [response(["login": "fixture"]), response([])])
+        let result = try await ActivityAPIClient(transport: transport).fetch(
+            connection: connection(.github, url: "https://GitHub.com"), token: "fake-token",
+            range: range, calendar: calendar)
+        XCTAssertTrue(result.activities.isEmpty)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].url?.host, "api.github.com")
+        XCTAssertEqual(requests[0].url?.path, "/user")
+        XCTAssertEqual(requests[1].url?.host, "api.github.com")
+        XCTAssertEqual(requests[1].url?.path, "/users/fixture/events")
+    }
+
     func testGitHubStopsAtDocumentedEventLimitWithWarning() async throws {
         let page = (0..<100).map { event("\($0)", type: "WatchEvent") }
         let transport = ActivityAPIFixtureTransport(try [response(["login": "fixture"]), response(page), response(page), response(page)])

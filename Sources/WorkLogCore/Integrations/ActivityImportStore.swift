@@ -154,38 +154,50 @@ extension WorkRepository {
         return connection.importIdentity
     }
 
-    /// Moves rows stored under the legacy connection key to the current import identity.
+    /// Moves rows stored under any equivalent spelling of this connection's Keychain account to the
+    /// current import identity. Older builds hashed the typed address and account spelling, so a
+    /// web-root address, an API-root address or a differently cased GitHub host could orphan events.
     /// Imported memos are never deleted or merged: rows whose event already exists under the
     /// current key keep that row and the legacy row is left untouched.
     public func adoptLegacyActivityImportKey(for connection: ActivityConnection) throws {
-        let legacy = connection.credentialAccount
         let current = connection.importIdentity
-        guard legacy != current else { return }
+        let legacyKeys = connection.equivalentCredentialAccounts.filter { $0 != current }.sorted()
+        guard !legacyKeys.isEmpty else { return }
+        let placeholders = Array(repeating: "?", count: legacyKeys.count).joined(separator: ", ")
+        let params = legacyKeys.map { $0 as SQLBindable }
+        // Cheap pre-check before opening a transaction. Rows that must stay under a legacy key
+        // because the event already exists under the current key keep this true, but the
+        // transaction below then only runs no-op UPDATEs.
+        let pending = try db.scalarInt("""
+            SELECT COALESCE((SELECT 1 FROM imported_activity WHERE connection_key IN (\(placeholders)) LIMIT 1), 0)
+                 + COALESCE((SELECT 1 FROM activity_sync_state WHERE connection_key IN (\(placeholders)) LIMIT 1), 0)
+            """, params + params)
+        guard pending > 0 else { return }
         try db.transaction {
-            let legacyRows = try db.scalarIntV("""
-                SELECT (SELECT COUNT(*) FROM imported_activity WHERE connection_key = ?)
-                     + (SELECT COUNT(*) FROM activity_sync_state WHERE connection_key = ?)
-                """, legacy, legacy)
-            guard legacyRows > 0 else { return }
-            try db.runV("""
-                UPDATE imported_activity SET connection_key = ?
-                WHERE connection_key = ? AND NOT EXISTS (
-                    SELECT 1 FROM imported_activity current
-                    WHERE current.connection_key = ? AND current.external_id = imported_activity.external_id)
-                """, current, legacy, current)
-            guard let legacyState = try db.queryOneV(
-                "SELECT attempted_on, completed_at FROM activity_sync_state WHERE connection_key = ?", legacy) else { return }
-            if let currentState = try db.queryOneV(
-                "SELECT attempted_on, completed_at FROM activity_sync_state WHERE connection_key = ?", current) {
-                // One state row survives: the later successful sync, and a completed time wins over none.
-                let surviving = Self.laterActivitySyncState(currentState, legacyState)
-                try db.runV("UPDATE activity_sync_state SET attempted_on = ?, completed_at = ? WHERE connection_key = ?",
-                            surviving["attempted_on"], surviving["completed_at"], current)
-            } else {
-                try db.runV("UPDATE activity_sync_state SET connection_key = ? WHERE connection_key = ?", current, legacy)
-            }
-            try db.runV("DELETE FROM activity_sync_state WHERE connection_key = ?", legacy)
+            for legacy in legacyKeys { try adopt(legacyKey: legacy, into: current) }
         }
+    }
+
+    /// One spelling's rows. The caller owns the transaction.
+    private func adopt(legacyKey legacy: String, into current: String) throws {
+        try db.runV("""
+            UPDATE imported_activity SET connection_key = ?
+            WHERE connection_key = ? AND NOT EXISTS (
+                SELECT 1 FROM imported_activity current
+                WHERE current.connection_key = ? AND current.external_id = imported_activity.external_id)
+            """, current, legacy, current)
+        guard let legacyState = try db.queryOneV(
+            "SELECT attempted_on, completed_at FROM activity_sync_state WHERE connection_key = ?", legacy) else { return }
+        if let currentState = try db.queryOneV(
+            "SELECT attempted_on, completed_at FROM activity_sync_state WHERE connection_key = ?", current) {
+            // One state row survives: the later successful sync, and a completed time wins over none.
+            let surviving = Self.laterActivitySyncState(currentState, legacyState)
+            try db.runV("UPDATE activity_sync_state SET attempted_on = ?, completed_at = ? WHERE connection_key = ?",
+                        surviving["attempted_on"], surviving["completed_at"], current)
+        } else {
+            try db.runV("UPDATE activity_sync_state SET connection_key = ? WHERE connection_key = ?", current, legacy)
+        }
+        try db.runV("DELETE FROM activity_sync_state WHERE connection_key = ?", legacy)
     }
 
     private static func laterActivitySyncState(_ current: SQLRow, _ legacy: SQLRow) -> SQLRow {

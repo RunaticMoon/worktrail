@@ -51,8 +51,9 @@ public struct ActivityConnection: Codable, Equatable, Sendable {
         var base = try normalizedEndpoint()
         switch source {
         case .github:
-            if base.host == "github.com" { base = URL(string: "https://api.github.com")! }
-            else if base.host != "api.github.com", !base.path.hasSuffix("/api/v3") {
+            // Hosts are case-insensitive; URLComponents keeps the spelling the user typed.
+            if base.host?.lowercased() == "github.com" { base = URL(string: "https://api.github.com")! }
+            else if base.host?.lowercased() != "api.github.com", !base.path.hasSuffix("/api/v3") {
                 base.appendPathComponent("api/v3")
             }
         case .jira:
@@ -80,6 +81,58 @@ public struct ActivityConnection: Codable, Equatable, Sendable {
         parts.fragment = nil
         parts.query = nil
         return parts.string
+    }
+
+    /// Keychain-account spellings an older build could have hashed for this same API and account:
+    /// the entered address, the API base, the service's web root, and the lowercased-host form of
+    /// each. Account casing is lowercased for GitHub, whose logins are case-insensitive.
+    /// Adoption moves rows written under these keys; every candidate is re-checked against
+    /// `importIdentity`, so a different server or account can never be merged in.
+    var equivalentCredentialAccounts: [String] {
+        guard let apiBase = try? apiBaseURL() else { return [] }
+        var urls: [URL] = []
+        if let entered = try? endpoint() { urls.append(entered) }
+        urls.append(apiBase)
+        switch source {
+        case .github:
+            if Self.canonicalAPIBase(apiBase) == "https://api.github.com" {
+                urls.append(URL(string: "https://github.com")!)
+            } else if let webRoot = Self.removingSuffix("api/v3", from: apiBase) {
+                urls.append(webRoot)
+            }
+        case .jira:
+            if let site = Self.removingSuffix("rest/api/3", from: apiBase) { urls.append(site) }
+        }
+        let lowered = urls.compactMap(Self.lowercasingHost)
+        urls.append(contentsOf: lowered)
+        var accounts = [account.trimmingCharacters(in: .whitespacesAndNewlines)]
+        if source == .github { accounts.append(accounts[0].lowercased()) }
+        var seen = Set<String>()
+        var result: [String] = []
+        for url in urls {
+            for account in accounts {
+                var candidate = self
+                candidate.baseURL = url.absoluteString
+                candidate.account = account
+                guard candidate.importIdentity == importIdentity else { continue }
+                let key = candidate.credentialAccount
+                if seen.insert(key).inserted { result.append(key) }
+            }
+        }
+        return result
+    }
+
+    private static func removingSuffix(_ suffix: String, from url: URL) -> URL? {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.path.hasSuffix("/" + suffix) else { return nil }
+        parts.path = String(parts.path.dropLast(suffix.count + 1))
+        return parts.url
+    }
+
+    private static func lowercasingHost(_ url: URL) -> URL? {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false), let host = parts.host else { return nil }
+        parts.host = host.lowercased()
+        return parts.url
     }
 
     public func validate() throws {
