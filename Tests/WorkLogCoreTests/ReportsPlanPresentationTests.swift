@@ -384,6 +384,89 @@ final class ReportsPlanPresentationTests: XCTestCase {
         XCTAssertEqual(model.proposal?.range.start, proposed.range.endExclusive)
         model.evaluationEnd = prior; XCTAssertNil(model.proposal)
     }
+
+    @MainActor func testSourcesDidChangeMarksOpenSubmissionReportStaleWithoutTouchingBody() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "진행 업무", initialStatus: .inProgress, workDate: prior)
+        let model = ReportsModel(environment: env); await model.generate()
+        let reportId = try XCTUnwrap(model.report?.id)
+        let version = try XCTUnwrap(model.version)
+        let versionsBefore = try env.repo.reportVersions(reportId: reportId).map(\.id)
+        XCTAssertFalse(model.isStale)
+        model.content = "저장하지 않은 편집"
+
+        _ = try env.tasks.addActivity(taskId: task.id, body: "자동 수집이 늦게 가져온 근거", workDate: prior)
+        model.sourcesDidChange()
+
+        XCTAssertTrue(model.isStale)
+        XCTAssertEqual(model.content, "저장하지 않은 편집", "본문·편집 중 텍스트는 그대로 둔다")
+        XCTAssertEqual(model.version?.id, version.id)
+        XCTAssertNil(model.pendingRegeneration)
+        XCTAssertEqual(try env.repo.reportVersions(reportId: reportId).map(\.id), versionsBefore, "새 버전을 만들지 않는다")
+    }
+
+    @MainActor func testSourcesDidChangeMarksOpenPerformanceReportStale() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "성과 업무", initialStatus: .inProgress, workDate: prior)
+        let model = ReportsModel(environment: env)
+        model.family = .performance; model.performanceDate = prior
+        model.loadSelection(); await model.generate()
+        let version = try XCTUnwrap(model.version)
+        XCTAssertFalse(model.isStale)
+
+        _ = try env.tasks.addActivity(taskId: task.id, body: "성과에 반영할 늦은 근거", workDate: prior)
+        model.sourcesDidChange()
+
+        XCTAssertTrue(model.isStale)
+        XCTAssertEqual(model.version?.id, version.id)
+        XCTAssertEqual(model.content, version.content)
+        XCTAssertNil(model.pendingRegeneration)
+    }
+
+    @MainActor func testSourcesDidChangeKeepsFreshReportFreshWhenOutsideRange() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "범위 밖 업무", initialStatus: .inProgress, workDate: prior)
+        let model = ReportsModel(environment: env); await model.generate()
+        let version = try XCTUnwrap(model.version)
+        let before = model.content
+
+        _ = try env.tasks.addActivity(taskId: task.id, body: "리포트 기간 밖 근거", workDate: WorkDate("2026-09-01")!)
+        model.sourcesDidChange()
+
+        XCTAssertFalse(model.isStale)
+        XCTAssertEqual(model.version?.id, version.id)
+        XCTAssertEqual(model.content, before)
+    }
+
+    @MainActor func testSourcesDidChangeDuringGenerationRechecksTheNewVersion() async throws {
+        let provider = GatedAIProvider()
+        let env = try environment(provider: provider)
+        let task = try env.tasks.createTask(title: "생성 중 업무", initialStatus: .inProgress, workDate: prior)
+        let model = ReportsModel(environment: env)
+        model.useAI = false
+        await model.generate()
+        let first = try XCTUnwrap(model.version)
+        model.useAI = true
+        // 생성 입력에 포함되는 변경: 새 버전이 만들어지는 근거.
+        _ = try env.tasks.addActivity(taskId: task.id, body: "생성 직전 근거", workDate: prior)
+
+        let generation = Task { await model.generate() }
+        await provider.waitUntilStarted()
+        XCTAssertTrue(model.isGenerating)
+        // 생성 중에 들어온 변경: 지금 검사하면 stale이지만 생성이 끝난 뒤로 미룬다.
+        _ = try env.tasks.addActivity(taskId: task.id, body: "생성 중 도착한 근거", workDate: prior)
+        model.sourcesDidChange()
+        XCTAssertFalse(model.isStale)
+        XCTAssertEqual(model.content, first.content)
+
+        provider.release()
+        await generation.value
+        XCTAssertEqual(model.isGenerating, false)
+        XCTAssertNotEqual(model.version?.id, first.id)
+        XCTAssertTrue(model.isStale, "미뤄 둔 검사는 새 버전 기준으로 실행된다")
+        XCTAssertEqual(model.content, model.version?.content)
+        XCTAssertNil(model.pendingRegeneration)
+    }
     @MainActor func testSubmissionInclusionIsExplicitAndDoesNotChangeTask() async throws {
         let env = try environment()
         let task = try env.tasks.createTask(title: "보고에서 제외할 업무", initialStatus: .inProgress, workDate: prior)
@@ -396,4 +479,48 @@ final class ReportsPlanPresentationTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(model.version).content.contains(task.title))
         XCTAssertEqual(try env.tasks.currentStatus(taskId: task.id), .inProgress)
     }
+}
+
+/// `run`이 시작되면 알리고, 테스트가 풀어 줄 때까지 멈춰 있는 가짜 AI 공급자.
+private final class GatedAIProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var started = false
+    private var released = false
+
+    func waitUntilStarted() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if started { lock.unlock(); continuation.resume() }
+            else { startWaiters.append(continuation); lock.unlock() }
+        }
+    }
+    func release() {
+        lock.lock(); released = true; let waiters = releaseWaiters; releaseWaiters = []
+        lock.unlock(); waiters.forEach { $0.resume() }
+    }
+    func checkCapabilities() async -> AICapabilities {
+        AICapabilities(installed: true, version: "gated", protocolCompatible: true)
+    }
+    func getAccountStatus() async throws -> AIAccountState {
+        .loggedIn(accountType: "gated", email: nil, planType: nil)
+    }
+    func beginOfficialLogin() async throws -> URL? { nil }
+    func listAvailableSkills() async throws -> [DiscoveredSkill] { [] }
+    func run(_ input: AIJobInput) async throws -> AIJobOutput {
+        markStarted()
+        await withCheckedContinuation { continuation in waitForRelease(continuation) }
+        return AIJobOutput(rawJSON: "{}", model: "gated", providerRef: "gated")
+    }
+    private func markStarted() {
+        lock.lock(); started = true; let waiters = startWaiters; startWaiters = []
+        lock.unlock(); waiters.forEach { $0.resume() }
+    }
+    private func waitForRelease(_ continuation: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        if released { lock.unlock(); continuation.resume() }
+        else { releaseWaiters.append(continuation); lock.unlock() }
+    }
+    func cancel(jobId: String) async {}
 }

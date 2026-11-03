@@ -9,6 +9,10 @@ public final class ActivityIntegrationsModel {
     public private(set) var message: String?
     public private(set) var isRunning = false
     public private(set) var isLoaded = false
+    /// 새 기록을 실제로 가져온 sync 횟수. 0건 재수집·실패에는 늘지 않는다(취소 전에 저장된 기록은 센다).
+    public private(set) var importGeneration = 0
+    /// 마지막으로 새 기록을 가져온 연결들의 기간 합집합. 가져온 기록이 없으면 그대로 둔다.
+    public private(set) var lastImportedRange: DateRange?
     private var saved = ActivityIntegrationSettings()
     private let store: ActivityIntegrationSettingsStore
     private let credentials: any ServiceCredentialStore
@@ -119,6 +123,7 @@ public final class ActivityIntegrationsModel {
         defer { isRunning = false }
         var results: [String] = []
         var needsApproval = false
+        var importedRanges: [DateRange] = []
         for connection in connections {
             do {
                 try Task.checkCancellation()
@@ -144,6 +149,7 @@ public final class ActivityIntegrationsModel {
                 let response = try await client.fetch(connection: connection, token: token, range: range, calendar: repo.calendar)
                 try Task.checkCancellation()
                 let count = try repo.importActivities(response.activities, connection: connection)
+                if count > 0 { importedRanges.append(range) }
                 try repo.recordActivitySyncAttempt(connection: connection, completed: true)
                 onDiagnostic(.operationSucceeded, .info, [.itemCount: .integer(count)])
                 results.append("\(connection.source.title): 새 기록 \(count)개")
@@ -155,6 +161,12 @@ public final class ActivityIntegrationsModel {
             } catch {
                 onDiagnostic(.operationFailed, .error, [.reason: .state(.failed)])
                 results.append(safeMessage(error))
+            }
+        }
+        if let first = importedRanges.first {
+            importGeneration += 1
+            lastImportedRange = importedRanges.dropFirst().reduce(first) {
+                DateRange(start: min($0.start, $1.start), endExclusive: max($0.endExclusive, $1.endExclusive))
             }
         }
         if needsApproval { results.append(Self.keychainApprovalMessage) }
