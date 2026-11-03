@@ -69,17 +69,18 @@ extension WorkRepository {
     /// An imported event is immutable; local edits and trash decisions survive subsequent syncs.
     @discardableResult
     public func importActivities(_ activities: [ImportedActivity], connection: ActivityConnection) throws -> Int {
-        try db.transaction {
+        let key = try activityImportKey(connection)
+        return try db.transaction {
             var count = 0
             for event in activities {
                 let displayJSON = try event.display.map { String(decoding: try StableJSON.encode($0), as: UTF8.self) }
                 if let previous = try db.queryOneV("SELECT memo_id FROM imported_activity WHERE connection_key = ? AND external_id = ?",
-                                                  connection.credentialAccount, event.id) {
+                                                  key, event.id) {
                     // Older imports gain API metadata without overwriting edited text or restoring trash.
                     // Periodic syncs re-fetch an overlap window, so only reindex rows that changed.
                     if let displayJSON,
                        try db.runV("UPDATE imported_activity SET display_json = ? WHERE connection_key = ? AND external_id = ? AND display_json IS NULL",
-                                   displayJSON, connection.credentialAccount, event.id) > 0,
+                                   displayJSON, key, event.id) > 0,
                        let id = previous.string("memo_id") { onSourceChanged?("memo", id) }
                     continue
                 }
@@ -89,7 +90,7 @@ extension WorkRepository {
                     INSERT INTO imported_activity
                     (connection_key, external_id, source, memo_id, occurred_at, fetched_at, source_url, display_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, connection.credentialAccount, event.id, connection.source.rawValue,
+                    """, key, event.id, connection.source.rawValue,
                     memo.id, event.occurredAt, clock.now(), event.url, displayJSON)
                 onSourceChanged?("memo", memo.id)
                 count += 1
@@ -125,20 +126,85 @@ extension WorkRepository {
     }
 
     public func activitySyncAttemptedOn(connection: ActivityConnection) throws -> WorkDate? {
-        try db.queryV("SELECT attempted_on FROM activity_sync_state WHERE connection_key = ?",
-                      connection.credentialAccount).first?.workDate("attempted_on")
+        let key = try activityImportKey(connection)
+        return try db.queryV("SELECT attempted_on FROM activity_sync_state WHERE connection_key = ?", key)
+            .first?.workDate("attempted_on")
     }
 
     public func activitySyncCompletedAt(connection: ActivityConnection) throws -> Date? {
-        try db.queryV("SELECT completed_at FROM activity_sync_state WHERE connection_key = ?",
-                      connection.credentialAccount).first?.date("completed_at")
+        let key = try activityImportKey(connection)
+        return try db.queryV("SELECT completed_at FROM activity_sync_state WHERE connection_key = ?", key)
+            .first?.date("completed_at")
     }
 
     public func recordActivitySyncAttempt(connection: ActivityConnection, completed: Bool = false) throws {
+        let key = try activityImportKey(connection)
         try db.runV("""
             INSERT INTO activity_sync_state (connection_key, attempted_on, completed_at) VALUES (?, ?, ?)
             ON CONFLICT(connection_key) DO UPDATE SET attempted_on = excluded.attempted_on,
                 completed_at = COALESCE(excluded.completed_at, activity_sync_state.completed_at)
-            """, connection.credentialAccount, calendar.workDate(of: clock.now()), completed ? clock.now() : nil)
+            """, key, calendar.workDate(of: clock.now()), completed ? clock.now() : nil)
+    }
+
+    /// Key for new `imported_activity`/`activity_sync_state` rows. Rows written before the import
+    /// identity was split from the Keychain account are adopted first, so a sync never re-imports
+    /// events it already holds. Adoption is idempotent and returns without work when nothing is left.
+    private func activityImportKey(_ connection: ActivityConnection) throws -> String {
+        try adoptLegacyActivityImportKey(for: connection)
+        return connection.importIdentity
+    }
+
+    /// Moves rows stored under any equivalent spelling of this connection's Keychain account to the
+    /// current import identity. Older builds hashed the typed address and account spelling, so a
+    /// web-root address, an API-root address or a differently cased GitHub host could orphan events.
+    /// Imported memos are never deleted or merged: rows whose event already exists under the
+    /// current key keep that row and the legacy row is left untouched.
+    public func adoptLegacyActivityImportKey(for connection: ActivityConnection) throws {
+        let current = connection.importIdentity
+        let legacyKeys = connection.equivalentCredentialAccounts.filter { $0 != current }.sorted()
+        guard !legacyKeys.isEmpty else { return }
+        let placeholders = Array(repeating: "?", count: legacyKeys.count).joined(separator: ", ")
+        let params = legacyKeys.map { $0 as SQLBindable }
+        // Cheap pre-check before opening a transaction. Rows that must stay under a legacy key
+        // because the event already exists under the current key keep this true, but the
+        // transaction below then only runs no-op UPDATEs.
+        let pending = try db.scalarInt("""
+            SELECT COALESCE((SELECT 1 FROM imported_activity WHERE connection_key IN (\(placeholders)) LIMIT 1), 0)
+                 + COALESCE((SELECT 1 FROM activity_sync_state WHERE connection_key IN (\(placeholders)) LIMIT 1), 0)
+            """, params + params)
+        guard pending > 0 else { return }
+        try db.transaction {
+            for legacy in legacyKeys { try adopt(legacyKey: legacy, into: current) }
+        }
+    }
+
+    /// One spelling's rows. The caller owns the transaction.
+    private func adopt(legacyKey legacy: String, into current: String) throws {
+        try db.runV("""
+            UPDATE imported_activity SET connection_key = ?
+            WHERE connection_key = ? AND NOT EXISTS (
+                SELECT 1 FROM imported_activity current
+                WHERE current.connection_key = ? AND current.external_id = imported_activity.external_id)
+            """, current, legacy, current)
+        guard let legacyState = try db.queryOneV(
+            "SELECT attempted_on, completed_at FROM activity_sync_state WHERE connection_key = ?", legacy) else { return }
+        if let currentState = try db.queryOneV(
+            "SELECT attempted_on, completed_at FROM activity_sync_state WHERE connection_key = ?", current) {
+            // One state row survives: the later successful sync, and a completed time wins over none.
+            let surviving = Self.laterActivitySyncState(currentState, legacyState)
+            try db.runV("UPDATE activity_sync_state SET attempted_on = ?, completed_at = ? WHERE connection_key = ?",
+                        surviving["attempted_on"], surviving["completed_at"], current)
+        } else {
+            try db.runV("UPDATE activity_sync_state SET connection_key = ? WHERE connection_key = ?", current, legacy)
+        }
+        try db.runV("DELETE FROM activity_sync_state WHERE connection_key = ?", legacy)
+    }
+
+    private static func laterActivitySyncState(_ current: SQLRow, _ legacy: SQLRow) -> SQLRow {
+        switch (current.date("completed_at"), legacy.date("completed_at")) {
+        case let (left?, right?): return right > left ? legacy : current
+        case (nil, .some): return legacy
+        default: return current
+        }
     }
 }

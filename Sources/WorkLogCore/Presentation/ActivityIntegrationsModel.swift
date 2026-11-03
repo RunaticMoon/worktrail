@@ -33,10 +33,29 @@ public final class ActivityIntegrationsModel {
 
     public func load() {
         guard repo != nil else { return }
-        do { saved = try store.load(); draft = saved; isLoaded = true }
+        do {
+            saved = try store.load(); draft = saved; isLoaded = true
+            // An enabled connection whose address no longer yields an API root falls back to the
+            // Keychain account as its import identity. That is valid but weaker deduplication, and
+            // the address is hand-edited state, so record it without any address or account text.
+            for connection in saved.connections where connection.enabled && (try? connection.apiBaseURL()) == nil {
+                onDiagnostic(.operationFailed, .warning, [.phase: .state(.starting), .reason: .state(.validation)])
+            }
+            adoptLegacyImportKeys(saved)
+        }
         catch {
             onDiagnostic(.operationFailed, .error, [.phase: .state(.starting)])
             message = "활동 수집 설정을 읽지 못했습니다. 기존 파일을 확인하세요."
+        }
+    }
+
+    /// Older databases key imported events by the Keychain account spelling. Move those rows to the
+    /// current import identity once settings are known; a failure leaves the rows for the next attempt.
+    private func adoptLegacyImportKeys(_ settings: ActivityIntegrationSettings) {
+        guard let repo else { return }
+        for connection in settings.connections {
+            do { try repo.adoptLegacyActivityImportKey(for: connection) }
+            catch { onDiagnostic(.operationFailed, .error, [.phase: .state(.starting)]) }
         }
     }
 
@@ -82,16 +101,33 @@ public final class ActivityIntegrationsModel {
     }
 
     public func removeToken(for source: ActivitySource) {
-        guard repo != nil, !isRunning else { return }
-        let connection = source == .github ? draft.github : draft.jira
+        guard repo != nil, isLoaded, !isRunning else { return }
+        // Collection reads the SAVED connection's key. A draft edit may point somewhere never
+        // saved, so delete the saved key first and, when it differs, the draft key too — it can
+        // hold a token written by an earlier save of that spelling. The two deletes are
+        // independent: a stale draft key that cannot be removed must not hide the saved-key
+        // deletion, and a saved-key failure leaves the token in place.
+        let savedConnection = source == .github ? saved.github : saved.jira
+        let draftConnection = source == .github ? draft.github : draft.jira
         do {
-            try credentials.delete(account: connection.credentialAccount)
-            if source == .github { githubToken = "" } else { jiraToken = "" }
-            message = "\(source.title) 토큰을 삭제했습니다. 수집을 계속하려면 새 토큰을 입력하세요."
+            try credentials.delete(account: savedConnection.credentialAccount)
         } catch {
             onDiagnostic(.operationFailed, .error, [:])
             message = "API 토큰을 삭제하지 못했습니다."
+            return
         }
+        var draftDeleteFailed = false
+        if draftConnection.credentialAccount != savedConnection.credentialAccount {
+            do { try credentials.delete(account: draftConnection.credentialAccount) }
+            catch {
+                draftDeleteFailed = true
+                onDiagnostic(.operationFailed, .warning, [.reason: .state(.unavailable)])
+            }
+        }
+        if source == .github { githubToken = "" } else { jiraToken = "" }
+        message = draftDeleteFailed
+            ? "\(source.title) 토큰을 삭제했습니다. 이전 주소의 토큰 항목 일부를 지우지 못했습니다."
+            : "\(source.title) 토큰을 삭제했습니다. 수집을 계속하려면 새 토큰을 입력하세요."
     }
 
     /// Automatic collection interval while the app runs. Failures wait for the same interval;

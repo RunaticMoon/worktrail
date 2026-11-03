@@ -23,13 +23,7 @@ public struct ActivityAPIClient: Sendable {
     private func request<T: Decodable>(_ type: T.Type, _ connection: ActivityConnection, token: String,
                                         path: [String], query: [URLQueryItem] = [], body: [String: Any]? = nil) async throws -> T {
         try Task.checkCancellation()
-        var base = try normalizedEndpoint(connection)
-        if connection.source == .github {
-            if base.host == "github.com" { base = URL(string: "https://api.github.com")! }
-            else if base.host != "api.github.com", !base.path.hasSuffix("/api/v3") {
-                base.appendPathComponent("api/v3")
-            }
-        } else if !base.path.hasSuffix("/rest/api/3") { base.appendPathComponent("rest/api/3") }
+        var base = try connection.apiBaseURL()
         for component in path { base.appendPathComponent(component) }
         var parts = URLComponents(url: base, resolvingAgainstBaseURL: false)!
         if !query.isEmpty { parts.queryItems = query }
@@ -115,16 +109,10 @@ public struct ActivityAPIClient: Sendable {
     }
 
     private func githubWebURL(_ connection: ActivityConnection) -> URL {
-        var url = try! normalizedEndpoint(connection)
-        if url.host == "api.github.com" { return URL(string: "https://github.com")! }
+        var url = try! connection.normalizedEndpoint()
+        if url.host?.lowercased() == "api.github.com" { return URL(string: "https://github.com")! }
         if url.path.hasSuffix("/api/v3") { url.deleteLastPathComponent(); url.deleteLastPathComponent() }
         return url
-    }
-
-    private func normalizedEndpoint(_ connection: ActivityConnection) throws -> URL {
-        var parts = URLComponents(url: try connection.endpoint(), resolvingAgainstBaseURL: false)!
-        while parts.path.hasSuffix("/") { parts.path.removeLast() }
-        return parts.url!
     }
 
     private static func isRateLimit(_ response: ChatGPTHTTPResponse) -> Bool {
@@ -170,13 +158,13 @@ public struct ActivityAPIClient: Sendable {
     }
 
     private func jiraWebURL(_ connection: ActivityConnection, token: String) async throws -> URL {
-        var url = try normalizedEndpoint(connection)
+        var url = try connection.normalizedEndpoint()
         if url.host?.lowercased() == "api.atlassian.com" {
             // Scoped tokens use an API gateway, not the site's browser origin.
             // This read still sends credentials exclusively to the configured API.
             let info = try await request(JiraServerInfo.self, connection, token: token, path: ["serverInfo"])
             var site = connection; site.baseURL = info.baseUrl
-            do { url = try normalizedEndpoint(site) }
+            do { url = try site.normalizedEndpoint() }
             catch { throw WorkLogError.validation("Jira 사이트의 HTTPS 주소를 확인하지 못했습니다. 기록은 변경하지 않았습니다.") }
         }
         if url.path.hasSuffix("/rest/api/3") { for _ in 0..<3 { url.deleteLastPathComponent() } }
