@@ -4,6 +4,12 @@ import AppKit
 import Observation
 import WorkLogCore
 
+/// Resumes a single waiter once, whichever of its racing tasks finishes first.
+@MainActor private final class LaunchWaitGate {
+    var continuation: CheckedContinuation<Void, Never>?
+    func resume() { continuation?.resume(); continuation = nil }
+}
+
 /// Shared composition point for the main window, menu extra and panels.
 @Observable @MainActor final class AppController {
     private(set) var environment: AppEnvironment?
@@ -30,6 +36,14 @@ import WorkLogCore
     private var usesFixture = false
     private var maintenanceTimer: Timer?
     private var maintenanceTask: Task<Void, Never>?
+    private var launchCheckTask: Task<Void, Never>?
+    /// Keychain approval part of the launch check; scheduled AI work waits for it.
+    private var launchAuthorization: Task<Void, Never>?
+    /// Background collection waits for the launch check so it reuses the approved credentials.
+    private var launchCheckPending = false
+    private var maintenanceRerunRequested = false
+    /// One process-wide store so a single Keychain approval serves settings, AI and collection.
+    private let serviceCredentials = CachingServiceCredentialStore(ServiceKeychainCredentialStore())
     private var notificationTask: Task<Void, Never>?
     private var needsNotificationRefresh = false
     private(set) var chatGPTLogin: ChatGPTLoginCoordinator?
@@ -89,12 +103,12 @@ import WorkLogCore
             plan = PlanModel(environment: env)
             quiz = QuizModel(environment: env)
             secrets = SecretsModel(environment: env)
-            settingsModel = SettingsModel(environment: env, credentialStore: usesFixture ? nil : ServiceKeychainCredentialStore())
+            settingsModel = SettingsModel(environment: env, credentialStore: usesFixture ? nil : serviceCredentials)
             backups = BackupModel(environment: env)
             meetings = MeetingsModel(environment: env)
             if !usesFixture {
                 activityIntegrations = ActivityIntegrationsModel(dataRoot: env.options.paths.dataRoot,
-                    repo: env.repo, credentials: ServiceKeychainCredentialStore(),
+                    repo: env.repo, credentials: serviceCredentials,
                     onDiagnostic: { event, level, fields in
                         AppDiagnostics.shared.record(event, category: .integrations, level: level, fields: fields)
                     })
@@ -121,7 +135,9 @@ import WorkLogCore
                 AppDiagnostics.shared.record(.operationFailed, category: .backup, level: .error)
                 notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다."
             }
+            if !usesFixture { launchCheckPending = true }
             refresh()
+            startLaunchConnectionCheck()
             installLifecycleObservers()
             let keys = GlobalHotkeys(clock: env.options.clock, timeZone: env.calendar.timeZone, handlers: [
                 .capture: { [weak self] in self?.showCapture() },
@@ -135,6 +151,9 @@ import WorkLogCore
                 AppDiagnostics.shared.record(.operationFailed, category: .settings, level: .warning, fields: [.itemCount: .integer(failures.count)])
                 notice = failures.joined(separator: "\n")
             }
+            // Scheduled AI reports read the API key without a dialog; give the launch approval a
+            // bounded head start so an unanswered dialog cannot hold back reports indefinitely.
+            await waitForLaunchAuthorization(atMost: .seconds(20))
             do { try await env.runStartupCatchUp() }
             catch {
                 AppDiagnostics.shared.recordFailure(error, category: .ai)
@@ -168,7 +187,7 @@ import WorkLogCore
         #endif
         let paths = AppPaths.standard()
         usesFixture = false
-        let provider = AIProviderFactory.make(paths: paths)
+        let provider = AIProviderFactory.make(paths: paths, credentials: serviceCredentials)
         chatGPTLogin = nil
         return try AppEnvironment.open(AppEnvironmentOptions(paths: paths,
             keyStore: KeychainVaultKeyStore(service: AppIdentity.default.bundleIdentifier, onStatus: { status in
@@ -213,6 +232,7 @@ import WorkLogCore
         maintenanceTimer?.invalidate(); maintenanceTimer = nil
         maintenanceTask?.cancel()
         notificationTask?.cancel()
+        launchCheckTask?.cancel(); launchCheckTask = nil; launchAuthorization = nil
         protectionTimer?.invalidate(); protectionTimer = nil
         hotkeyCoordinator?.shutdown(); hotkeyCoordinator = nil
         hotkeys?.shutdown()
@@ -237,6 +257,45 @@ import WorkLogCore
         refreshBackgroundServices()
     }
 
+    /// Every launch, including the first one after an update, re-checks connections right away:
+    /// read the enabled service tokens once with the Keychain dialog allowed, then collect
+    /// activity and verify the AI account. Later background reads reuse the cached approval.
+    private func startLaunchConnectionCheck() {
+        guard !usesFixture, !isRestoring else { return }
+        launchCheckTask?.cancel()
+        let activityAccounts = activityIntegrations?.launchCredentialAccounts ?? []
+        let aiAccount = settingsModel?.launchCredentialAccount
+        let store = serviceCredentials
+        // The Keychain dialog blocks the calling thread until the user answers. Activity tokens and
+        // the API key are separate groups, so refusing one service does not skip the other's check.
+        let authorization = Task.detached(priority: .userInitiated) {
+            (store.authorize(accounts: activityAccounts), aiAccount.map { store.authorize(accounts: [$0]) } ?? [])
+        }
+        launchAuthorization = Task { _ = await authorization.value }
+        launchCheckTask = Task { [weak self] in
+            let (_, aiPending) = await authorization.value
+            guard let self, !Task.isCancelled, !self.isRestoring else { return }
+            self.launchCheckPending = false
+            // A maintenance pass that skipped collection while the check ran must run once more.
+            if self.maintenanceTask != nil { self.maintenanceRerunRequested = true } else { self.refreshBackgroundServices() }
+            // A refused API key dialog is not reopened by the account check; the button retries it.
+            if self.environment?.settings.aiEnabled == true, aiPending.isEmpty {
+                await self.settingsModel?.checkAccount()
+            }
+            if !Task.isCancelled { self.launchCheckTask = nil }
+        }
+    }
+
+    private func waitForLaunchAuthorization(atMost limit: Duration) async {
+        guard let authorization = launchAuthorization else { return }
+        let gate = LaunchWaitGate()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            gate.continuation = continuation
+            Task { await authorization.value; gate.resume() }
+            Task { try? await Task.sleep(for: limit); gate.resume() }
+        }
+    }
+
     private func refreshBackgroundServices() {
         guard !isRestoring, !usesFixture, let environment else { return }
         // Network collection must never delay cancellation/rescheduling of due notifications.
@@ -252,9 +311,13 @@ import WorkLogCore
         }
         guard maintenanceTask == nil else { return }
         maintenanceTask = Task { [weak self] in
-            if !Task.isCancelled { await self?.activityIntegrations?.sync() }
+            if !Task.isCancelled, self?.launchCheckPending == false { await self?.activityIntegrations?.sync() }
             if !Task.isCancelled { self?.day?.load(); self?.search?.search() }
             self?.maintenanceTask = nil
+            if !Task.isCancelled, self?.maintenanceRerunRequested == true {
+                self?.maintenanceRerunRequested = false
+                self?.refreshBackgroundServices()
+            }
         }
     }
     /// Marked text that must hold task navigation. A notification activates the
@@ -578,6 +641,7 @@ import WorkLogCore
         startupError = "복원을 준비하고 있습니다. 저장소 연결을 닫는 중입니다."
         AppDiagnostics.shared.record(.operationStarted, category: .backup)
         activityIntegrations?.detach()
+        launchCheckTask?.cancel(); launchCheckTask = nil; launchAuthorization = nil
         maintenanceTask?.cancel()
         notificationTask?.cancel()
         await maintenanceTask?.value

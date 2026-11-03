@@ -113,7 +113,7 @@ bash distribution/verify-dmg.sh "release/WorkLog-$(cat VERSION)-arm64.dmg" "$(ca
 
 앱을 여는 과정에서 `SecretVault.init`이 곧바로 키를 조회·생성하던 경로를 제거했다. 앱 시작, 백업 생성, 잠금 상태 제목 검색은 Keychain에 접근하지 않는다. 기존 키 버전을 보존하고 사용자가 Secret 잠금 해제를 요청할 때만 조회하며, 일시적인 접근 거절은 다음 명시적 요청에서 재시도한다. 키가 실제로 없으면 새 키로 덮어쓰지 않는다. 기존 기기 인증과 암호화는 유지한다.
 
-자동 활동 수집과 예약 AI 요청은 Keychain 인증창 없이 읽기를 시도한다. 승인이 필요하면 실패 상태를 남기고 해당 작업을 중단한다. 설정의 연결 상태 확인·모델 조회, 지금 수집, 키 저장/삭제는 사용자가 선택한 요청이므로 기존 승인 UI를 허용한다. 정상 서명의 기존 승인 항목은 그대로 읽으며, 이전 ACL을 우회하거나 모든 앱에 접근 권한을 주지 않는다.
+자동 활동 수집과 예약 AI 요청은 Keychain 인증창 없이 읽기를 시도한다. 승인이 필요하면 실패 상태를 남기고 해당 작업을 중단한다. 앱 시작 시 연결 확인, 설정의 연결 상태 확인·모델 조회, 지금 가져오기, 키 저장/삭제는 승인 UI를 허용한다. 시작 확인은 켜진 서비스 토큰과 API 키를 한 번 읽고 실행 중 메모리에만 보관하므로, 같은 실행 안의 자동 작업은 창 없이 그 값을 사용한다. 저장·삭제는 보관 값을 함께 갱신하고, 앱 밖에서 바꾼 Keychain 값은 다음 실행부터 반영된다. 정상 서명의 기존 승인 항목은 그대로 읽으며, 이전 ACL을 우회하거나 모든 앱에 접근 권한을 주지 않는다.
 
 macOS 파일 기반 Keychain은 `kSecUseNoAuthenticationUI` 같은 Data Protection 전용 쿼리 플래그만으로 UI를 차단할 수 없다(macOS SDK `SecItem.h` 명시). [Apple의 UI 제어 문서](https://developer.apple.com/documentation/security/seckeychainsetuserinteractionallowed(_:))에 따라 비대화형 조회 동안 `SecKeychainSetUserInteractionAllowed(false)`를 적용하고 원래 상태를 복원한다. 앱의 모든 파일 Keychain 연산은 같은 동기 잠금을 거치므로 자동 조회가 명시적 승인 요청의 정책을 바꾸지 않는다. [Apple 동시성 지침](https://developer.apple.com/documentation/security/working-with-concurrency)도 macOS Security API 호출의 직렬화를 안내한다. 검색 목록, 인증서 신뢰, Keychain 잠금 설정, 기존 항목·ACL은 변경하지 않는다.
 

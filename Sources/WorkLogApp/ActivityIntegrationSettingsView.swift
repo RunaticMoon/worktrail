@@ -8,7 +8,7 @@ struct ActivityIntegrationSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("앱 실행·Mac 잠자기 복귀 시 하루 한 번 최근 기록을 가져와 실제 활동 날짜의 GitHub·Jira 목록에 저장합니다. 다음 수집에서도 같은 기록을 중복 저장하지 않습니다.")
+            Text("앱 실행 시 바로, 실행 중에는 1시간마다 최근 기록을 가져와 실제 활동 날짜의 GitHub·Jira 목록에 저장합니다. 다음 수집에서도 같은 기록을 중복 저장하지 않습니다.")
                 .font(.callout).foregroundStyle(.secondary)
             connectionFields($model.draft.github, token: $model.githubToken)
             connectionFields($model.draft.jira, token: $model.jiraToken)

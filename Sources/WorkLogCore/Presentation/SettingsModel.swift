@@ -173,6 +173,11 @@ public enum AIConnectionSummary: Equatable, Sendable {
     public func setSkill(_ value: String, for type: AIJobType) { draft.skillBindings[type.rawValue] = value }
     public func skillBinding(for type: AIJobType) -> String { draft.skillBindings[type.rawValue] ?? "" }
 
+    /// Saved API key account the app reads once in the foreground at launch; Codex CLI needs none.
+    public var launchCredentialAccount: String? {
+        guard let environment, environment.settings.aiEnabled, savedConnection.kind == .openAICompatible else { return nil }
+        return try? savedConnection.credentialAccount()
+    }
     public var hasUnsavedAIConnection: Bool {
         aiConnection != savedConnection || draft.codexExecutablePath != environment?.settings.codexExecutablePath
     }

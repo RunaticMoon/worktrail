@@ -76,11 +76,11 @@ extension WorkRepository {
                 if let previous = try db.queryOneV("SELECT memo_id FROM imported_activity WHERE connection_key = ? AND external_id = ?",
                                                   connection.credentialAccount, event.id) {
                     // Older imports gain API metadata without overwriting edited text or restoring trash.
-                    if let displayJSON {
-                        try db.runV("UPDATE imported_activity SET display_json = ? WHERE connection_key = ? AND external_id = ? AND display_json IS NULL",
-                                    displayJSON, connection.credentialAccount, event.id)
-                    }
-                    if let id = previous.string("memo_id") { onSourceChanged?("memo", id) }
+                    // Periodic syncs re-fetch an overlap window, so only reindex rows that changed.
+                    if let displayJSON,
+                       try db.runV("UPDATE imported_activity SET display_json = ? WHERE connection_key = ? AND external_id = ? AND display_json IS NULL",
+                                   displayJSON, connection.credentialAccount, event.id) > 0,
+                       let id = previous.string("memo_id") { onSourceChanged?("memo", id) }
                     continue
                 }
                 let body = "[\(connection.source.title)] \(event.title)\n\(event.detail)\n\(event.url)"
