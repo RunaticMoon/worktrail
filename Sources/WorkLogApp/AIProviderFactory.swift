@@ -3,7 +3,7 @@ import Foundation
 import WorkLogCore
 
 enum AIProviderFactory {
-    static func make(paths: AppPaths, credentials: any ServiceCredentialStore = ServiceKeychainCredentialStore()) -> ConfiguredAIProvider {
+    static func make(paths: AppPaths, credentials: any ServiceCredentialStore) -> ConfiguredAIProvider {
         let connections = AIConnectionSettingsStore(dataRoot: paths.dataRoot)
         let profiles = AITaskProfileStore(dataRoot: paths.dataRoot)
         let profileResolver: @Sendable (AIJobType) throws -> AITaskProfile = { type in

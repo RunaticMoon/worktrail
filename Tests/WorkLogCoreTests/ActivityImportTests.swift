@@ -71,7 +71,7 @@ final class ActivityImportTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data("broken".utf8))
     }
 
-    @MainActor func testAutomaticFailureAttemptsOnceDailyAndManualRetryIsExplicit() async throws {
+    @MainActor func testAutomaticCollectionRunsHourlyAndManualRetryIsExplicit() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("activity-model-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let c = connection(), credentials = ImportTestCredentials(), transport = ImportTestTransport()
@@ -85,19 +85,62 @@ final class ActivityImportTests: XCTestCase {
         XCTAssertEqual(credentials.interactionPolicies, [], "App initialization must not read credentials")
         await model.sync(); await model.sync()
         XCTAssertEqual(credentials.interactionPolicies, [false])
-        var count = await transport.calls; XCTAssertEqual(count, 1)
+        var count = await transport.calls; XCTAssertEqual(count, 1, "A failed attempt waits for the interval")
         XCTAssertTrue(model.message?.contains("한도") == true)
         XCTAssertFalse(model.message?.contains("should-not-display") == true)
         XCTAssertNil(try repo.activitySyncCompletedAt(connection: c))
-        // Restarting the model does not bypass the persisted attempt marker.
+        clock.advance(by: ActivityIntegrationsModel.automaticSyncInterval - 1)
+        await model.sync(); count = await transport.calls; XCTAssertEqual(count, 1)
+        clock.advance(by: 1)
+        await model.sync(); count = await transport.calls; XCTAssertEqual(count, 2)
+        await model.sync(manual: true); count = await transport.calls; XCTAssertEqual(count, 3)
+        XCTAssertEqual(credentials.interactionPolicies, [false, false, true])
+        // A relaunch collects on its first pass without waiting for the previous process's interval.
         let reopened = ActivityIntegrationsModel(dataRoot: root, repo: repo, credentials: credentials,
             client: ActivityAPIClient(transport: transport))
-        await reopened.sync(); count = await transport.calls; XCTAssertEqual(count, 1)
-        await reopened.sync(manual: true); count = await transport.calls; XCTAssertEqual(count, 2)
-        XCTAssertEqual(credentials.interactionPolicies, [false, true])
-        clock.advance(by: 86_400)
-        await reopened.sync(); count = await transport.calls; XCTAssertEqual(count, 3)
-        XCTAssertEqual(credentials.interactionPolicies, [false, true, false])
+        await reopened.sync(); count = await transport.calls; XCTAssertEqual(count, 4)
+        await reopened.sync(); count = await transport.calls; XCTAssertEqual(count, 4)
+        // A recent success in an earlier process does not delay the launch pass either.
+        try repo.recordActivitySyncAttempt(connection: c, completed: true)
+        clock.advance(by: 600)
+        let relaunched = ActivityIntegrationsModel(dataRoot: root, repo: repo, credentials: credentials,
+            client: ActivityAPIClient(transport: transport))
+        await relaunched.sync(); count = await transport.calls; XCTAssertEqual(count, 5)
+        // A clock moved backwards does not pause collection until it catches up.
+        clock.advance(by: -7_200)
+        await relaunched.sync(); count = await transport.calls; XCTAssertEqual(count, 6)
+        // A success recorded days "in the future" still yields a valid range after the clock is corrected.
+        clock.advance(by: -10 * 86_400)
+        await relaunched.sync(); count = await transport.calls; XCTAssertEqual(count, 7)
+    }
+
+    @MainActor func testApprovalFailureShowsOneMessageAndApprovalIsReusedSilently() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("activity-approval-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var jira = ActivityConnection(source: .jira)
+        jira.enabled = true; jira.baseURL = "https://jira.example.test"; jira.account = "sample-user"
+        let github = connection()
+        let base = ApprovalGatedCredentials(values: [github.credentialAccount: "fake-token", jira.credentialAccount: "fake-token"])
+        let credentials = CachingServiceCredentialStore(base), transport = ImportTestTransport()
+        let clock = FixedClock(SQLDate.parse("2026-10-28T00:00:00Z")!)
+        let repo = try WorkRepository.inMemory(clock: clock, ids: SequentialIDGenerator())
+        var settings = ActivityIntegrationSettings(); settings.github = github; settings.jira = jira
+        try ActivityIntegrationSettingsStore(dataRoot: root).save(settings)
+        let model = ActivityIntegrationsModel(dataRoot: root, repo: repo, credentials: credentials,
+            client: ActivityAPIClient(transport: transport))
+        XCTAssertEqual(Set(model.launchCredentialAccounts), [github.credentialAccount, jira.credentialAccount])
+        await model.sync()
+        var count = await transport.calls; XCTAssertEqual(count, 0)
+        XCTAssertEqual(model.message, ActivityIntegrationsModel.keychainApprovalMessage, "One message for every service")
+        await model.sync(); XCTAssertEqual(base.reads, [false, false], "Approval failures also wait for the interval")
+        // Once approved (launch check or manual sync), manual and periodic collection reuse it.
+        XCTAssertTrue(credentials.authorize(accounts: model.launchCredentialAccounts).isEmpty)
+        await model.sync(manual: true)
+        count = await transport.calls; XCTAssertEqual(count, 2)
+        clock.advance(by: ActivityIntegrationsModel.automaticSyncInterval)
+        await model.sync()
+        count = await transport.calls; XCTAssertEqual(count, 4)
+        XCTAssertEqual(base.reads, [false, false, true, true], "No further Keychain reads after the approval")
     }
 
     @MainActor func testDirtySettingsDoNotSendManualRequestsAndSavingStoresTokenSeparately() async throws {

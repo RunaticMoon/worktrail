@@ -47,6 +47,11 @@ final class AIConnectionSettingsTests: XCTestCase {
         let reopened = SettingsModel(environment: env, credentialStore: credentials)
         XCTAssertEqual(reopened.aiConnection.kind, .openAICompatible)
         XCTAssertEqual(try credentials.read(account: reopened.aiConnection.credentialAccount()), "fake-sensitive-key")
+        XCTAssertEqual(reopened.launchCredentialAccount, try reopened.aiConnection.credentialAccount(),
+                       "The launch check reads the saved API key account")
+        var disabled = env.settings; disabled.aiEnabled = false
+        try env.updateSettings(disabled)
+        XCTAssertNil(SettingsModel(environment: env, credentialStore: credentials).launchCredentialAccount)
         let data = try Data(contentsOf: env.options.paths.dataRoot.appendingPathComponent(AIConnectionSettingsStore.fileName))
         XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("fake-sensitive-key"))
     }

@@ -24,7 +24,7 @@ final class ServiceKeychainCredentialStore: ServiceCredentialStore, @unchecked S
         record(status)
         if status == errSecItemNotFound { return nil }
         if status == errSecInteractionNotAllowed || status == errSecInteractionRequired || status == errSecAuthFailed {
-            throw AIProviderError(.notLoggedIn, "Keychain 접근 승인이 필요합니다. 설정에서 연결 상태 확인 또는 활동 수집의 지금 수집을 눌러 승인하세요.")
+            throw AIProviderError(.notLoggedIn, "Keychain 접근 승인이 필요합니다. 설정에서 연결 상태 확인 또는 활동 수집의 ‘지금 가져오기’를 눌러 ‘항상 허용’을 선택하세요.")
         }
         guard status == errSecSuccess, let data = result as? Data, let credential = String(data: data, encoding: .utf8) else {
             throw AIProviderError(.notLoggedIn, "WorkLog의 서비스 인증 저장소를 열 수 없습니다.")
