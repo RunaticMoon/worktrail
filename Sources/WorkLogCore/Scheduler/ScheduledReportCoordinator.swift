@@ -9,7 +9,8 @@ import Foundation
 // - catch-up이 실행 중이면 재평가 요청을 하나의 합집합 구간으로 모아 두었다가 끝난 뒤 한 번만 실행한다.
 // - catch-up이 끝난 뒤에는 가져오기마다 즉시 재평가한다. 재평가 중에 들어온 요청은 모아서 이어서 실행한다.
 // - 재평가 오류는 lastError에 보관하고 onError로 알리며 다음 가져오기에서 자연히 재시도한다
-//   (앱을 중단시키지 않는다). 취소는 오류가 아니므로 남은 재평가를 시작하지 않고 멈춘다.
+//   (앱을 중단시키지 않는다). 취소는 오류가 아니므로 남은 재평가를 시작하지 않고 멈추되,
+//   취소로 중단된 구간은 버리지 않고 보류해 다음 가져오기가 이어받는다.
 
 @MainActor
 public final class ScheduledReportCoordinator {
@@ -80,6 +81,8 @@ public final class ScheduledReportCoordinator {
             guard !Task.isCancelled else { merge(range); return }
             isReevaluating = true
             await reevaluateSafely(range)
+            // 취소로 중단된 재평가는 그 구간을 버리지 않고 보류해 다음 가져오기가 이어받는다.
+            if Task.isCancelled { merge(range) }
             await drainPending()
             isReevaluating = false
         }
@@ -90,10 +93,12 @@ public final class ScheduledReportCoordinator {
     private func drainPending() async {
         isReevaluating = true
         defer { isReevaluating = false }
-        // 취소되면 남은 재평가를 시작하지 않는다. pendingRange는 다음 가져오기를 위해 남겨 둔다.
+        // 취소되면 남은 재평가를 시작하지 않는다. 취소로 중단된 구간은 보류해 다음 가져오기가
+        // 이어받는다(중단된 재평가는 완료되지 않았으므로 그 기간의 새 근거가 유실되면 안 된다).
         while !Task.isCancelled, let range = pendingRange {
             pendingRange = nil
             await reevaluateSafely(range)
+            if Task.isCancelled { merge(range); break }
         }
     }
 

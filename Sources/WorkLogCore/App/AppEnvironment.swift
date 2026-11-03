@@ -295,8 +295,9 @@ public final class AppEnvironment {
     /// 자동 모드로 다시 평가한다.
     ///
     /// - 먼저 `runStartupCatchUp`과 같은 계획·실행이 필요한지 판단해, 첫 가져오기로 가장 이른 기록
-    ///   업무일이 앞당겨졌을 때만 새로 생긴 업무일의 작업을 계획·실행한다(이미 있는 작업 키는
-    ///   중복 생성하지 않는다). 가장 이른 기록 업무일이 그대로면 같은 92일 계획을 다시 돌리지 않는다.
+    ///   업무일이 앞당겨졌거나 지금 새로 실행할 작업이 생겼을 때(예: 월요일 알림 시각 도달)만
+    ///   새 작업을 계획·실행한다(이미 있는 작업 키는 중복 생성하지 않는다). 그 외에는 같은 92일
+    ///   계획을 다시 돌리지 않는다.
     /// - 이어서 `succeeded` 상태이면서 `range`와 겹치고 `range.endExclusive > floor`(오늘 - maxLookbackDays)
     ///   인 작업만 다시 평가한다. 작업의 상태·시도 횟수는 바꾸지 않는다(성공 상태 유지).
     /// - 자동 모드라 원본 digest가 같으면 AI 호출도 새 버전도 만들지 않는다. 확정본·편집본은
@@ -311,12 +312,20 @@ public final class AppEnvironment {
         let now = options.clock.now()
         let today = calendar.workDate(of: now)
 
-        // (a) 가장 이른 기록 업무일이 앞당겨졌거나 업무일이 바뀐 경우에만 누락 업무일을 계획·실행한다.
-        //     가져오기마다 92일 계획을 다시 돌려 실패 작업을 매시간 재시도하던 비용을 막는다.
+        // (a) 가장 이른 기록 업무일이 앞당겨졌거나 업무일이 바뀐 경우, 또는 지금 새로 실행할 작업이
+        //     생긴 경우(예: 월요일 알림 시각 도달)에만 누락 업무일을 계획·실행한다. 가져오기마다
+        //     92일 계획을 다시 돌려 실패 작업을 매시간 재시도하던 비용을 막는다.
+        //     이미 있는 작업 키(실패 포함)는 dueJobs에서 제외되므로 실패 작업은 다시 시도하지 않는다.
         let plannedSince = try catchUpStart(maxLookbackDays: maxLookbackDays, today: today)
-        let needsPlan = lastCatchUpSince == nil
+        var needsPlan = lastCatchUpSince == nil
             || lastCatchUpToday != today
             || plannedSince < (lastCatchUpSince ?? plannedSince)
+        if !needsPlan {
+            let due = SchedulePlanner.dueJobs(now: now, since: plannedSince,
+                                              existingKeys: try repo.scheduledJobKeys(),
+                                              settings: settings, periods: periods)
+            needsPlan = !due.isEmpty
+        }
         if needsPlan {
             _ = try await runStartupCatchUp(maxLookbackDays: maxLookbackDays, aiRecentDays: aiRecentDays)
         }
