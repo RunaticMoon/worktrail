@@ -192,6 +192,63 @@ final class ActivityImportTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(ActivityIntegrationSettingsStore.fileName).path))
     }
 
+    @MainActor func testImportGenerationAndRangeAdvanceOnlyWhenNewRecordsAreStored() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("activity-generation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let c = connection(), credentials = ImportTestCredentials()
+        try credentials.write("fake-token", account: c.credentialAccount)
+        let clock = FixedClock(SQLDate.parse("2026-10-28T00:00:00Z")!)
+        let repo = try WorkRepository.inMemory(clock: clock, ids: SequentialIDGenerator())
+        var settings = ActivityIntegrationSettings(); settings.github = c
+        try ActivityIntegrationSettingsStore(dataRoot: root).save(settings)
+        // 같은 이벤트를 두 번 받아도 두 번째 수집은 새 기록 0건이어야 한다.
+        let transport = ImportReplyTransport([
+            .init(status: 200, body: Data(#"{"login":"sample-user"}"#.utf8)),
+            .init(status: 200, body: Data(Self.githubEventsJSON.utf8)),
+            .init(status: 200, body: Data(#"{"login":"sample-user"}"#.utf8)),
+            .init(status: 200, body: Data(Self.githubEventsJSON.utf8))
+        ])
+        let model = ActivityIntegrationsModel(dataRoot: root, repo: repo, credentials: credentials,
+            client: ActivityAPIClient(transport: transport))
+        XCTAssertEqual(model.importGeneration, 0)
+        XCTAssertNil(model.lastImportedRange)
+
+        await model.sync()
+        let range = DateRange(start: WorkDate("2026-10-21")!, endExclusive: WorkDate("2026-10-29")!)
+        XCTAssertEqual(model.importGeneration, 1)
+        XCTAssertEqual(model.lastImportedRange, range)
+
+        await model.sync(manual: true)
+        XCTAssertEqual(model.importGeneration, 1, "새 기록이 0건이면 세대가 늘지 않는다")
+        XCTAssertEqual(model.lastImportedRange, range, "가져온 기록이 없으면 기간도 그대로 둔다")
+    }
+
+    @MainActor func testImportGenerationStaysPutWhenCollectionFails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("activity-generation-fail-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let c = connection(), credentials = ImportTestCredentials()
+        try credentials.write("fake-token", account: c.credentialAccount)
+        let clock = FixedClock(SQLDate.parse("2026-10-28T00:00:00Z")!)
+        let repo = try WorkRepository.inMemory(clock: clock, ids: SequentialIDGenerator())
+        var settings = ActivityIntegrationSettings(); settings.github = c
+        try ActivityIntegrationSettingsStore(dataRoot: root).save(settings)
+        let model = ActivityIntegrationsModel(dataRoot: root, repo: repo, credentials: credentials,
+            client: ActivityAPIClient(transport: ImportTestTransport()))
+
+        await model.sync()
+        XCTAssertEqual(model.importGeneration, 0)
+        XCTAssertNil(model.lastImportedRange)
+        XCTAssertNil(try repo.activitySyncCompletedAt(connection: c))
+        XCTAssertNotNil(model.message)
+    }
+
+    private static let githubEventsJSON = """
+    [{"id":"event-1","type":"PushEvent","actor":{"login":"sample-user"},
+      "created_at":"2026-10-27T16:00:00Z","repo":{"name":"sample/repo"},
+      "payload":{"ref":"refs/heads/main","head":"abc123","size":1,
+        "commits":[{"message":"변경 사항"}]}}]
+    """
+
     @MainActor func testSettingsWriteFailureRollsBackCredentialReplacement() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("activity-rollback-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -717,5 +774,14 @@ private actor ImportTestTransport: ChatGPTHTTPTransport {
     func send(_ request: URLRequest) async throws -> ChatGPTHTTPResponse {
         calls += 1
         return .init(status: 429, body: Data("should-not-display".utf8))
+    }
+}
+/// 정해진 순서대로 응답을 돌려주는 가짜 전송 계층. 실제 네트워크는 쓰지 않는다.
+private actor ImportReplyTransport: ChatGPTHTTPTransport {
+    private var replies: [ChatGPTHTTPResponse]
+    init(_ replies: [ChatGPTHTTPResponse]) { self.replies = replies }
+    func send(_ request: URLRequest) async throws -> ChatGPTHTTPResponse {
+        guard !replies.isEmpty else { throw URLError(.badServerResponse) }
+        return replies.removeFirst()
     }
 }

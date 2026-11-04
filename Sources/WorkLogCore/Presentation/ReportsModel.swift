@@ -107,6 +107,8 @@ import Observation
     @ObservationIgnored private let environment: AppEnvironment
     @ObservationIgnored private var results: [String: ReportGenerationResult] = [:]
     @ObservationIgnored private var pendingVersionId: String?
+    /// 생성 중에 들어온 원본 변경 알림. 생성이 끝난 뒤 현재 버전으로 한 번만 다시 검사한다.
+    @ObservationIgnored private var needsStaleRecheck = false
 
     public init(environment: AppEnvironment) {
         self.environment = environment
@@ -224,7 +226,11 @@ import Observation
     private func runGeneration(useAI: Bool, mode: GenerationMode) async {
         guard !isGenerating, !hasChanges else { return }
         isGenerating = true; errorMessage = nil; statusMessage = nil
-        defer { isGenerating = false }
+        defer {
+            isGenerating = false
+            // 생성이 화면 버전을 바꿨을 수 있으므로 미뤄 둔 검사는 새 버전으로 다시 한다.
+            if needsStaleRecheck { needsStaleRecheck = false; checkStale() }
+        }
         let displayed = version
         do {
             let result: ReportGenerationResult
@@ -283,6 +289,15 @@ import Observation
         do { isStale = try environment.reports.isStale(versionId: version.id) }
         catch { errorMessage = "원본 변경 여부를 확인하지 못했습니다. 다시 불러오세요." }
     }
+
+    /// 수집이 새 기록을 가져왔을 때 화면의 버전만 다시 검사한다.
+    /// 본문·버전·대기 초안은 건드리지 않고, 생성 중이면 끝난 뒤로 미룬다.
+    public func sourcesDidChange() {
+        guard version != nil else { return }
+        guard !isGenerating else { needsStaleRecheck = true; return }
+        checkStale()
+    }
+
     public func proposeEvaluation() {
         do {
             proposal = try environment.evaluationPeriods.propose(start: deriveEvaluationStart ? nil : evaluationStart, endInclusive: evaluationEnd)

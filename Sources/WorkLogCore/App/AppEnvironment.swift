@@ -82,6 +82,12 @@ public final class AppEnvironment {
     /// 사용자가 명시적으로 실행하는 기록 기반 AI 답변(타이핑 중 자동 실행 없음)
     public let groundedAnswers: GroundedAnswerService?
 
+    /// 가장 최근 catch-up이 계획한 since(가장 이른 기록 업무일, 92일 상한 적용).
+    /// 가져오기마다 같은 92일 계획을 다시 돌리지 않도록 재계획이 필요한지만 판단한다.
+    private var lastCatchUpSince: WorkDate?
+    /// 그 catch-up을 실행한 업무일(자정을 넘기면 다시 계획해야 한다).
+    private var lastCatchUpToday: WorkDate?
+
     private init(options: AppEnvironmentOptions, settings: AppSettings, settingsStore: SettingsStore,
                  calendar: WorkCalendar, periods: Periods, repo: WorkRepository, search: SearchIndex,
                  tasks: TaskService, plans: WeekPlanService, dayBox: DayBoxService,
@@ -264,15 +270,97 @@ public final class AppEnvironment {
                                   aiRecentDays: Int = 7) async throws -> [ScheduledJob] {
         let now = options.clock.now()
         let today = calendar.workDate(of: now)
-        let yesterday = calendar.adding(days: -1, to: today)
-        let floor = calendar.adding(days: -max(0, maxLookbackDays), to: today)
-        let since = max(try repo.earliestRecordedWorkDate() ?? yesterday, floor)
+        let since = try catchUpStart(maxLookbackDays: maxLookbackDays, today: today)
 
         let baseUseAI = aiRunner != nil && settings.aiEnabled
         let aiCutoff = now.addingTimeInterval(-Double(max(0, aiRecentDays)) * 86_400)
-        return try await runScheduled(since: since) { job in
+        let processed = try await runScheduled(since: since) { job in
             baseUseAI && job.scheduledFor >= aiCutoff
         }
+        // 같은 업무일 안에서 가장 이른 기록 업무일이 그대로면 재계획할 필요가 없다.
+        lastCatchUpSince = since
+        lastCatchUpToday = today
+        return processed
+    }
+
+    /// catch-up 계획의 시작 업무일: max(가장 이른 기록 업무일, 오늘 - maxLookbackDays).
+    /// 기록이 하나도 없으면 어제(전날 하루만 복구).
+    private func catchUpStart(maxLookbackDays: Int, today: WorkDate) throws -> WorkDate {
+        let yesterday = calendar.adding(days: -1, to: today)
+        let floor = calendar.adding(days: -max(0, maxLookbackDays), to: today)
+        return max(try repo.earliestRecordedWorkDate() ?? yesterday, floor)
+    }
+
+    /// 활동 가져오기가 catch-up 뒤에 도착했을 때, 영향을 받은 기간의 성공한 예약 리포트만
+    /// 자동 모드로 다시 평가한다.
+    ///
+    /// - 먼저 `runStartupCatchUp`과 같은 계획·실행이 필요한지 판단해, 첫 가져오기로 가장 이른 기록
+    ///   업무일이 앞당겨졌거나 지금 새로 실행할 작업이 생겼을 때(예: 월요일 알림 시각 도달)만
+    ///   새 작업을 계획·실행한다(이미 있는 작업 키는 중복 생성하지 않는다). 그 외에는 같은 92일
+    ///   계획을 다시 돌리지 않는다.
+    /// - 이어서 `succeeded` 상태이면서 `range`와 겹치고 `range.endExclusive > floor`(오늘 - maxLookbackDays)
+    ///   인 작업만 다시 평가한다. 작업의 상태·시도 횟수는 바꾸지 않는다(성공 상태 유지).
+    /// - 자동 모드라 원본 digest가 같으면 AI 호출도 새 버전도 만들지 않는다. 확정본·편집본은
+    ///   덮어쓰지 않고 그 위에 새 버전을 만든다. 92일 catch-up 상한과 7일 AI 상한도 그대로 지킨다.
+    /// - 기간별 오류는 삼키고 다음 기간을 계속 평가한다(계획 단계 오류만 throw).
+    ///   취소(CancellationError)는 오류가 아니므로 다음 기간을 시작하지 않고 그대로 전파한다.
+    /// - 반환값: 다시 평가한 작업 중 새 버전을 만든 작업 수.
+    @discardableResult
+    public func reevaluateScheduledReports(affecting range: DateRange,
+                                           maxLookbackDays: Int = 92,
+                                           aiRecentDays: Int = 7) async throws -> Int {
+        let now = options.clock.now()
+        let today = calendar.workDate(of: now)
+
+        // (a) 가장 이른 기록 업무일이 앞당겨졌거나 업무일이 바뀐 경우, 또는 지금 새로 실행할 작업이
+        //     생긴 경우(예: 월요일 알림 시각 도달)에만 누락 업무일을 계획·실행한다. 가져오기마다
+        //     92일 계획을 다시 돌려 실패 작업을 매시간 재시도하던 비용을 막는다.
+        //     이미 있는 작업 키(실패 포함)는 dueJobs에서 제외되므로 실패 작업은 다시 시도하지 않는다.
+        let plannedSince = try catchUpStart(maxLookbackDays: maxLookbackDays, today: today)
+        var needsPlan = lastCatchUpSince == nil
+            || lastCatchUpToday != today
+            || plannedSince < (lastCatchUpSince ?? plannedSince)
+        if !needsPlan {
+            let due = SchedulePlanner.dueJobs(now: now, since: plannedSince,
+                                              existingKeys: try repo.scheduledJobKeys(),
+                                              settings: settings, periods: periods)
+            needsPlan = !due.isEmpty
+        }
+        if needsPlan {
+            _ = try await runStartupCatchUp(maxLookbackDays: maxLookbackDays, aiRecentDays: aiRecentDays)
+        }
+
+        // (b) 영향 범위와 겹치는 성공 작업만 자동 모드로 다시 평가한다.
+        let floor = calendar.adding(days: -max(0, maxLookbackDays), to: today)
+        let baseUseAI = aiRunner != nil && settings.aiEnabled
+        let aiCutoff = now.addingTimeInterval(-Double(max(0, aiRecentDays)) * 86_400)
+
+        let candidates = try repo.scheduledJobs(states: [.succeeded]).compactMap { job -> DueJob? in
+            guard let jobRange = SchedulePlanner.range(for: job.type, periodKey: job.periodKey,
+                                                       periods: periods),
+                  jobRange.endExclusive > floor,
+                  jobRange.intersection(range) != nil else { return nil }
+            return DueJob(type: job.type, periodKey: job.periodKey, range: jobRange,
+                          scheduledFor: job.scheduledFor)
+        }
+
+        var reevaluated = 0
+        for job in candidates {
+            // 취소(앱 종료·세션 정리)면 다음 기간을 시작하지 않고 즉시 멈춘다.
+            try Task.checkCancellation()
+            let useAI = baseUseAI && job.scheduledFor >= aiCutoff
+            do {
+                if try await Self.handleScheduled(job, reports: reports, useAI: useAI) {
+                    reevaluated += 1
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // 개별 기간 실패는 다른 기간 재평가를 막지 않는다. 작업 상태는 건드리지 않는다.
+                continue
+            }
+        }
+        return reevaluated
     }
 
     /// 공통 실행기. 작업별로 AI 사용 여부를 판정하는 클로저를 받아 처리한다.
@@ -280,30 +368,46 @@ public final class AppEnvironment {
                               useAIFor: (DueJob) -> Bool) async throws -> [ScheduledJob] {
         let reports = self.reports
         return try await makeScheduler(since: since).runDue(maxAttempts: maxAttempts) { job in
-            try await Self.handleScheduled(job, reports: reports, useAI: useAIFor(job))
+            _ = try await Self.handleScheduled(job, reports: reports, useAI: useAIFor(job))
         }
     }
 
-    static func handleScheduled(_ job: DueJob, reports: ReportService, useAI: Bool) async throws {
+    /// 작업 하나를 처리한다. 새 버전을 만들었으면 true, 원본 변화가 없어 그대로면 false.
+    @discardableResult
+    static func handleScheduled(_ job: DueJob, reports: ReportService, useAI: Bool) async throws -> Bool {
         switch job.type {
         case .dailyClose:
-            _ = try await reports.generatePerformance(periodType: .daily, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .daily,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .weeklyPerformance:
-            _ = try await reports.generatePerformance(periodType: .weekly, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .weekly,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .monthlyPerformance:
-            _ = try await reports.generatePerformance(periodType: .monthly, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .monthly,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .quarterlyPerformance:
-            _ = try await reports.generatePerformance(periodType: .quarterly, containing: job.range.start,
-                                                      mode: .automatic, useAI: useAI)
+            let result = try await reports.generatePerformance(periodType: .quarterly,
+                                                               containing: job.range.start,
+                                                               mode: .automatic, useAI: useAI)
+            return created(result)
         case .mondayReview:
             // range = 지난주 [월, 이번 월) → 보고 월요일은 endExclusive.
-            _ = try await reports.generateSubmission(reportDate: job.range.endExclusive,
-                                                     mode: .automatic, useAI: useAI)
+            let result = try await reports.generateSubmission(reportDate: job.range.endExclusive,
+                                                              mode: .automatic, useAI: useAI)
+            return created(result)
         case .backup:
-            break
+            return false
         }
+    }
+
+    private static func created(_ result: ReportGenerationResult) -> Bool {
+        if case .created = result.outcome { return true }
+        return false
     }
 }
