@@ -57,6 +57,25 @@ final class GroundedAnswerTests: XCTestCase {
         return (try? StableJSON.string(output)) ?? "{}"
     }
 
+    func testExplicitRetryAfterAuthOrNetworkLimitPreservesSuccessfulCache() async throws {
+        for failure: AIErrorClass in [.notLoggedIn, .network] {
+            let h = try makeHarness(responses: [.groundedAnswer: json([(text: "배포 완료", ids: ["memo:memo-1"])])])
+            try h.repo.insertMemo(Memo(id: "memo-1", body: "배포", workDate: monday, recordedAt: baseDate))
+            h.provider.failure = AIProviderError(failure, "fixture")
+            var answer: GroundedAnswer?
+            for _ in 0..<3 { answer = try await h.service.answer(question: "배포", scope: GroundedAnswerScope()) }
+            XCTAssertTrue(answer!.retryLimitReached)
+            h.provider.failure = nil
+            _ = try await h.service.answer(question: "배포", scope: GroundedAnswerScope())
+            XCTAssertEqual(h.provider.runCount, 3)
+            let recovered = try await h.service.answer(question: "배포", scope: GroundedAnswerScope(), retryExhausted: true)
+            XCTAssertEqual(recovered.jobStatus, .succeeded)
+            XCTAssertFalse(recovered.retryLimitReached)
+            _ = try await h.service.answer(question: "배포", scope: GroundedAnswerScope(), retryExhausted: true)
+            XCTAssertEqual(h.provider.runCount, 4)
+        }
+    }
+
     // MARK: 1 — 관련 기록 수집, AI 1회 호출, evidence 변환
 
     func testCollectsEvidenceAndCallsAIOnce() async throws {

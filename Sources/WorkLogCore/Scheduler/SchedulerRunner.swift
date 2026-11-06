@@ -39,9 +39,11 @@ public final class SchedulerRunner: @unchecked Sendable {
 
         let candidates = try repo.scheduledJobs(states: [.pending, .failed])
             .filter { $0.attempts < maxAttempts }
+            .filter { $0.state != .failed || $0.lastAttemptAt.map { now.timeIntervalSince($0) >= 3600 } != false }
 
         var processed: [ScheduledJob] = []
         for candidate in candidates {
+            try Task.checkCancellation()
             guard var job = try repo.scheduledJob(type: candidate.type, periodKey: candidate.periodKey)
             else { continue }
             guard let range = SchedulePlanner.range(for: job.type, periodKey: job.periodKey,
@@ -58,8 +60,13 @@ public final class SchedulerRunner: @unchecked Sendable {
 
             do {
                 try await handler(dueJob)
+                try Task.checkCancellation()
                 job.state = .succeeded
                 job.lastError = nil
+            } catch is CancellationError {
+                job.state = .pending
+                try repo.updateScheduledJob(job)
+                throw CancellationError()
             } catch {
                 job.state = .failed
                 job.lastError = String(describing: error)

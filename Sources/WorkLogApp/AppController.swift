@@ -187,6 +187,7 @@ import WorkLogCore
                 AppDiagnostics.shared.recordFailure(error, category: .ai)
                 notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다."
             }
+            guard !isRestoring else { return }
             // Scheduled reports bypass the editors, including any saved before a failure.
             reportLibrary?.load()
             AppDiagnostics.shared.record(.appReady, category: .application)
@@ -261,6 +262,7 @@ import WorkLogCore
         maintenanceTask?.cancel()
         notificationTask?.cancel()
         reevaluationTask?.cancel(); reevaluationTask = nil
+        scheduledReports?.cancel()
         scheduledReports = nil
         launchCheckTask?.cancel(); launchCheckTask = nil; launchAuthorization = nil
         // Nothing may wait for a collection pass that this teardown cancelled.
@@ -399,7 +401,13 @@ import WorkLogCore
                     self?.markLaunchCollectionDone()
                 }
             }
-            if !Task.isCancelled { self?.day?.load(); self?.search?.search() }
+            if !Task.isCancelled {
+                do { try await self?.scheduledReports?.maintenance() }
+                catch is CancellationError { }
+                catch { AppDiagnostics.shared.recordFailure(error, category: .ai) }
+                self?.reportLibrary?.load()
+                self?.day?.load(); self?.search?.search()
+            }
             self?.maintenanceTask = nil
             if !Task.isCancelled, self?.maintenanceRerunRequested == true {
                 self?.maintenanceRerunRequested = false
@@ -732,6 +740,7 @@ import WorkLogCore
         maintenanceTask?.cancel()
         notificationTask?.cancel()
         reevaluationTask?.cancel()
+        await scheduledReports?.shutdown()
         await maintenanceTask?.value
         await notificationTask?.value
         await reevaluationTask?.value

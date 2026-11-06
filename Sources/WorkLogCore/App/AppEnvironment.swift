@@ -299,10 +299,10 @@ public final class AppEnvironment {
     ///   새 작업을 계획·실행한다(이미 있는 작업 키는 중복 생성하지 않는다). 그 외에는 같은 92일
     ///   계획을 다시 돌리지 않는다.
     /// - 이어서 `succeeded` 상태이면서 `range`와 겹치고 `range.endExclusive > floor`(오늘 - maxLookbackDays)
-    ///   인 작업만 다시 평가한다. 작업의 상태·시도 횟수는 바꾸지 않는다(성공 상태 유지).
+    ///   인 작업만 다시 평가한다. 실패한 기간은 failed로 저장해 다음 예약 실행에서 복구한다.
     /// - 자동 모드라 원본 digest가 같으면 AI 호출도 새 버전도 만들지 않는다. 확정본·편집본은
     ///   덮어쓰지 않고 그 위에 새 버전을 만든다. 92일 catch-up 상한과 7일 AI 상한도 그대로 지킨다.
-    /// - 기간별 오류는 삼키고 다음 기간을 계속 평가한다(계획 단계 오류만 throw).
+    /// - 기간별 오류가 나도 다음 기간을 계속 평가한 뒤 첫 오류를 호출자에게 전달한다.
     ///   취소(CancellationError)는 오류가 아니므로 다음 기간을 시작하지 않고 그대로 전파한다.
     /// - 반환값: 다시 평가한 작업 중 새 버전을 만든 작업 수.
     @discardableResult
@@ -345,6 +345,7 @@ public final class AppEnvironment {
         }
 
         var reevaluated = 0
+        var firstError: Error?
         for job in candidates {
             // 취소(앱 종료·세션 정리)면 다음 기간을 시작하지 않고 즉시 멈춘다.
             try Task.checkCancellation()
@@ -356,10 +357,19 @@ public final class AppEnvironment {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                // 개별 기간 실패는 다른 기간 재평가를 막지 않는다. 작업 상태는 건드리지 않는다.
+                // Persist recovery independently of new imports and across application restarts.
+                if var stored = try repo.scheduledJob(type: job.type, periodKey: job.periodKey) {
+                    stored.state = .failed
+                    stored.attempts = 1
+                    stored.lastAttemptAt = now
+                    stored.lastError = "report-reevaluation-failed"
+                    try repo.updateScheduledJob(stored)
+                }
+                if firstError == nil { firstError = error }
                 continue
             }
         }
+        if let firstError { throw firstError }
         return reevaluated
     }
 

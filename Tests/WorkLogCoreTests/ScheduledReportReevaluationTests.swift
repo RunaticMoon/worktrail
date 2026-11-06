@@ -17,6 +17,76 @@ final class ScheduledReportReevaluationTests: XCTestCase {
         super.tearDown()
     }
 
+    @MainActor
+    func testMaintenanceFindsNewDeadlinesWithoutImportsAndDoesNotDuplicate() async throws {
+        let clock = FixedClock(kst(2026, 10, 20, 23))
+        let env = try makeEnv(now: clock.now(), clock: clock)
+        _ = try env.tasks.captureMemo(body: "오늘 기록", workDate: WorkDate("2026-10-20")!)
+        let coordinator = ScheduledReportCoordinator(catchUp: { _ = try await env.runStartupCatchUp() },
+                                                     reevaluate: { _ in XCTFail("No imports") })
+        try await coordinator.runCatchUp()
+        XCTAssertNil(try dailyReport(env, on: WorkDate("2026-10-20")!))
+        clock.advance(by: 7200)
+        try await coordinator.maintenance()
+        let report = try XCTUnwrap(dailyReport(env, on: WorkDate("2026-10-20")!))
+        let count = try versions(env, reportId: report.id).count
+        try await coordinator.maintenance()
+        XCTAssertEqual(try versions(env, reportId: report.id).count, count)
+        clock.advance(by: 3 * 86400) // wake after several missed deadlines
+        try await coordinator.maintenance()
+        XCTAssertNotNil(try dailyReport(env, on: WorkDate("2026-10-23")!))
+    }
+
+    @MainActor
+    func testShutdownCancelsAndJoinsCatchUpAndRejectsNewWork() async throws {
+        let started = expectation(description: "catch-up entered")
+        var exited = false
+        var reevaluations = 0
+        let coordinator = ScheduledReportCoordinator(catchUp: {
+            started.fulfill()
+            defer { exited = true }
+            try await Task.sleep(for: .seconds(60))
+        }, reevaluate: { _ in reevaluations += 1 })
+        let startup = Task { try await coordinator.runCatchUp() }
+        await fulfillment(of: [started], timeout: 2)
+        await coordinator.importsLanded(DateRange(start: WorkDate("2026-10-01")!, endExclusive: WorkDate("2026-10-02")!))
+        await coordinator.shutdown()
+        XCTAssertTrue(exited)
+        do { try await startup.value; XCTFail("cancelled") } catch is CancellationError { }
+        try await coordinator.maintenance()
+        XCTAssertEqual(reevaluations, 0)
+    }
+
+    func testFailedReevaluationPersistsAndRecoversAfterReopenWithZeroNewImports() async throws {
+        let clock = FixedClock(kst(2026, 10, 21, 10))
+        var env: AppEnvironment? = try makeEnv(now: clock.now(), clock: clock)
+        let options = env!.options
+        let day = WorkDate("2026-10-20")!
+        _ = try env!.tasks.captureMemo(body: "기록", workDate: day)
+        _ = try await env!.runStartupCatchUp()
+        let reportID = try XCTUnwrap(dailyReport(env!, on: day)).id
+        let imported = event(occurredAt: kst(2026, 10, 20, 12))
+        XCTAssertEqual(try env!.repo.importActivities([imported], connection: connection()), 1)
+        try env!.repo.db.execute("CREATE TRIGGER fail_report BEFORE INSERT ON report_version BEGIN SELECT RAISE(ABORT, 'fixture'); END")
+        do {
+            _ = try await env!.reevaluateScheduledReports(affecting: DateRange(start: day, endExclusive: WorkDate("2026-10-21")!))
+            XCTFail("Failure must reach caller")
+        } catch { }
+        XCTAssertEqual(try env!.repo.scheduledJob(type: .dailyClose, periodKey: day.iso)?.state, .failed)
+        try env!.repo.db.execute("DROP TRIGGER fail_report")
+        env = nil
+        let reopened = try AppEnvironment.open(options)
+        XCTAssertEqual(try reopened.repo.importActivities([imported], connection: connection()), 0)
+        _ = try await reopened.runStartupCatchUp()
+        XCTAssertEqual(try versions(reopened, reportId: reportID).count, 1, "Backoff survives reopening")
+        clock.advance(by: 3600)
+        _ = try await reopened.runStartupCatchUp()
+        XCTAssertEqual(try reopened.repo.scheduledJob(type: .dailyClose, periodKey: day.iso)?.state, .succeeded)
+        XCTAssertEqual(try versions(reopened, reportId: reportID).count, 2)
+        _ = try await reopened.runStartupCatchUp()
+        XCTAssertEqual(try versions(reopened, reportId: reportID).count, 2)
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() throws -> URL {
@@ -458,9 +528,8 @@ final class ScheduledReportReevaluationTests: XCTestCase {
         // 취소로 중단된 구간은 버리지 않고 보류했다가 다음 가져오기에서 이어서 재평가한다.
         // (새 가져오기 구간을 먼저 평가하고, 보류해 둔 구간을 바로 이어서 한 번 더 평가한다.)
         await coordinator.importsLanded(third)
-        XCTAssertEqual(seen.count, 3, "취소로 보류한 구간을 다음 가져오기에서 잃지 않는다: \(seen)")
-        XCTAssertEqual(seen[1], third)
-        let resumed = seen[2]
+        XCTAssertEqual(seen.count, 2, "보류 구간과 새 구간을 합쳐 재평가한다")
+        let resumed = seen[1]
         XCTAssertLessThanOrEqual(resumed.start, first.start,
                                  "중단된 구간의 시작을 포함해야 한다: \(resumed)")
         XCTAssertGreaterThanOrEqual(resumed.endExclusive, first.endExclusive,
@@ -529,10 +598,12 @@ final class ScheduledReportReevaluationTests: XCTestCase {
     @MainActor
     func testReevaluationErrorCapturedAndLaterImportRetries() async throws {
         var attempts = 0
+        var seen: [DateRange] = []
         var shouldFail = true
         let coordinator = ScheduledReportCoordinator(
             catchUp: {},
-            reevaluate: { _ in
+            reevaluate: { range in
+                seen.append(range)
                 attempts += 1
                 if shouldFail { throw WorkLogError.storage("재평가 실패") }
             })
@@ -548,6 +619,7 @@ final class ScheduledReportReevaluationTests: XCTestCase {
                                                   endExclusive: WorkDate("2026-10-03")!))
         XCTAssertEqual(attempts, 2, "다음 가져오기에서 자연히 재시도한다")
         XCTAssertNil(coordinator.lastError)
+        XCTAssertEqual(seen.last, DateRange(start: WorkDate("2026-10-01")!, endExclusive: WorkDate("2026-10-03")!))
     }
 
     /// 가져오기 실패·취소 시에는 importsLanded가 호출되지 않으므로 재평가도 없다.

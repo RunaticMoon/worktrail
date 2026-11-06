@@ -37,6 +37,30 @@ final class AIJobRunnerTests: XCTestCase {
                      regenerationNonce: nonce)
     }
 
+    func testExplicitRetryAfterReopeningPersistedExhaustedJob() async throws {
+        let root = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("work.sqlite").path
+        let request = makeRequest()
+        let mock = MockAIProvider()
+        mock.failure = AIProviderError(.notLoggedIn, "fixture")
+        do {
+            let repo = try WorkRepository(db: SQLiteDatabase(path: path), clock: FixedClock(baseDate), ids: SequentialIDGenerator())
+            let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: root)
+            for _ in 0..<3 { _ = try await runner.submit(request) }
+        }
+        mock.failure = nil
+        let repo = try WorkRepository(db: SQLiteDatabase(path: path), clock: FixedClock(baseDate), ids: SequentialIDGenerator())
+        let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: root)
+        let blocked = try await runner.submit(request)
+        XCTAssertTrue(blocked.retryLimitReached)
+        XCTAssertEqual(mock.runCount, 3)
+        let recovered = try await runner.submit(request, retryExhausted: true)
+        XCTAssertEqual(recovered.job.status, .succeeded)
+        XCTAssertEqual(mock.runCount, 4)
+        XCTAssertEqual(try repo.aiJobs(status: .succeeded).count, 1)
+    }
+
     // MARK: 1. 성공 실행
 
     func testSuccessRunStoresSucceededOutput() async throws {

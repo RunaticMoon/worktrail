@@ -20,29 +20,34 @@ public actor ConfiguredAIProvider: AIProvider, AIModelCatalogProvider, AIAccount
                 factory: @escaping @Sendable (AIProviderSelection) throws -> any AIProvider) {
         self.selection = selection; self.factory = factory
     }
-    private func currentProvider() throws -> any AIProvider {
+    private func currentProvider() async throws -> any AIProvider {
         let current = try selection()
         if current != cachedSelection {
             cachedSelection = current; cachedProvider = nil; generation += 1
+            let active = running
+            for (job, provider) in active { await provider.cancel(jobId: job) }
+            // Cancellation can suspend while another selection is saved.
+            if try selection() != current { return try await currentProvider() }
         }
         if let cachedProvider { return cachedProvider }
         let provider = try factory(current); cachedProvider = provider; return provider
     }
+    public func refreshConnection() async { _ = try? await currentProvider() }
     public func invalidateConnection() async {
         generation += 1; cachedProvider = nil
         let active = running
         for (job, provider) in active { await provider.cancel(jobId: job) }
     }
-    public func accountGeneration() async -> Int { _ = try? currentProvider(); return generation }
+    public func accountGeneration() async -> Int { _ = try? await currentProvider(); return generation }
     public func checkCapabilities() async -> AICapabilities {
-        guard let provider = try? currentProvider() else { return AICapabilities(installed: true, protocolCompatible: false) }
+        guard let provider = try? await currentProvider() else { return AICapabilities(installed: true, protocolCompatible: false) }
         return await provider.checkCapabilities()
     }
     public func getAccountStatus() async throws -> AIAccountState { try await currentProvider().getAccountStatus() }
     public func beginOfficialLogin() async throws -> URL? { try await currentProvider().beginOfficialLogin() }
     public func listAvailableSkills() async throws -> [DiscoveredSkill] { try await currentProvider().listAvailableSkills() }
     public func listAvailableModels() async throws -> [DiscoveredAIModel] {
-        guard let provider = try currentProvider() as? any AIModelCatalogProvider else { return [] }
+        guard let provider = try await currentProvider() as? any AIModelCatalogProvider else { return [] }
         return try await provider.listAvailableModels()
     }
     public func run(_ input: AIJobInput) async throws -> AIJobOutput {
@@ -50,12 +55,12 @@ public actor ConfiguredAIProvider: AIProvider, AIModelCatalogProvider, AIAccount
         return try await run(input, expectedAccountGeneration: expected)
     }
     public func run(_ input: AIJobInput, expectedAccountGeneration: Int) async throws -> AIJobOutput {
-        let provider = try currentProvider()
+        let provider = try await currentProvider()
         guard generation == expectedAccountGeneration else { throw changedConnectionError() }
         running[input.jobId] = provider
         defer { running.removeValue(forKey: input.jobId) }
         let output = try await provider.run(input)
-        _ = try currentProvider()
+        _ = try await currentProvider()
         guard generation == expectedAccountGeneration else { throw changedConnectionError() }
         return output
     }

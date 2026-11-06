@@ -40,6 +40,7 @@ public struct AIJobResult: Sendable {
     public var output: AIJobOutput?
     /// 같은 key의 성공 결과를 재사용했는지.
     public var reusedExisting: Bool
+    public var retryLimitReached: Bool = false
     /// 실행·재사용 경로 모두 실제로 사용된 스킬(요청에 명시되었거나 바인딩에서 해석된 값).
     public var skill: SkillRef?
 
@@ -160,9 +161,11 @@ public final class AIJobRunner: @unchecked Sendable {
     // MARK: - 실행
 
     /// 1회 실행. provider 오류는 throw하지 않고 상태로 저장해 결과로 돌려준다.
-    /// 저장소 오류만 throw한다.
+    /// 저장소 오류와 호출 Task의 취소는 throw한다. retryExhausted는 명시적 사용자 재시도에만 사용한다.
     public func submit(_ request: AIJobRequest,
+                       retryExhausted: Bool = false,
                        preflight: (@Sendable () async throws -> Void)? = nil) async throws -> AIJobResult {
+        try Task.checkCancellation()
         try await preflight?()
         // Bind queued work before any FIFO suspension. This reads no token or account file.
         let accountProvider = provider as? AIAccountGenerationProvider
@@ -196,11 +199,12 @@ public final class AIJobRunner: @unchecked Sendable {
         // 6) 동시성 1: 앞선 submit이 끝날 때까지 FIFO로 대기한다.
         await executionLock.acquire()
         defer { executionLock.release() }
+        try Task.checkCancellation()
         // Policy may change while queued; validate before reusing results or sending any input.
         try await preflight?()
 
         // 잠금 획득 후 재확인(그 사이 다른 호출이 같은 key를 완료했을 수 있다).
-        let job: AIJob
+        var job: AIJob
         if let existing = try repo.aiJob(idempotencyKey: key) {
             switch existing.status {
             case .succeeded:
@@ -225,7 +229,13 @@ public final class AIJobRunner: @unchecked Sendable {
 
         // 4) 재시도 한도 도달 시 provider를 부르지 않고 현재 작업을 돌려준다.
         if job.attempts >= maxAttempts {
-            return AIJobResult(job: job, output: nil, reusedExisting: true, skill: request.skill)
+            if retryExhausted {
+                job.attempts = 0
+            } else {
+                var result = AIJobResult(job: job, output: nil, reusedExisting: true, skill: request.skill)
+                result.retryLimitReached = true
+                return result
+            }
         }
 
         var running = job
@@ -239,17 +249,19 @@ public final class AIJobRunner: @unchecked Sendable {
                                skill: request.skill)
         do {
             try await preflight?()
-            let output: AIJobOutput
-            if let accountProvider, let submittedAccountGeneration {
-                guard await accountProvider.accountGeneration() == submittedAccountGeneration else {
-                    throw AIProviderError(.cancelled, "대기 중 ChatGPT 계정 연결이 변경되어 요청을 취소했습니다.")
+            let output: AIJobOutput = try await withTaskCancellationHandler(operation: {
+                if let accountProvider, let submittedAccountGeneration {
+                    guard await accountProvider.accountGeneration() == submittedAccountGeneration else {
+                        throw AIProviderError(.cancelled, "대기 중 ChatGPT 계정 연결이 변경되어 요청을 취소했습니다.")
+                    }
+                    try await preflight?()
+                    // Passing the captured value also closes the gap between this check and run's first await.
+                    return try await accountProvider.run(input, expectedAccountGeneration: submittedAccountGeneration)
+                } else {
+                    return try await provider.run(input)
                 }
-                try await preflight?()
-                // Passing the captured value also closes the gap between this check and run's first await.
-                output = try await accountProvider.run(input, expectedAccountGeneration: submittedAccountGeneration)
-            } else {
-                output = try await provider.run(input)
-            }
+            }, onCancel: { [provider] in Task { await provider.cancel(jobId: input.jobId) } })
+            try Task.checkCancellation()
             // 출력 민감 마커 검사: 위반이면 출력 원문을 어디에도 남기지 않고 실패로 환원한다.
             if outputGuard.containsSensitiveContent(output.rawJSON)
                 || outputGuard.containsSensitiveContent(output.model ?? "")
@@ -271,13 +283,17 @@ public final class AIJobRunner: @unchecked Sendable {
             return AIJobResult(job: running, output: output, reusedExisting: false, skill: request.skill)
         } catch {
             // provider 오류는 원문을 저장하지 않고 분류만 남긴다.
-            running.status = Self.status(for: error)
-            running.lastErrorClass = Self.errorClass(for: error)
+            running.status = Task.isCancelled ? .cancelled : Self.status(for: error)
+            running.lastErrorClass = running.status == .cancelled ? .cancelled : Self.errorClass(for: error)
+            if running.status == .cancelled { running.attempts -= 1 }
             running.resultJSON = nil
             running.updatedAt = repo.clock.now()
             try repo.updateAIJob(running)
             Self.cleanupStaging(stagingRoot: stagingRoot, jobId: running.id)
-            return AIJobResult(job: running, output: nil, reusedExisting: false, skill: request.skill)
+            try Task.checkCancellation()
+            var result = AIJobResult(job: running, output: nil, reusedExisting: false, skill: request.skill)
+            result.retryLimitReached = running.attempts >= maxAttempts
+            return result
         }
     }
 

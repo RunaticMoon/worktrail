@@ -175,9 +175,13 @@ public struct SearchState: Equatable, Sendable {
         defer { isAskingAI = false }
         do {
             let result = try await service.answer(question: text,
-                scope: GroundedAnswerScope(range: range, projectIds: projectIds, types: types))
+                scope: GroundedAnswerScope(range: range, projectIds: projectIds, types: types), retryExhausted: true)
             guard requestRevision == revision else { return }
             answer = result
+            if result.retryLimitReached {
+                aiMessage = "AI 재시도 한도에 도달했습니다. 인증·연결을 확인한 뒤 AI 답변을 다시 요청하면 재시도합니다."
+                return
+            }
             switch result.jobStatus {
             case .blockedAuth: aiMessage = "AI 인증을 확인한 뒤 다시 요청하세요."
             case .blockedPolicy: aiMessage = "회사 정책에 따라 AI 요청이 차단되었습니다."
