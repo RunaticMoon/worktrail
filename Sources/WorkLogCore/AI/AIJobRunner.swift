@@ -75,41 +75,58 @@ public struct AIPayloadGuard: Sendable {
 
 /// FIFO 비동기 상호 배제 잠금. actor 재진입에 의존하지 않는다.
 private final class AsyncFIFOLock: @unchecked Sendable {
+    private final class Waiter: @unchecked Sendable {
+        var cancelled = false
+        var continuation: CheckedContinuation<Bool, Never>?
+    }
     private let lock = NSLock()
     private var isLocked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [Waiter] = []
 
-    func acquire() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            // 동기 헬퍼 안에서만 잠금을 다뤄 async 컨텍스트 경고를 피한다.
-            if acquireOrEnqueue(continuation) { continuation.resume() }
+    func acquire() async throws {
+        let waiter = Waiter()
+        let acquired = await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in enqueue(waiter, continuation) }
+        }, onCancel: { self.cancel(waiter) })
+        if !acquired { throw CancellationError() }
+    }
+
+    private func enqueue(_ waiter: Waiter, _ continuation: CheckedContinuation<Bool, Never>) {
+        lock.lock()
+        if waiter.cancelled {
+            lock.unlock(); continuation.resume(returning: false)
+        } else if !isLocked {
+            isLocked = true
+            lock.unlock(); continuation.resume(returning: true)
+        } else {
+            waiter.continuation = continuation
+            waiters.append(waiter)
+            lock.unlock()
         }
     }
 
-    /// 즉시 획득하면 true, 아니면 대기열에 넣고 false.
-    private func acquireOrEnqueue(_ continuation: CheckedContinuation<Void, Never>) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if !isLocked {
-            isLocked = true
-            return true
-        }
-        waiters.append(continuation)
-        return false
+    private func cancel(_ waiter: Waiter) {
+        lock.lock()
+        waiter.cancelled = true
+        let continuation = waiter.continuation
+        waiter.continuation = nil
+        waiters.removeAll { $0 === waiter }
+        lock.unlock()
+        continuation?.resume(returning: false)
     }
 
     func release() {
-        let next: CheckedContinuation<Void, Never>? = releaseOrNext()
-        next?.resume()
-    }
-
-    /// 다음 대기자가 있으면 반환(호출자가 resume), 없으면 잠금 해제 후 nil.
-    private func releaseOrNext() -> CheckedContinuation<Void, Never>? {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         if waiters.isEmpty {
             isLocked = false
-            return nil
+            lock.unlock()
+        } else {
+            let next = waiters.removeFirst()
+            let continuation = next.continuation
+            next.continuation = nil
+            lock.unlock()
+            continuation?.resume(returning: true)
         }
-        return waiters.removeFirst()
     }
 }
 
@@ -197,7 +214,7 @@ public final class AIJobRunner: @unchecked Sendable {
         }
 
         // 6) 동시성 1: 앞선 submit이 끝날 때까지 FIFO로 대기한다.
-        await executionLock.acquire()
+        try await executionLock.acquire()
         defer { executionLock.release() }
         try Task.checkCancellation()
         // Policy may change while queued; validate before reusing results or sending any input.

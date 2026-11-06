@@ -113,6 +113,36 @@ final class AIConnectionSettingsTests: XCTestCase {
         XCTAssertEqual(try repo.aiJobs(status: .cancelled).first?.attempts, 0)
     }
 
+    @MainActor func testCancellingQueuedWorkDoesNotWaitForUnrelatedProvider() async throws {
+        let started = expectation(description: "first provider started")
+        let cancelled = expectation(description: "first provider cancelled")
+        let queued = expectation(description: "second submission preflight")
+        let completed = expectation(description: "queued cancellation completed")
+        let provider = WaitingConnectionProvider(started: started, cancelled: cancelled)
+        let repo = try WorkRepository.inMemory(ids: SequentialIDGenerator())
+        let runner = AIJobRunner(repo: repo, provider: provider, stagingRoot: root())
+        let first = Task { try await runner.submit(AIJobRequest(jobType: .groundedAnswer, instructions: "", payloadJSON: "first")) }
+        await fulfillment(of: [started], timeout: 2)
+        let second = Task {
+            defer { completed.fulfill() }
+            do {
+                _ = try await runner.submit(AIJobRequest(jobType: .groundedAnswer, instructions: "", payloadJSON: "second"),
+                                             preflight: { queued.fulfill() })
+                XCTFail("Queued request must be cancelled")
+            } catch is CancellationError { }
+        }
+        await fulfillment(of: [queued], timeout: 2)
+        second.cancel()
+        await fulfillment(of: [completed], timeout: 2)
+        let cancelCount = await provider.cancelCount
+        XCTAssertEqual(cancelCount, 0, "Cancelling the waiter must not cancel the lock owner")
+        first.cancel()
+        _ = try? await first.value
+        await fulfillment(of: [cancelled], timeout: 2)
+        _ = try await second.value
+        XCTAssertTrue(try repo.aiJobs(status: .running).isEmpty)
+    }
+
     func testChangedConnectionRejectsAlreadyQueuedWork() async throws {
         let selection = MutableFixtureSelection()
         let provider = ConfiguredAIProvider(selection: { selection.read() }, factory: { _ in MockAIProvider() })
