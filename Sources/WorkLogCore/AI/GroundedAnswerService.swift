@@ -52,6 +52,7 @@ public struct GroundedParagraph: Sendable, Hashable {
 
 /// 기록 기반 답변 결과.
 public struct GroundedAnswer: Sendable {
+    public var retryLimitReached: Bool = false
     public var question: String
     public var paragraphs: [GroundedParagraph]
     public var missingEvidence: [String]
@@ -178,7 +179,7 @@ public final class GroundedAnswerService {
     // MARK: - 답변
 
     /// 명시 실행 경로. 근거가 없으면 AI를 호출하지 않는다.
-    public func answer(question: String, scope: GroundedAnswerScope) async throws -> GroundedAnswer {
+    public func answer(question: String, scope: GroundedAnswerScope, retryExhausted: Bool = false) async throws -> GroundedAnswer {
         let trimmed = try Self.validatedQuestion(question)
         let pool = try collectEvidence(question: trimmed, scope: scope)
 
@@ -199,14 +200,16 @@ public final class GroundedAnswerService {
                                    payloadJSON: payload, templateVersionId: template.versionId,
                                    regenerationNonce: nil)
 
-        let result = try await runner.submit(request, preflight: { [index] in
+        let result = try await runner.submit(request, retryExhausted: retryExhausted, preflight: { [index] in
             for item in pool {
                 guard try index.allowsExternalAI(sourceType: item.sourceType, sourceID: item.sourceId) else {
                     throw WorkLogError.policyBlocked("검색 근거의 로컬 전용 정책이 변경되었습니다. 다시 검색하세요.")
                 }
             }
         })
-        return Self.interpret(result: result, question: trimmed, pool: pool)
+        var answer = Self.interpret(result: result, question: trimmed, pool: pool)
+        answer.retryLimitReached = result.retryLimitReached
+        return answer
     }
 
     // MARK: - 내부

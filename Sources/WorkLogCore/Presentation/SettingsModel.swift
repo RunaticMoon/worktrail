@@ -154,7 +154,12 @@ public enum AIConnectionSummary: Equatable, Sendable {
                 } else { try applySettings() }
             }
             savedProfiles = aiTaskProfiles; savedConnection = aiConnection
-            if connectionChanged { accountConnectionChanged() }
+            if connectionChanged {
+                accountConnectionChanged()
+                if let provider = environment.options.aiProvider as? ConfiguredAIProvider {
+                    Task { await provider.refreshConnection() }
+                }
+            }
             message = "설정을 저장했습니다. 모델·추론 강도는 다음 AI 작업부터 적용됩니다. AI 사용을 새로 켰다면 앱을 다시 열어 주세요."
             errors = []; return true
         } catch {

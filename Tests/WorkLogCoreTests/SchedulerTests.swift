@@ -92,7 +92,10 @@ final class SchedulerTests: XCTestCase {
 
     func testRunDueFailureRetriesThenStops() async throws {
         let now = kst(2026, 10, 6, 0, 0, 5)
-        let (runner, repo) = try makeRunner(now: now, since: date("2026-10-05"))
+        let clock = FixedClock(now)
+        let repo = try WorkRepository.inMemory(clock: clock, ids: SequentialIDGenerator())
+        let runner = SchedulerRunner(repo: repo, periods: Periods(), clock: clock,
+                                     settings: AppSettings(), since: date("2026-10-05"))
         let counter = CallCounter()
         let handler: (DueJob) async throws -> Void = { job in
             await counter.increment(SchedulePlanner.key(for: job.type, periodKey: job.periodKey))
@@ -104,7 +107,11 @@ final class SchedulerTests: XCTestCase {
         XCTAssertFalse(failedOnce.isEmpty)
         XCTAssertTrue(failedOnce.allSatisfy { $0.attempts == 1 && $0.lastError != nil })
 
+        let immediate = try await runner.runDue(maxAttempts: 3, handler: handler)
+        XCTAssertTrue(immediate.isEmpty, "Failures wait an hour before automatic retry")
+        clock.advance(by: 3600)
         _ = try await runner.runDue(maxAttempts: 3, handler: handler)
+        clock.advance(by: 3600)
         _ = try await runner.runDue(maxAttempts: 3, handler: handler)
         let callsAfterMax = await counter.total()
 
