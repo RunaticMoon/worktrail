@@ -98,25 +98,28 @@ public final class BackupService: @unchecked Sendable {
         }
     }
 
-    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 DB/AI 설정 스냅샷 해시가
-    /// 달라졌을 때만 백업한다. 변경이 없으면 임시본을 삭제하고 nil을 돌려준다.
+    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 검증된 최신 백업 대비 DB/일반 설정 스냅샷 해시가
+    /// 달라졌을 때 백업한다. 최신 사본이 손상됐으면 같은 날에도 새로 만든다.
+    /// 검증된 사본과 변경이 없으면 임시본을 삭제하고 nil을 돌려준다.
     public func createDailyBackupIfChanged(calendar: WorkCalendar) throws -> BackupInfo? {
         do {
             let backups = try listBackups()
+            let latest = backups.first
+            let latestIsValid = latest.map { (try? Self.verifyBackup($0)) != nil } ?? false
             let today = calendar.workDate(of: clock.now())
             let alreadyToday = backups.contains { info in
                 (info.manifest.reason == .daily || info.manifest.reason == .manual)
                     && calendar.workDate(of: info.manifest.createdAt) == today
+                    && (try? Self.verifyBackup(info)) != nil
             }
-            guard !alreadyToday else { return nil }
-
-            let latest = backups.first
+            // A corrupt same-day backup must not suppress its replacement.
+            guard !alreadyToday || !latestIsValid else { return nil }
             let root = try ensureBackupRoot()
             let staged = try Self.stageBackup(root: root, reason: .daily, clock: clock, ids: ids,
                                               writeBarrier: writeBarrier,
                                               sources: stagedSources(),
                                               appDirectoryName: identity.directoryName)
-            guard Self.snapshotChanged(staged: staged, latest: latest) else {
+            guard !latestIsValid || Self.snapshotChanged(staged: staged, latest: latest) else {
                 try? FileManager.default.removeItem(at: staged.tmpDir)
                 return nil
             }
@@ -157,13 +160,16 @@ public final class BackupService: @unchecked Sendable {
         return infos
     }
 
-    /// keepDays보다 오래된 완성 백업을 삭제한다. 가장 최신 1개는 항상 보존한다.
+    /// 최신 사본 검증 후 keepDays보다 오래된 완성 백업을 삭제한다. 최신 1개는 항상 보존한다.
     /// `lastBackupSucceeded == false`면 아무것도 지우지 않는다(실패한 백업 때문에 기존 성공본을 삭제하지 않음).
     @discardableResult
     public func applyRetention(keepDays: Int, lastBackupSucceeded: Bool) throws -> [String] {
         guard lastBackupSucceeded else { return [] }
         let backups = try listBackups()
-        guard backups.count > 1 else { return [] }
+        guard backups.count > 1, let latest = backups.first else { return [] }
+        // Recheck the copy we will retain, including on no-op daily checks and direct calls.
+        // A stale success flag or damage after creation must never authorize deleting fallback copies.
+        try Self.verifyBackup(latest)
         let now = clock.now()
         let cutoff = TimeInterval(max(0, keepDays)) * 86_400
         var deleted: [String] = []
@@ -348,10 +354,10 @@ public final class BackupService: @unchecked Sendable {
         return BackupInfo(id: staged.id, directory: finalDir, manifest: staged.manifest)
     }
 
-    /// 최신 백업 대비 DB 또는 AI·외부 활동 연결 설정이 달라졌는지.
+    /// 최신 백업 대비 DB 또는 일반·AI·외부 활동 연결 설정이 달라졌는지.
     private static func snapshotChanged(staged: Staged, latest: BackupInfo?) -> Bool {
         guard let latest else { return true }
-        for name in [workFileName, vaultFileName] + additionalSettingsFileNames {
+        for name in [workFileName, vaultFileName, settingsFileName] + additionalSettingsFileNames {
             let newHash = staged.manifest.files.first { $0.name == name }?.sha256
             let oldHash = latest.manifest.files.first { $0.name == name }?.sha256
             if newHash != oldHash { return true }

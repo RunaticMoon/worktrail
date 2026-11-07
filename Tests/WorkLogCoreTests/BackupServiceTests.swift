@@ -260,6 +260,97 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNil(try backupService.createDailyBackupIfChanged(calendar: calendar))
     }
 
+    func testDamagedLatestDailyBackupIsReplacedEvenOnSameDay() throws {
+        for missing in [false, true] {
+            for sameDay in [false, true] {
+                let paths = makePaths(root: try makeRoot()), clock = fixedClock()
+                let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+                defer { stores.close() }
+                let service = makeService(paths, stores, clock: clock)
+                let old = try service.createBackup(reason: .manual)
+                clock.advance(by: 10 * 86400)
+                let latest = try service.createBackup(reason: .daily)
+                let live = databaseBytes(paths.workDatabase)
+                let damaged = latest.directory.appendingPathComponent(BackupService.workFileName)
+                if missing { try FileManager.default.removeItem(at: damaged) }
+                else { try Data("damaged fixture".utf8).write(to: damaged) }
+                // Even a caller passing a stale success flag cannot remove the older valid copy.
+                XCTAssertThrowsError(try service.applyRetention(keepDays: 1, lastBackupSucceeded: true))
+                XCTAssertNoThrow(try service.verify(old))
+                clock.advance(by: sameDay ? 1 : 86400)
+                let replacement = try XCTUnwrap(service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+                XCTAssertNoThrow(try service.verify(replacement))
+                XCTAssertEqual(databaseBytes(paths.workDatabase), live)
+                XCTAssertNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+                _ = try service.applyRetention(keepDays: 1, lastBackupSucceeded: true)
+                XCTAssertNoThrow(try service.verify(replacement))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: old.directory.path))
+            }
+        }
+    }
+
+    func testFailedReplacementPreservesValidFallbackAndLiveDatabase() throws {
+        let paths = makePaths(root: try makeRoot()), clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { stores.close() }
+        let service = makeService(paths, stores, clock: clock)
+        let old = try service.createBackup(reason: .manual)
+        clock.advance(by: 10 * 86400)
+        let latest = try service.createBackup(reason: .daily)
+        try FileManager.default.removeItem(at: latest.directory.appendingPathComponent(BackupService.vaultFileName))
+        let liveWork = databaseBytes(paths.workDatabase), liveVault = databaseBytes(paths.vaultDatabase)
+        let failing = BackupService(paths: paths, workDB: stores.workDB, vaultDB: stores.vaultDB, clock: clock,
+                                    writeBarrier: { _ in throw BackupFailure.ioFailed("fixture failure") })
+        XCTAssertThrowsError(try failing.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        XCTAssertTrue(try failing.applyRetention(keepDays: 1, lastBackupSucceeded: false).isEmpty)
+        XCTAssertThrowsError(try failing.applyRetention(keepDays: 1, lastBackupSucceeded: true))
+        XCTAssertNoThrow(try service.verify(old))
+        XCTAssertEqual(databaseBytes(paths.workDatabase), liveWork)
+        XCTAssertEqual(databaseBytes(paths.vaultDatabase), liveVault)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: paths.backupRoot.path).contains { $0.hasPrefix(".tmp-") })
+    }
+
+    func testDailyBackupDetectsGeneralSettingsAdditionChangeAndRemovalAndRestores() throws {
+        let paths = makePaths(root: try makeRoot()), clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { stores.close() }
+        let service = makeService(paths, stores, clock: clock)
+        let calendar = WorkCalendar()
+        let initial = try XCTUnwrap(service.createDailyBackupIfChanged(calendar: calendar))
+        clock.advance(by: 86400)
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: calendar))
+        let settingsStore = SettingsStore(fileURL: paths.settingsFile)
+        var settings = AppSettings()
+        settings.secretIdleLockMinutes = 7
+        try settingsStore.save(settings)
+        let added = try XCTUnwrap(service.createDailyBackupIfChanged(calendar: calendar))
+        XCTAssertNoThrow(try service.verify(added))
+        clock.advance(by: 86400)
+        settings.secretIdleLockMinutes = 11
+        try settingsStore.save(settings)
+        let changed = try XCTUnwrap(service.createDailyBackupIfChanged(calendar: calendar))
+        XCTAssertNoThrow(try service.verify(changed))
+        for name in [BackupService.workFileName, BackupService.vaultFileName] {
+            XCTAssertEqual(initial.manifest.files.first { $0.name == name }?.sha256,
+                           changed.manifest.files.first { $0.name == name }?.sha256)
+        }
+        let target = makePaths(root: try makeRoot())
+        try BackupService.restore(changed, into: target, keyStore: InMemoryVaultKeyStore(), includeVault: false, clock: clock)
+        XCTAssertEqual(try SettingsStore(fileURL: target.settingsFile).load().secretIdleLockMinutes, 11)
+        settings.secretIdleLockMinutes = 15
+        try settingsStore.save(settings)
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: calendar), "Once per day remains in effect")
+        let manual = try service.createBackup(reason: .manual)
+        XCTAssertNoThrow(try service.verify(manual))
+        clock.advance(by: 86400)
+        try FileManager.default.removeItem(at: paths.settingsFile)
+        let removed = try XCTUnwrap(service.createDailyBackupIfChanged(calendar: calendar))
+        XCTAssertFalse(removed.manifest.files.contains { $0.name == BackupService.settingsFileName })
+        XCTAssertNoThrow(try service.verify(removed))
+        clock.advance(by: 86400)
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: calendar))
+    }
+
     // MARK: - BACK-T03: 백업 중 실패 → 기존 성공본 보존
 
     func testFailedBackupKeepsExistingBackupAndCleansTemp() throws {
