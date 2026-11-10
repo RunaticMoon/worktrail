@@ -61,6 +61,23 @@ final class AIJobRunnerTests: XCTestCase {
         XCTAssertEqual(try repo.aiJobs(status: .succeeded).count, 1)
     }
 
+    func testConnectionCancelledAttemptsDoNotConsumeRetryLimit() async throws {
+        let repo = try makeRepo()
+        let mock = MockAIProvider()
+        mock.failure = AIProviderError(.cancelled, "connection changed")
+        let runner = AIJobRunner(repo: repo, provider: mock, stagingRoot: makeTempRoot())
+        let request = makeRequest()
+        for _ in 0..<5 {
+            let result = try await runner.submit(request)
+            XCTAssertEqual(result.job.status, .cancelled)
+            XCTAssertFalse(result.retryLimitReached)
+        }
+        mock.failure = nil
+        let ok = try await runner.submit(request)
+        XCTAssertEqual(ok.job.status, .succeeded)
+        XCTAssertEqual(mock.runCount, 6)
+    }
+
     // MARK: 1. 성공 실행
 
     func testSuccessRunStoresSucceededOutput() async throws {
