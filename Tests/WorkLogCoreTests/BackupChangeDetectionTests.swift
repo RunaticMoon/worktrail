@@ -230,6 +230,43 @@ final class BackupChangeDetectionTests: XCTestCase {
         XCTAssertNil(try service.createDailyBackupIfChanged(calendar: calendar))
     }
 
+    /// #72 회귀: 오늘 백업이 이미 있어도 그 최신본이 손상됐다면 같은 날에 교체본을 만들어야 한다.
+    /// 검증 성공 id는 인스턴스 캐시에 남으므로, 파일 손상은 다음 실행을 뜻하는 새 인스턴스에서 확인한다.
+    func testSameDayCorruptedBackupIsReplacedInsteadOfSkipped() throws {
+        let root = try makeRoot(), paths = makePaths(root: root)
+        let clock = fixedClock(WorkDate(year: 2026, month: 10, day: 1))
+        let ids = SequentialIDGenerator(prefix: "src")
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: ids)
+        defer { stores.close() }
+        let workDate = WorkDate(year: 2026, month: 10, day: 1)
+        try stores.repo.insertMemo(Memo(id: ids.make(), body: "당일 손상 교체", workDate: workDate,
+                                        recordedAt: clock.now()))
+        let service = makeService(paths, stores, clock: clock)
+        let sameDay = try XCTUnwrap(try service.createDailyBackupIfChanged(calendar: calendar))
+
+        // 같은 날 최신본이 정상이면 새 인스턴스에서도 생략한다.
+        XCTAssertNil(try makeService(paths, stores, clock: clock).createDailyBackupIfChanged(calendar: calendar),
+                     "오늘 최신 백업이 정상이면 만들지 않는다")
+        XCTAssertEqual(try service.listBackups().map(\.id), [sameDay.id])
+
+        // 같은 날 최신본이 손상되면 오늘 백업이 있다는 이유로 건너뛰지 않고 교체본을 만든다.
+        try corruptWorkDatabase(in: sameDay)
+        // 실제 재실행처럼 같은 업무일 안에서 시각만 흐르게 해 교체본이 최신순 첫 항목이 되게 한다.
+        clock.set(clock.now().addingTimeInterval(60))
+        let replacement = try XCTUnwrap(
+            try makeService(paths, stores, clock: clock).createDailyBackupIfChanged(calendar: calendar),
+            "오늘 백업이 손상되면 같은 날에도 교체본을 만들어야 한다")
+        XCTAssertNotEqual(replacement.id, sameDay.id)
+        XCTAssertEqual(replacement.manifest.reason, .daily)
+        try service.verify(replacement)
+        XCTAssertEqual(Set(try service.listBackups().map(\.id)), Set([sameDay.id, replacement.id]))
+
+        // 교체본이 정상이면 그날의 추가 호출은 다시 생략된다.
+        XCTAssertNil(try makeService(paths, stores, clock: clock).createDailyBackupIfChanged(calendar: calendar))
+        XCTAssertEqual(try service.listBackups().count, 2)
+        XCTAssertEqual(try memoBodies(stores, on: workDate), ["당일 손상 교체"])
+    }
+
     func testDailyBackupReplacesLatestBackupWithMissingWorkDatabase() throws {
         let root = try makeRoot(), paths = makePaths(root: root)
         let clock = fixedClock(WorkDate(year: 2026, month: 10, day: 1))

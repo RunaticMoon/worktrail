@@ -238,14 +238,30 @@ struct MeetingsScreen: View {
         let meeting = model.selected
         let available = model.availableMemos(on: memoDate)
         let availableIDs = Set(available.map(\.id))
+        let snapshotIDs = Set((meeting?.memoSnapshots ?? []).map(\.memoID))
         let archived = (meeting?.memoSnapshots ?? []).filter { !availableIDs.contains($0.memoID) }
+        // 다른 창에서 원본이 사라진 등 어디에도 그릴 수 없는 선택. 정렬해 목록 순서를 안정시킨다.
+        let missing = memoIDs.subtracting(availableIDs).subtracting(snapshotIDs).sorted()
         return VStack(alignment: .leading, spacing: 16) {
             Text("요약에 함께 넣을 일반 메모").font(.headline)
             WorkDatePicker(title: "메모 날짜", value: $memoDate, calendar: model.calendar)
             Text("선택 \(memoIDs.count)개 · 다른 날짜의 선택도 유지됩니다.").font(.caption)
             List {
+                if !missing.isEmpty {
+                    // 실제로 찾을 수 없는 선택도 숨기지 않고 해제할 수 있게 보여 준다.
+                    Section("선택했지만 찾을 수 없는 메모") {
+                        ForEach(missing, id: \.self) { memoID in
+                            Toggle(isOn: Binding(get: { memoIDs.contains(memoID) }, set: {
+                                if $0 { memoIDs.insert(memoID) } else { memoIDs.remove(memoID) }
+                            })) {
+                                Text("메모를 찾을 수 없음 · 선택을 해제해 주세요")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 if !archived.isEmpty {
-                    Section("보관한 사본") {
+                    Section("연결된 메모 사본") {
                         ForEach(archived, id: \.memoID) { snapshot in
                             Toggle(isOn: Binding(get: { memoIDs.contains(snapshot.memoID) }, set: {
                                 if $0 { memoIDs.insert(snapshot.memoID) } else { memoIDs.remove(snapshot.memoID) }
@@ -268,7 +284,7 @@ struct MeetingsScreen: View {
                         })) { Text(memo.body).lineLimit(5) }
                     }
                 }
-                if archived.isEmpty && available.isEmpty {
+                if archived.isEmpty && available.isEmpty && missing.isEmpty {
                     Text("이 날짜에 연결할 일반 메모가 없습니다.").foregroundStyle(.secondary)
                 }
             }

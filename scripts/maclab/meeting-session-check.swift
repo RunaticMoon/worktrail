@@ -497,6 +497,40 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         try check(try meetings.meeting(id: second.id)!.summary!.revision == clearedBase.revision,
                   "#74: discard must not write a summary version")
         try check(model.save(), "#74: autosave must succeed after discarding the empty draft")
+        // #74/F1: 거절 안내는 변경 취소와 성공 저장에서만 사라진다.
+        try check(model.message == nil, "#74: discarding an empty draft must clear the refusal guide")
+        model.manualSummary = ""; model.manualDecisions = ""; model.manualActions = ""; model.manualQuestions = ""
+        try check(!model.save() && model.message?.contains("모든 항목을 지운 상태") == true,
+                  "#74: fixture must refuse the emptied draft again")
+        model.manualSummary = "다시 입력한 수동 요약"
+        try check(model.save() && model.message == nil,
+                  "#74: a successful save must clear the refusal guide instead of leaving it behind")
+        // #74: 변경 취소 뒤 create는 실제로 새 회의를 만들고, 이전 회의의 요약·초안을 물려받지 않는다.
+        let createBase = try meetings.meeting(id: second.id)!.summary!
+        let meetingCountBeforeCreate = try meetings.meetings().count
+        model.create()
+        let createdAfterDiscard = model.selected
+        try check(createdAfterDiscard != nil && createdAfterDiscard?.id != second.id
+                    && createdAfterDiscard?.id != first.id
+                    && (try meetings.meetings().count) == meetingCountBeforeCreate + 1,
+                  "#74: creating a meeting after discard must add exactly one meeting and select it")
+        try check(createdAfterDiscard?.summary == nil,
+                  "#74: a new meeting must not inherit the discarded meeting's summary or draft")
+        try check(try meetings.meeting(id: second.id)!.summary!.revision == createBase.revision,
+                  "#74: creating a meeting after discard must not write the previous meeting's summary")
+        // #74: 다른 섹션에 항목이 남아 있으면 한 섹션의 마지막 항목만 지우는 저장은 허용된다.
+        model.select(second.id)
+        model.manualSummary = "섹션 유지 요약"; model.manualDecisions = "지울 결정"
+        model.manualActions = ""; model.manualQuestions = ""
+        try check(model.save(), "#74: a manual summary with several sections must save")
+        let mixedSections = try meetings.meeting(id: second.id)!.summary!
+        model.manualDecisions = ""
+        try check(model.save(), "#74: clearing the last decision while the summary remains must be allowed")
+        let afterSectionClear = try meetings.meeting(id: second.id)!.summary!
+        try check(afterSectionClear.revision > mixedSections.revision
+                    && afterSectionClear.structuredOutput.decisions.isEmpty
+                    && afterSectionClear.structuredOutput.summary.first?.text == "섹션 유지 요약",
+                  "#74: clearing one section must keep the other sections and write a new version")
         model.select(first.id)
         try check(model.selected?.id == first.id, "#74: selection must work again after discarding")
         model.select(second.id)
@@ -506,7 +540,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         let notesBase = try meetings.meeting(id: second.id)!.summary!
         _ = try meetings.saveManualSummary(meetingID: second.id, expectedMeetingRevision: model.selected!.revision,
             expectedSummaryRevision: notesBase.revision, output: .init(summary: [.init(text: "다른 창의 최신 요약", citations: [])]))
-        try check(model.selected?.summary?.content == clearedBase.content, "#75: fixture must keep the stale summary in the model")
+        try check(model.selected?.summary?.content == notesBase.content, "#75: fixture must keep the stale summary in the model")
         model.notes = "#75 메모만 저장"
         try check(model.save(), "#75: notes-only autosave must succeed against a newer summary")
         let afterNotes = try meetings.meeting(id: second.id)!
@@ -527,6 +561,24 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
                     && afterMeta.summary?.structuredOutput.summary.first?.text == "다른 창의 두 번째 요약",
                   "#75: metadata-only save must keep the newest summary")
         try check(!model.hasSummaryEdits, "#75: metadata-only save must not leave a phantom pending summary")
+
+        // #75: 수동 초안이 대기 중이면 메타데이터만 저장해도 최신 요약을 되감지 않고 충돌을 알린다.
+        let pendingMetaBase = try meetings.meeting(id: second.id)!.summary!
+        _ = try meetings.saveManualSummary(meetingID: second.id, expectedMeetingRevision: model.selected!.revision,
+            expectedSummaryRevision: pendingMetaBase.revision, output: .init(summary: [.init(text: "다른 창의 네 번째 요약", citations: [])]))
+        model.manualSummary = "#75 대기 중 수동 초안"
+        model.refreshAudio()
+        model.metadataDraft.participants = ["#75 대기자"]
+        try check(!model.save() && model.conflictingSummary != nil && model.manualSummary == "#75 대기 중 수동 초안",
+                  "#75: a metadata-only save must keep a pending manual draft and surface the summary conflict")
+        let afterPendingMeta = try meetings.meeting(id: second.id)!
+        try check(afterPendingMeta.metadata?.participants == ["#75 대기자"],
+                  "#75: metadata must still be saved while the pending summary conflicts")
+        try check(afterPendingMeta.summary?.structuredOutput.summary.first?.text == "다른 창의 네 번째 요약",
+                  "#75: the conflicting metadata-only save must not roll the newest summary back")
+        model.discardSummaryEdits()
+        try check(!model.hasSummaryEdits && model.manualSummary == "다른 창의 네 번째 요약" && model.conflictingSummary == nil,
+                  "#75: discarding the pending draft after a metadata conflict must adopt the newest summary")
 
         let conflictBase = try meetings.meeting(id: second.id)!.summary!
         _ = try meetings.saveManualSummary(meetingID: second.id, expectedMeetingRevision: model.selected!.revision,
@@ -576,7 +628,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
                   "#75: discarding an AI draft must not write another revision")
         try check(try environment.repo.db.scalarInt("SELECT COUNT(*) FROM ai_job") == 0,
                   "#75: summary conflict handling must not create AI jobs")
-        print("PASS: #74 empty manual drafts are refused with a guided discard; #75 notes/metadata saves keep the newest summary while drafts stay pending until explicit discard")
+        print("PASS: #74 empty manual drafts are refused with a guided discard that clears only refusal text, create works after discard without inheriting the draft, per-section clearing is allowed; #75 notes/metadata saves keep the newest summary while drafts stay pending until explicit discard")
 
 
         let cancelledCapture = FakeMeetingCapture()

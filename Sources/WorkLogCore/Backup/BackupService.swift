@@ -33,6 +33,9 @@ public final class BackupService: @unchecked Sendable {
 
     private let statusLock = NSLock()
     private var _status = BackupStatus()
+    /// 이 프로세스에서 검증에 성공한 백업 id. 같은 실행 중 최신본을 반복 검증하지 않는다.
+    /// 검증 실패는 캐시하지 않으므로 복구된 파일은 다음 호출에서 정상 통과할 수 있다.
+    private var verifiedBackupIDs: Set<String> = []
 
     public init(paths: AppPaths, workDB: SQLiteDatabase, vaultDB: SQLiteDatabase,
                 identity: AppIdentity = .default, clock: Clock = SystemClock(),
@@ -98,23 +101,26 @@ public final class BackupService: @unchecked Sendable {
         }
     }
 
-    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 DB/설정 스냅샷 해시가
-    /// 달라졌을 때만 백업한다.
+    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 있고 그 최신본이 실제로 검증되면, 그리고 최신 백업
+    /// 대비 DB/설정 스냅샷 해시가 달라지지 않았으면 백업하지 않는다.
     ///
-    /// 변경이 없어도 최신 백업이 실제로 검증되지 않으면(파일 손상·누락) 건너뛰지 않고 live 데이터로
-    /// 새 daily 백업을 만든다. 그렇지 않으면 복원 불가능한 최신본만 남고 retention이 이전 정상본을
-    /// 지울 수 있다. 최신본이 검증되면 변경 없음으로 보고 임시본을 삭제한 뒤 nil을 돌려준다.
+    /// 오늘 이미 백업이 있어도 그 최신본이 검증되지 않으면(파일 손상·누락) 건너뛰지 않고 live 데이터로
+    /// 새 daily 백업을 만들어 교체한다. 그렇지 않으면 복원 불가능한 최신본만 남고 retention이 이전
+    /// 정상본을 지울 수 있다. 검증에 성공한 최신본은 이 프로세스에서 캐시되어 반복 검증하지 않으므로,
+    /// 같은 실행 중에 파일이 손상되면 그 손상은 다음 실행(새 인스턴스)에서 감지된다.
     public func createDailyBackupIfChanged(calendar: WorkCalendar) throws -> BackupInfo? {
         do {
             let backups = try listBackups()
             let today = calendar.workDate(of: clock.now())
+            let latest = backups.first
             let alreadyToday = backups.contains { info in
                 (info.manifest.reason == .daily || info.manifest.reason == .manual)
                     && calendar.workDate(of: info.manifest.createdAt) == today
             }
-            guard !alreadyToday else { return nil }
+            // 오늘 백업이 이미 있어도 최신본이 실제로 복원 가능할 때만 건너뛴다.
+            // 손상됐다면 아래 스테이징으로 진행해 교체본을 만든다.
+            if alreadyToday, verifiesCached(latest) { return nil }
 
-            let latest = backups.first
             let root = try ensureBackupRoot()
             let staged = try Self.stageBackup(root: root, reason: .daily, clock: clock, ids: ids,
                                               writeBarrier: writeBarrier,
@@ -123,7 +129,7 @@ public final class BackupService: @unchecked Sendable {
             let changed = Self.snapshotChanged(staged: staged, latest: latest)
             // 변경도 없고 남길 최신본도 검증되면 새 백업은 필요 없다.
             // 변경이 없더라도 최신본이 손상·누락됐다면 건너뛰지 않고 live 데이터로 새 정상 백업을 만든다.
-            guard changed || !Self.verifies(latest) else {
+            guard changed || !verifiesCached(latest) else {
                 try? FileManager.default.removeItem(at: staged.tmpDir)
                 return nil
             }
@@ -171,13 +177,14 @@ public final class BackupService: @unchecked Sendable {
     /// 최신 항목의 manifest만 보고 남기면 DB 파일이 손상·누락된 복원 불가 사본을 유일한 복원 지점으로
     /// 남길 수 있으므로, 검증되는 사본이 하나라도 있으면 그중 가장 최신 것을 지우지 않는다.
     /// 검증되는 사본이 하나도 없으면 아무것도 지우지 않는다(모두 손상된 상태에서 추가 손실 방지).
+    /// 이 경우 매 실행마다 전체 목록을 다시 검증하므로 오래된 사본도 정리되지 않는다(수용한 비용).
     @discardableResult
     public func applyRetention(keepDays: Int, lastBackupSucceeded: Bool) throws -> [String] {
         guard lastBackupSucceeded else { return [] }
         let backups = try listBackups()
         guard backups.count > 1 else { return [] }
-        // 최신순 목록에서 처음 검증되는 항목. 검증은 앞에서 멈추므로 보통 첫 항목에서 끝난다.
-        guard let protectedIndex = backups.firstIndex(where: { (try? Self.verifyBackup($0)) != nil }) else {
+        // 최신순 목록에서 처음 검증되는 항목. 검증은 앞에서 멈추고, 성공한 id는 캐시되어 반복되지 않는다.
+        guard let protectedIndex = backups.firstIndex(where: { verifiesCached($0) }) else {
             return []
         }
         let now = clock.now()
@@ -196,6 +203,21 @@ public final class BackupService: @unchecked Sendable {
     /// manifest 존재·형식, 파일별 SHA256·크기, DB integrity_check, 스키마 버전 상한을 확인한다.
     public func verify(_ backup: BackupInfo) throws {
         try Self.verifyBackup(backup)
+    }
+
+    /// 이 프로세스에서 이미 검증에 성공한 백업이면 파일을 다시 읽지 않고 true를 돌려준다.
+    /// 실패는 캐시하지 않아 손상 파일을 복구한 뒤에는 다시 검증된다.
+    private func verifiesCached(_ backup: BackupInfo?) -> Bool {
+        guard let backup else { return false }
+        statusLock.lock()
+        let cached = verifiedBackupIDs.contains(backup.id)
+        statusLock.unlock()
+        if cached { return true }
+        guard (try? Self.verifyBackup(backup)) != nil else { return false }
+        statusLock.lock()
+        verifiedBackupIDs.insert(backup.id)
+        statusLock.unlock()
+        return true
     }
 
     /// 디렉터리 이름으로 백업을 검증한다.

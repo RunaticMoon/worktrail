@@ -67,6 +67,9 @@ struct MeetingTaskReview: Identifiable {
     private var audioTask: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
     private var autosaveTask: Task<Void, Never>?
+    /// 빈 초안 저장 거절 안내. 성공 저장·변경 취소 때 이 두 문구만 지워 다른 안내를 보존한다.
+    static let emptyManualSummaryRefusal = "직접 작성한 회의록의 모든 항목을 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
+    static let emptyAISummaryRefusal = "회의록 요약을 모두 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
 
     init(environment: AppEnvironment, audio: MeetingRecordingSession? = nil) {
         self.environment = environment
@@ -234,11 +237,11 @@ struct MeetingTaskReview: Identifiable {
                 // 저장 중 배경 갱신이 있어도 초안을 최신 요약 위에 조용히 덮어쓰지 않는다.
                 self.selected?.summary = summaryBase
                 if manualPending && manualOutputIsEmpty {
-                    message = "직접 작성한 회의록의 모든 항목을 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
+                    message = Self.emptyManualSummaryRefusal
                     return false
                 }
                 if draftPending && summaryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    message = "회의록 요약을 모두 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
+                    message = Self.emptyAISummaryRefusal
                     return false
                 }
                 if manualPending {
@@ -260,6 +263,7 @@ struct MeetingTaskReview: Identifiable {
             runs = try audio.store.runs(meetingID: selected.id)
             summaryHistory = try service.summaryHistory(meetingID: selected.id)
             conflictingSummary = nil
+            clearSummaryRefusalMessage()
             reload(); return true
         } catch {
             if case WorkLogError.conflict = error, hasSummaryEdits {
@@ -268,17 +272,20 @@ struct MeetingTaskReview: Identifiable {
             show(error); return false
         }
     }
+    /// 이 모델이 띄운 요약 거절 안내만 지운다. 가져오기·오디오 등 다른 안내는 유지한다.
+    private func clearSummaryRefusalMessage() {
+        guard message == Self.emptyManualSummaryRefusal || message == Self.emptyAISummaryRefusal else { return }
+        message = nil
+    }
     /// 저장하지 않은 요약 변경을 마지막 저장본으로 되돌린다. AI를 호출하거나 회의 본문을 바꾸지 않는다.
     func discardSummaryEdits() {
-        guard let latest = conflictingSummary else {
-            loadManualDraft(selected?.summary); summaryDraft = selected?.summary?.content ?? ""; return
-        }
+        // 어느 분기에서든 남아 있던 거절·충돌 안내를 함께 지운다.
+        message = nil
         // 경쟁 수정이 있으면 그 최신 저장본을 채택한다. 충돌 화면의 초안을 조용히 덮어쓰지 않는다.
-        if selected?.id == latest.meetingID { selected?.summary = latest }
+        if let latest = conflictingSummary, selected?.id == latest.meetingID { selected?.summary = latest }
         loadManualDraft(selected?.summary)
         summaryDraft = selected?.summary?.content ?? ""
         conflictingSummary = nil
-        message = nil
     }
     func retrySummaryAfterReview() {
         guard !hasEdits, !hasMetadataEdits, let selected, let latest = try? service?.meeting(id: selected.id) else { return }
