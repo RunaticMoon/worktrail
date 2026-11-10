@@ -24,6 +24,13 @@ final class MeetingAuthoringTests: XCTestCase {
         XCTAssertEqual(second.version, 2)
         XCTAssertEqual(try service.summaryHistory(meetingID: meeting.id).last?.structuredOutput, output)
         XCTAssertEqual(try service.meeting(id: meeting.id)?.transcript, "별도 원문")
+        // 모든 항목을 지운 수동 초안은 저장되지 않고, 이전 요약과 버전이 그대로 남는다.
+        XCTAssertThrowsError(try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: meeting.revision,
+            expectedSummaryRevision: second.revision,
+            output: .init(summary: [], decisions: [], actionItems: [], openQuestions: [])))
+        XCTAssertEqual(try service.meeting(id: meeting.id)?.summary?.version, 2)
+        XCTAssertEqual(try service.meeting(id: meeting.id)?.summary?.structuredOutput, revised)
+        XCTAssertEqual(try service.summaryHistory(meetingID: meeting.id).count, 2)
         XCTAssertThrowsError(try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: meeting.revision,
             expectedSummaryRevision: first.revision, output: output))
         _ = try service.update(id: meeting.id, expectedRevision: meeting.revision, title: meeting.title,

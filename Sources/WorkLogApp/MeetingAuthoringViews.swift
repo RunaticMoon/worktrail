@@ -24,7 +24,18 @@ struct MeetingManualSummaryView: View {
                         }
                     }
                 }
-                Button("직접 작성한 회의록 저장") { _ = model.save() }.disabled(!model.hasSummaryEdits)
+                HStack {
+                    Button("직접 작성한 회의록 저장") { _ = model.save() }.disabled(!model.hasSummaryEdits)
+                    Button("변경 취소") { model.discardSummaryEdits() }
+                        .disabled(!model.hasSummaryEdits)
+                        .help("저장하지 않은 요약 변경을 마지막 저장본으로 되돌립니다.")
+                        .accessibilityLabel("저장하지 않은 회의록 요약 변경 취소")
+                    Spacer()
+                }
+                if model.manualOutputIsEmpty && model.hasManualSummaryEdits {
+                    Text("모든 항목이 비어 있습니다. 저장하려면 내용을 입력하고, 되돌리려면 '변경 취소'를 사용하세요.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let summary = model.selected?.summary, summary.isManual {
                     ForEach(Array(summary.structuredOutput.actionItems.enumerated()), id: \.offset) { index, item in
                         HStack {

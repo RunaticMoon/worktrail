@@ -11,6 +11,7 @@ struct MeetingsScreen: View {
     @State private var confirmingDiscardAudio = false
     @State private var memoDate: WorkDate = WorkDate("2026-01-01")!
     @State private var memoIDs: Set<String> = []
+    @State private var linkError: String?
 
     var body: some View {
         HSplitView {
@@ -149,6 +150,7 @@ struct MeetingsScreen: View {
                     Button("메모 선택…") {
                         memoDate = model.workDate
                         memoIDs = Set(meeting.memoSnapshots.map(\.memoID))
+                        linkError = nil
                         showingMemoPicker = true
                     }.disabled(model.isSummarizing)
                 }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
@@ -184,6 +186,19 @@ struct MeetingsScreen: View {
                         Text("AI가 작성한 초안입니다. 결정사항·담당자·기한은 원문과 대조하세요.").font(.caption).foregroundStyle(.secondary)
                         TextEditor(text: $model.summaryDraft).frame(minHeight: 220)
                             .accessibilityLabel("회의 요약 초안").disabled(model.isSummarizing)
+                        if model.hasAISummaryDraftEdits {
+                            HStack {
+                                Button("변경 취소") { model.discardSummaryEdits() }
+                                    .disabled(model.isSummarizing)
+                                    .help("저장하지 않은 요약 초안 변경을 마지막 저장본으로 되돌립니다.")
+                                    .accessibilityLabel("저장하지 않은 요약 초안 변경 취소")
+                                Spacer()
+                            }
+                            if model.summaryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("요약이 비어 있습니다. 저장하려면 내용을 입력하고, 되돌리려면 '변경 취소'를 사용하세요.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         if summary.isUserEdited { Text("직접 편집한 초안 · 아래 인용은 AI 생성 당시의 근거입니다.").font(.caption).foregroundStyle(.secondary) }
                         DisclosureGroup("AI 생성 근거 확인") {
                             let items = summary.structuredOutput.summary + summary.structuredOutput.decisions + summary.structuredOutput.actionItems + summary.structuredOutput.openQuestions
@@ -220,20 +235,52 @@ struct MeetingsScreen: View {
     }
 
     private var memoPicker: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let meeting = model.selected
+        let available = model.availableMemos(on: memoDate)
+        let availableIDs = Set(available.map(\.id))
+        let archived = (meeting?.memoSnapshots ?? []).filter { !availableIDs.contains($0.memoID) }
+        return VStack(alignment: .leading, spacing: 16) {
             Text("요약에 함께 넣을 일반 메모").font(.headline)
             WorkDatePicker(title: "메모 날짜", value: $memoDate, calendar: model.calendar)
             Text("선택 \(memoIDs.count)개 · 다른 날짜의 선택도 유지됩니다.").font(.caption)
-            List(model.availableMemos(on: memoDate), id: \.id) { memo in
-                Toggle(isOn: Binding(get: { memoIDs.contains(memo.id) }, set: {
-                    if $0 { memoIDs.insert(memo.id) } else { memoIDs.remove(memo.id) }
-                })) { Text(memo.body).lineLimit(5) }
+            List {
+                if !archived.isEmpty {
+                    Section("보관한 사본") {
+                        ForEach(archived, id: \.memoID) { snapshot in
+                            Toggle(isOn: Binding(get: { memoIDs.contains(snapshot.memoID) }, set: {
+                                if $0 { memoIDs.insert(snapshot.memoID) } else { memoIDs.remove(snapshot.memoID) }
+                            })) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(snapshot.body).lineLimit(5)
+                                    Text(model.hasMemoSource(snapshot.memoID)
+                                        ? "원본 날짜 \(snapshot.workDate.iso) · 선택하면 최신 내용으로 갱신됩니다."
+                                        : "원본 없음 · 사본 유지")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+                Section("메모 \(memoDate.iso)") {
+                    ForEach(available, id: \.id) { memo in
+                        Toggle(isOn: Binding(get: { memoIDs.contains(memo.id) }, set: {
+                            if $0 { memoIDs.insert(memo.id) } else { memoIDs.remove(memo.id) }
+                        })) { Text(memo.body).lineLimit(5) }
+                    }
+                }
+                if archived.isEmpty && available.isEmpty {
+                    Text("이 날짜에 연결할 일반 메모가 없습니다.").foregroundStyle(.secondary)
+                }
             }
+            if let linkError { Text(linkError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button("선택 해제") { memoIDs = [] }
                 Spacer()
-                Button("취소") { showingMemoPicker = false }.keyboardShortcut(.cancelAction)
-                Button("선택 저장") { model.linkMemos(Array(memoIDs).sorted()); showingMemoPicker = false }.keyboardShortcut(.defaultAction)
+                Button("취소") { linkError = nil; showingMemoPicker = false }.keyboardShortcut(.cancelAction)
+                Button("선택 저장") {
+                    if model.linkMemos(Array(memoIDs).sorted()) { linkError = nil; showingMemoPicker = false }
+                    else { linkError = model.message }
+                }.keyboardShortcut(.defaultAction)
             }
         }.padding(20).frame(width: 560, height: 440)
     }

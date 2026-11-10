@@ -98,8 +98,12 @@ public final class BackupService: @unchecked Sendable {
         }
     }
 
-    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 DB/AI 설정 스냅샷 해시가
-    /// 달라졌을 때만 백업한다. 변경이 없으면 임시본을 삭제하고 nil을 돌려준다.
+    /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 DB/설정 스냅샷 해시가
+    /// 달라졌을 때만 백업한다.
+    ///
+    /// 변경이 없어도 최신 백업이 실제로 검증되지 않으면(파일 손상·누락) 건너뛰지 않고 live 데이터로
+    /// 새 daily 백업을 만든다. 그렇지 않으면 복원 불가능한 최신본만 남고 retention이 이전 정상본을
+    /// 지울 수 있다. 최신본이 검증되면 변경 없음으로 보고 임시본을 삭제한 뒤 nil을 돌려준다.
     public func createDailyBackupIfChanged(calendar: WorkCalendar) throws -> BackupInfo? {
         do {
             let backups = try listBackups()
@@ -116,7 +120,10 @@ public final class BackupService: @unchecked Sendable {
                                               writeBarrier: writeBarrier,
                                               sources: stagedSources(),
                                               appDirectoryName: identity.directoryName)
-            guard Self.snapshotChanged(staged: staged, latest: latest) else {
+            let changed = Self.snapshotChanged(staged: staged, latest: latest)
+            // 변경도 없고 남길 최신본도 검증되면 새 백업은 필요 없다.
+            // 변경이 없더라도 최신본이 손상·누락됐다면 건너뛰지 않고 live 데이터로 새 정상 백업을 만든다.
+            guard changed || !Self.verifies(latest) else {
                 try? FileManager.default.removeItem(at: staged.tmpDir)
                 return nil
             }
@@ -157,17 +164,26 @@ public final class BackupService: @unchecked Sendable {
         return infos
     }
 
-    /// keepDays보다 오래된 완성 백업을 삭제한다. 가장 최신 1개는 항상 보존한다.
-    /// `lastBackupSucceeded == false`면 아무것도 지우지 않는다(실패한 백업 때문에 기존 성공본을 삭제하지 않음).
+    /// keepDays보다 오래된 완성 백업을 삭제한다. 가장 최신 1개와, 실제로 검증되는 가장 최신 백업은
+    /// 항상 보존한다. `lastBackupSucceeded == false`면 아무것도 지우지 않는다(실패한 백업 때문에 기존
+    /// 성공본을 삭제하지 않음).
+    ///
+    /// 최신 항목의 manifest만 보고 남기면 DB 파일이 손상·누락된 복원 불가 사본을 유일한 복원 지점으로
+    /// 남길 수 있으므로, 검증되는 사본이 하나라도 있으면 그중 가장 최신 것을 지우지 않는다.
+    /// 검증되는 사본이 하나도 없으면 아무것도 지우지 않는다(모두 손상된 상태에서 추가 손실 방지).
     @discardableResult
     public func applyRetention(keepDays: Int, lastBackupSucceeded: Bool) throws -> [String] {
         guard lastBackupSucceeded else { return [] }
         let backups = try listBackups()
         guard backups.count > 1 else { return [] }
+        // 최신순 목록에서 처음 검증되는 항목. 검증은 앞에서 멈추므로 보통 첫 항목에서 끝난다.
+        guard let protectedIndex = backups.firstIndex(where: { (try? Self.verifyBackup($0)) != nil }) else {
+            return []
+        }
         let now = clock.now()
         let cutoff = TimeInterval(max(0, keepDays)) * 86_400
         var deleted: [String] = []
-        for (index, info) in backups.enumerated() where index > 0 {
+        for (index, info) in backups.enumerated() where index > 0 && index != protectedIndex {
             guard now.timeIntervalSince(info.manifest.createdAt) > cutoff else { continue }
             try FileManager.default.removeItem(at: info.directory)
             deleted.append(info.id)
@@ -348,15 +364,22 @@ public final class BackupService: @unchecked Sendable {
         return BackupInfo(id: staged.id, directory: finalDir, manifest: staged.manifest)
     }
 
-    /// 최신 백업 대비 DB 또는 AI·외부 활동 연결 설정이 달라졌는지.
+    /// 최신 백업 대비 DB·일반 설정(settings.json)·AI·외부 활동 연결 설정이 달라졌는지.
+    /// 어느 쪽에 파일이 없으면 해시 nil로 비교되므로 추가·삭제도 변경으로 본다.
     private static func snapshotChanged(staged: Staged, latest: BackupInfo?) -> Bool {
         guard let latest else { return true }
-        for name in [workFileName, vaultFileName] + additionalSettingsFileNames {
+        for name in [workFileName, vaultFileName, settingsFileName] + additionalSettingsFileNames {
             let newHash = staged.manifest.files.first { $0.name == name }?.sha256
             let oldHash = latest.manifest.files.first { $0.name == name }?.sha256
             if newHash != oldHash { return true }
         }
         return false
+    }
+
+    /// 백업이 없거나 실제 파일·DB 검증에 실패하면 false. 변경 없음 생략의 안전 조건으로 쓴다.
+    private static func verifies(_ backup: BackupInfo?) -> Bool {
+        guard let backup else { return false }
+        return (try? verifyBackup(backup)) != nil
     }
 
     // MARK: - 내부: 검증

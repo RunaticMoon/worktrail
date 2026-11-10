@@ -67,8 +67,41 @@ final class MeetingServiceTests: XCTestCase {
         XCTAssertEqual(same.revision, 2)
         try repo.softDeleteMemo(id: "memo-regular")
         XCTAssertEqual(try service.meeting(id: meeting.id)?.memoSnapshots.first?.body, "변경한 메모")
-        XCTAssertThrowsError(try service.setLinkedMemos(id: meeting.id, expectedRevision: 2, memoIDs: ["memo-regular"]))
+        // 삭제한 원본의 사본은 유지되고, 한 번도 캡처하지 않은 메모만 거부한다.
+        let kept = try service.setLinkedMemos(id: meeting.id, expectedRevision: 2, memoIDs: ["memo-regular"])
+        XCTAssertEqual(kept.memoSnapshots.map(\.memoID), ["memo-regular"])
+        XCTAssertEqual(kept.memoSnapshots.first?.body, "변경한 메모")
+        XCTAssertThrowsError(try service.setLinkedMemos(id: meeting.id, expectedRevision: 2, memoIDs: ["never-snapshotted"]))
         XCTAssertEqual(try service.meeting(id: meeting.id)?.memoSnapshots.count, 1)
+    }
+
+    func testDeletedSourceMemoKeepsSnapshotWhileOtherMemosAreAddedAndDropped() throws {
+        let repo = try makeRepo()
+        for (id, body) in [("memo-a", "A 원문"), ("memo-b", "B 원문"), ("memo-c", "C 원문")] {
+            try repo.insertMemo(Memo(id: id, body: body, workDate: date, recordedAt: instant))
+        }
+        let otherDay = try XCTUnwrap(WorkDate("2026-10-27"))
+        try repo.insertMemo(Memo(id: "memo-other-day", body: "다른 날 메모", workDate: otherDay, recordedAt: instant))
+        let service = MeetingService(repo: repo)
+        let meeting = try service.create(title: "사본 회의", memoIDs: ["memo-a", "memo-b"])
+        let before = try XCTUnwrap(try service.meeting(id: meeting.id)?.memoSnapshots.first { $0.memoID == "memo-a" })
+        try repo.softDeleteMemo(id: "memo-a")
+        let mixed = try service.setLinkedMemos(id: meeting.id, expectedRevision: 1, memoIDs: ["memo-a", "memo-b", "memo-c"])
+        XCTAssertEqual(mixed.memoSnapshots.map(\.memoID), ["memo-a", "memo-b", "memo-c"])
+        XCTAssertEqual(mixed.memoSnapshots.first { $0.memoID == "memo-a" }, before)
+        XCTAssertEqual(mixed.memoSnapshots.first { $0.memoID == "memo-c" }?.body, "C 원문")
+        let onlyArchived = try service.setLinkedMemos(id: meeting.id, expectedRevision: mixed.revision, memoIDs: ["memo-a"])
+        XCTAssertEqual(onlyArchived.memoSnapshots.map(\.memoID), ["memo-a"])
+        let otherDaySelection = try service.setLinkedMemos(id: meeting.id, expectedRevision: onlyArchived.revision,
+                                                          memoIDs: ["memo-other-day"])
+        XCTAssertEqual(otherDaySelection.memoSnapshots.first?.workDate, otherDay)
+        let rejected = otherDaySelection.revision
+        XCTAssertThrowsError(try service.setLinkedMemos(id: meeting.id, expectedRevision: rejected,
+                                                        memoIDs: ["memo-b", "never-snapshotted"]))
+        let after = try XCTUnwrap(try service.meeting(id: meeting.id))
+        XCTAssertEqual(after.revision, rejected)
+        XCTAssertEqual(after.memoSnapshots.map(\.memoID), ["memo-other-day"])
+        XCTAssertEqual(after.memoSnapshots.first?.body, "다른 날 메모")
     }
 
     func testInvalidMemoSelectionRollsBackCreationAndSnapshotReplacement() throws {
