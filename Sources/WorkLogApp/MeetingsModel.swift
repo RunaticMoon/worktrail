@@ -67,6 +67,9 @@ struct MeetingTaskReview: Identifiable {
     private var audioTask: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
     private var autosaveTask: Task<Void, Never>?
+    /// 빈 초안 저장 거절 안내. 성공 저장은 이 두 문구만 지워 다른 안내를 보존하고, 변경 취소는 요약 관련 안내를 모두 지운다.
+    static let emptyManualSummaryRefusal = "직접 작성한 회의록의 모든 항목을 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
+    static let emptyAISummaryRefusal = "회의록 요약을 모두 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
 
     init(environment: AppEnvironment, audio: MeetingRecordingSession? = nil) {
         self.environment = environment
@@ -108,11 +111,17 @@ struct MeetingTaskReview: Identifiable {
         guard let selected, selected.deletedAt == nil else { return false }
         return selected.title != title || selected.workDate != workDate || selected.transcript != transcript || selected.notes != notes
     }
-    var hasSummaryEdits: Bool { (selected?.summary != nil && summaryDraft != selected?.summary?.content) || manualOutput != savedManualOutput }
+    var hasManualSummaryEdits: Bool { manualOutput != savedManualOutput }
+    var hasAISummaryDraftEdits: Bool { selected?.summary != nil && summaryDraft != selected?.summary?.content }
+    var hasSummaryEdits: Bool { hasManualSummaryEdits || hasAISummaryDraftEdits }
     var hasMetadataEdits: Bool { metadataDraft != (selected?.metadata ?? MeetingMetadata()) }
     var manualOutput: MeetingSummaryOutput {
         func items(_ text: String) -> [MeetingSummaryItem] { text.split(separator: "\n").map { .init(text: String($0), citations: []) } }
         return .init(summary: items(manualSummary), decisions: items(manualDecisions), actionItems: items(manualActions), openQuestions: items(manualQuestions))
+    }
+    var manualOutputIsEmpty: Bool {
+        [manualSummary, manualDecisions, manualActions, manualQuestions]
+            .allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
     var projects: [Project] { (try? environment?.repo.projects(includeArchived: true)) ?? [] }
     var tags: [Tag] { (try? environment?.repo.tags()) ?? [] }
@@ -209,6 +218,10 @@ struct MeetingTaskReview: Identifiable {
     }
     @discardableResult func save() -> Bool {
         guard var selected, selected.deletedAt == nil, let service else { return true }
+        let summaryBase = selected.summary
+        let manualPending = manualOutput != savedManualOutput
+        let draftPending = summaryBase != nil && summaryDraft != (summaryBase?.content ?? "")
+        let pendingSummary = manualPending || draftPending
         do {
             if hasEdits {
                 selected = try service.update(id: selected.id, expectedRevision: selected.revision,
@@ -220,19 +233,37 @@ struct MeetingTaskReview: Identifiable {
                 selected = try service.updateMetadata(meetingID: selected.id, expectedRevision: selected.revision, metadata: metadataDraft)
                 self.selected = selected
             }
-            if manualOutput != savedManualOutput {
-                _ = try service.saveManualSummary(meetingID: selected.id, expectedMeetingRevision: selected.revision,
-                    expectedSummaryRevision: selected.summary?.revision, output: manualOutput)
-                savedManualOutput = manualOutput
-                self.selected = try service.meeting(id: selected.id)
-                summaryDraft = self.selected?.summary?.content ?? ""
-            } else if summaryDraft != selected.summary?.content, let summary = selected.summary {
-                _ = try service.editSummary(meetingID: selected.id, expectedRevision: summary.revision, content: summaryDraft)
-                self.selected = try service.meeting(id: selected.id)
+            if pendingSummary {
+                // 저장 중 배경 갱신이 있어도 초안을 최신 요약 위에 조용히 덮어쓰지 않는다.
+                self.selected?.summary = summaryBase
+                if manualPending && manualOutputIsEmpty {
+                    message = Self.emptyManualSummaryRefusal
+                    return false
+                }
+                if draftPending && summaryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    message = Self.emptyAISummaryRefusal
+                    return false
+                }
+                if manualPending {
+                    _ = try service.saveManualSummary(meetingID: selected.id, expectedMeetingRevision: selected.revision,
+                        expectedSummaryRevision: summaryBase?.revision, output: manualOutput)
+                    savedManualOutput = manualOutput
+                    self.selected = try service.meeting(id: selected.id)
+                    summaryDraft = self.selected?.summary?.content ?? ""
+                } else if let base = summaryBase {
+                    _ = try service.editSummary(meetingID: selected.id, expectedRevision: base.revision, content: summaryDraft)
+                    self.selected = try service.meeting(id: selected.id)
+                }
+            } else if let latest = try service.meeting(id: selected.id) {
+                // 초안이 없으면 배경에서 갱신된 최신 요약을 그대로 채택한다. 유령 저장 대기 상태를 남기지 않는다.
+                self.selected = latest
+                summaryDraft = latest.summary?.content ?? ""
+                loadManualDraft(latest.summary)
             }
             runs = try audio.store.runs(meetingID: selected.id)
             summaryHistory = try service.summaryHistory(meetingID: selected.id)
             conflictingSummary = nil
+            clearSummaryRefusalMessage()
             reload(); return true
         } catch {
             if case WorkLogError.conflict = error, hasSummaryEdits {
@@ -240,6 +271,21 @@ struct MeetingTaskReview: Identifiable {
             }
             show(error); return false
         }
+    }
+    /// 이 모델이 띄운 요약 거절 안내만 지운다. 가져오기·오디오 등 다른 안내는 유지한다.
+    private func clearSummaryRefusalMessage() {
+        guard message == Self.emptyManualSummaryRefusal || message == Self.emptyAISummaryRefusal else { return }
+        message = nil
+    }
+    /// 저장하지 않은 요약 변경을 마지막 저장본으로 되돌린다. AI를 호출하거나 회의 본문을 바꾸지 않는다.
+    func discardSummaryEdits() {
+        // 어느 분기에서든 남아 있던 거절·충돌 안내를 함께 지운다.
+        message = nil
+        // 경쟁 수정이 있으면 그 최신 저장본을 채택한다. 충돌 화면의 초안을 조용히 덮어쓰지 않는다.
+        if let latest = conflictingSummary, selected?.id == latest.meetingID { selected?.summary = latest }
+        loadManualDraft(selected?.summary)
+        summaryDraft = selected?.summary?.content ?? ""
+        conflictingSummary = nil
     }
     func retrySummaryAfterReview() {
         guard !hasEdits, !hasMetadataEdits, let selected, let latest = try? service?.meeting(id: selected.id) else { return }
@@ -260,10 +306,15 @@ struct MeetingTaskReview: Identifiable {
         do { return try environment?.repo.memos(on: date) ?? [] }
         catch { show(error); return [] }
     }
-    func linkMemos(_ ids: [String]) {
-        guard save(), let selected, let service else { return }
-        do { load(try service.setLinkedMemos(id: selected.id, expectedRevision: selected.revision, memoIDs: ids)); reload() }
-        catch { show(error) }
+    @discardableResult func linkMemos(_ ids: [String]) -> Bool {
+        guard save(), let selected, let service else { return false }
+        do { load(try service.setLinkedMemos(id: selected.id, expectedRevision: selected.revision, memoIDs: ids)); reload(); return true }
+        catch { show(error); return false }
+    }
+    /// 원본 메모가 아직 있는지 확인한다. 없으면 보관한 사본만 남은 상태다.
+    func hasMemoSource(_ memoID: String) -> Bool {
+        do { return try environment?.repo.memo(id: memoID) != nil }
+        catch { return false }
     }
     func summarize() {
         guard canSummarize else { message = selected?.localOnly == true ? "로컬 전용 회의는 외부 AI 요약을 사용할 수 없습니다." : "설정에서 AI 사용과 ChatGPT 연결을 확인하세요."; return }

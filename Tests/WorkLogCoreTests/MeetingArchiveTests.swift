@@ -106,6 +106,29 @@ final class MeetingArchiveTests: XCTestCase {
         XCTAssertEqual(try MeetingService(repo: destination).summaryHistory(meetingID: id).count, 2)
     }
 
+    func testImportedMeetingKeepsMemoSnapshotsWithoutOriginalMemos() throws {
+        let (root, repo, initial, archiveService) = try fixture()
+        let service = MeetingService(repo: repo)
+        try repo.insertMemo(Memo(id: "memo-imported", body: "가져올 사본", workDate: initial.workDate, recordedAt: repo.clock.now()))
+        let linked = try service.setLinkedMemos(id: initial.id, expectedRevision: initial.revision, memoIDs: ["memo-imported"])
+        let archive = root.appendingPathComponent("memo.worklogmeeting")
+        try archiveService.export(meetingID: linked.id, includeAudio: false, to: archive)
+        let destination = try WorkRepository.inMemory(ids: SequentialIDGenerator(prefix: "memo-restore"))
+        let id = try MeetingArchiveService(repo: destination, audioRoot: root.appendingPathComponent("memo-audio"))
+            .restore(archive, duplicatePolicy: .newCopy)
+        let restored = try XCTUnwrap(MeetingService(repo: destination).meeting(id: id))
+        XCTAssertEqual(restored.memoSnapshots.map(\.memoID), ["memo-imported"])
+        XCTAssertEqual(restored.memoSnapshots.first?.body, "가져올 사본")
+        // 원본 메모가 없는 저장소에서도 사본은 유지되고, 새 선택만 추가된다.
+        XCTAssertNil(try destination.memo(id: "memo-imported"))
+        try destination.insertMemo(Memo(id: "memo-added", body: "가져온 뒤 추가", workDate: initial.workDate, recordedAt: destination.clock.now()))
+        let updated = try MeetingService(repo: destination).setLinkedMemos(id: id, expectedRevision: restored.revision,
+                                                                          memoIDs: ["memo-imported", "memo-added"])
+        XCTAssertEqual(updated.memoSnapshots.map(\.memoID), ["memo-added", "memo-imported"])
+        XCTAssertEqual(updated.memoSnapshots.first { $0.memoID == "memo-imported" }?.body, "가져올 사본")
+        XCTAssertEqual(updated.memoSnapshots.first { $0.memoID == "memo-added" }?.body, "가져온 뒤 추가")
+    }
+
     func testDatabaseConflictRollsBackAllRowsAndNewAudio() throws {
         let (root, repo, meeting, service) = try fixture()
         let archive = root.appendingPathComponent("rollback.worklogmeeting")
