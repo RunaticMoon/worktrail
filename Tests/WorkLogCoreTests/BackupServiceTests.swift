@@ -853,4 +853,94 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.workDatabase.path), "실패한 복원의 새 DB는 남지 않는다")
         XCTAssertFalse(allFiles(in: target.dataRoot).contains { $0.lastPathComponent.contains(".restore-") || $0.lastPathComponent.contains(".stash-") })
     }
+
+    // MARK: - #72 / #73
+
+    func testDailyBackupDetectsGeneralSettingsOnlyChange() throws {
+        let root = try makeRoot(), paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { stores.close() }
+        let service = makeService(paths, stores, clock: clock)
+        let cal = WorkCalendar()
+        let store = SettingsStore(fileURL: paths.settingsFile)
+        try store.save(AppSettings())
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: cal))
+        clock.advance(by: 86_400)
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: cal))
+
+        var changed = AppSettings()
+        changed.secretIdleLockMinutes += 7
+        try store.save(changed)
+        let info = try XCTUnwrap(try service.createDailyBackupIfChanged(calendar: cal))
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: cal))
+
+        let target = makePaths(root: try makeRoot())
+        try BackupService.restore(info, into: target, keyStore: InMemoryVaultKeyStore(), includeVault: false, clock: clock)
+        XCTAssertEqual(try SettingsStore(fileURL: target.settingsFile).load().secretIdleLockMinutes,
+                       changed.secretIdleLockMinutes)
+
+        clock.advance(by: 86_400)
+        try FileManager.default.removeItem(at: paths.settingsFile)
+        XCTAssertNotNil(try service.createDailyBackupIfChanged(calendar: cal))
+    }
+
+    /// 수동 백업 A, B(최신)를 만들고 보관 기간(1일)을 지나게 시계를 옮긴다.
+    private func twoBackupsThenAge() throws -> (AppPaths, Stores, BackupService, BackupInfo, BackupInfo) {
+        let root = try makeRoot(), paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        let service = makeService(paths, stores, clock: clock)
+        let a = try service.createBackup(reason: .manual)
+        clock.advance(by: 86_400)
+        let b = try service.createBackup(reason: .manual)
+        clock.advance(by: 4 * 86_400)
+        return (paths, stores, service, a, b)
+    }
+
+    func testHealthyLatestUnchangedStillSkips() throws {
+        let (_, stores, service, _, _) = try twoBackupsThenAge()
+        defer { stores.close() }
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+    }
+
+    func testCorruptLatestBackupIsReplacedByVerifiedBackup() throws {
+        let (_, stores, service, a, b) = try twoBackupsThenAge()
+        defer { stores.close() }
+        try Data("corrupt".utf8).write(to: b.directory.appendingPathComponent(BackupService.workFileName))
+        let created = try XCTUnwrap(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        XCTAssertNoThrow(try service.verify(created))
+        XCTAssertEqual(try service.listBackups().first?.id, created.id)
+        _ = try service.applyRetention(keepDays: 1, lastBackupSucceeded: true)
+        XCTAssertNoThrow(try service.verify(try XCTUnwrap(try service.listBackups().first)))
+        _ = a
+    }
+
+    func testMissingLatestBackupFileIsReplacedByVerifiedBackup() throws {
+        let (_, stores, service, _, b) = try twoBackupsThenAge()
+        defer { stores.close() }
+        try FileManager.default.removeItem(at: b.directory.appendingPathComponent(BackupService.workFileName))
+        let created = try XCTUnwrap(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        XCTAssertNoThrow(try service.verify(created))
+    }
+
+    func testRetentionKeepsOlderBackupsWhenLatestIsCorrupt() throws {
+        let (_, stores, service, a, b) = try twoBackupsThenAge()
+        defer { stores.close() }
+        try Data("corrupt".utf8).write(to: b.directory.appendingPathComponent(BackupService.workFileName))
+        XCTAssertEqual(try service.applyRetention(keepDays: 1, lastBackupSucceeded: true), [])
+        XCTAssertNoThrow(try service.verify(a))
+    }
+
+    func testFailedReplacementKeepsOlderRestorePointAndLiveData() throws {
+        let (paths, stores, service, a, b) = try twoBackupsThenAge()
+        defer { stores.close() }
+        try Data("corrupt".utf8).write(to: b.directory.appendingPathComponent(BackupService.workFileName))
+        let liveBefore = fileBytes(paths.workDatabase)
+        try FileManager.default.createDirectory(at: paths.settingsFile, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        XCTAssertEqual(try service.applyRetention(keepDays: 1, lastBackupSucceeded: false), [])
+        XCTAssertNoThrow(try service.verify(a))
+        XCTAssertEqual(fileBytes(paths.workDatabase), liveBefore)
+    }
 }

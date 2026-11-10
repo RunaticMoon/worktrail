@@ -116,7 +116,9 @@ public final class BackupService: @unchecked Sendable {
                                               writeBarrier: writeBarrier,
                                               sources: stagedSources(),
                                               appDirectoryName: identity.directoryName)
-            guard Self.snapshotChanged(staged: staged, latest: latest) else {
+            // 최신 사본이 실제로 검증 가능할 때만 "변경 없음"으로 건너뛴다. 손상·누락이면 새 사본을 만든다.
+            let latestIsRestorable = latest.map { (try? Self.verifyBackup($0)) != nil } ?? false
+            guard Self.snapshotChanged(staged: staged, latest: latest) || !latestIsRestorable else {
                 try? FileManager.default.removeItem(at: staged.tmpDir)
                 return nil
             }
@@ -164,6 +166,8 @@ public final class BackupService: @unchecked Sendable {
         guard lastBackupSucceeded else { return [] }
         let backups = try listBackups()
         guard backups.count > 1 else { return [] }
+        // 남길 최신 사본이 복원 불가능하면 이전 정상 복원 지점을 지우지 않는다.
+        guard (try? Self.verifyBackup(backups[0])) != nil else { return [] }
         let now = clock.now()
         let cutoff = TimeInterval(max(0, keepDays)) * 86_400
         var deleted: [String] = []
@@ -351,7 +355,7 @@ public final class BackupService: @unchecked Sendable {
     /// 최신 백업 대비 DB 또는 AI·외부 활동 연결 설정이 달라졌는지.
     private static func snapshotChanged(staged: Staged, latest: BackupInfo?) -> Bool {
         guard let latest else { return true }
-        for name in [workFileName, vaultFileName] + additionalSettingsFileNames {
+        for name in [workFileName, vaultFileName, settingsFileName] + additionalSettingsFileNames {
             let newHash = staged.manifest.files.first { $0.name == name }?.sha256
             let oldHash = latest.manifest.files.first { $0.name == name }?.sha256
             if newHash != oldHash { return true }
