@@ -67,8 +67,28 @@ final class MeetingServiceTests: XCTestCase {
         XCTAssertEqual(same.revision, 2)
         try repo.softDeleteMemo(id: "memo-regular")
         XCTAssertEqual(try service.meeting(id: meeting.id)?.memoSnapshots.first?.body, "변경한 메모")
-        XCTAssertThrowsError(try service.setLinkedMemos(id: meeting.id, expectedRevision: 2, memoIDs: ["memo-regular"]))
+        let kept = try service.setLinkedMemos(id: meeting.id, expectedRevision: 2, memoIDs: ["memo-regular"])
+        XCTAssertEqual(kept.revision, 2)
+        XCTAssertThrowsError(try service.setLinkedMemos(id: meeting.id, expectedRevision: 2, memoIDs: ["absent"]))
         XCTAssertEqual(try service.meeting(id: meeting.id)?.memoSnapshots.count, 1)
+    }
+
+    func testSnapshotWithMissingOriginalIsKeptWhileOtherMemosChange() throws {
+        let repo = try makeRepo()
+        try repo.insertMemo(Memo(id: "a", body: "A 본문", workDate: date, recordedAt: instant))
+        try repo.insertMemo(Memo(id: "b", body: "B 본문", workDate: date, recordedAt: instant))
+        try repo.insertMemo(Memo(id: "c", body: "C 본문", workDate: date, recordedAt: instant))
+        let service = MeetingService(repo: repo)
+        let meeting = try service.create(title: "회의", memoIDs: ["a", "b"])
+        try repo.softDeleteMemo(id: "a")
+        let added = try service.setLinkedMemos(id: meeting.id, expectedRevision: 1, memoIDs: ["a", "b", "c"])
+        XCTAssertEqual(added.memoSnapshots.map(\.memoID), ["a", "b", "c"])
+        XCTAssertEqual(added.memoSnapshots.first?.body, "A 본문")
+        let removed = try service.setLinkedMemos(id: meeting.id, expectedRevision: added.revision, memoIDs: ["a", "c"])
+        XCTAssertEqual(removed.memoSnapshots.map(\.memoID), ["a", "c"])
+        let dropped = try service.setLinkedMemos(id: meeting.id, expectedRevision: removed.revision, memoIDs: ["c"])
+        XCTAssertEqual(dropped.memoSnapshots.map(\.memoID), ["c"])
+        XCTAssertThrowsError(try service.setLinkedMemos(id: meeting.id, expectedRevision: dropped.revision, memoIDs: ["a", "c"]))
     }
 
     func testInvalidMemoSelectionRollsBackCreationAndSnapshotReplacement() throws {

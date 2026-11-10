@@ -30,6 +30,31 @@ final class MeetingAuthoringTests: XCTestCase {
             workDate: meeting.workDate, transcript: "바뀐 원문", notes: "")
         XCTAssertTrue(try service.meeting(id: meeting.id)!.isSummaryStale)
     }
+    func testEmptyManualOutputIsRejectedAndKeepsSavedVersion() throws {
+        let repo = try repo(), service = MeetingService(repo: repo)
+        let meeting = try service.create(title: "회의")
+        let saved = try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: 1, expectedSummaryRevision: nil,
+            output: .init(summary: [.init(text: "내용", citations: [])]))
+        XCTAssertThrowsError(try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: 1,
+            expectedSummaryRevision: saved.revision, output: .init(summary: [])))
+        XCTAssertEqual(try service.meeting(id: meeting.id)?.summary, saved)
+        XCTAssertEqual(try repo.db.scalarInt("SELECT COUNT(*) FROM ai_job"), 0)
+    }
+    func testNotesSaveReturnsLatestSummaryButStaleBaseStillConflicts() throws {
+        let repo = try repo(), service = MeetingService(repo: repo)
+        let meeting = try service.create(title: "회의")
+        let s1 = try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: 1, expectedSummaryRevision: nil,
+            output: .init(summary: [.init(text: "S1", citations: [])]))
+        let s2 = try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: 1, expectedSummaryRevision: s1.revision,
+            output: .init(summary: [.init(text: "S2", citations: [])]))
+        let updated = try service.update(id: meeting.id, expectedRevision: 1, title: meeting.title, workDate: meeting.workDate,
+            transcript: "", notes: "메모")
+        XCTAssertEqual(updated.summary?.revision, s2.revision)
+        XCTAssertThrowsError(try service.saveManualSummary(meetingID: meeting.id, expectedMeetingRevision: updated.revision,
+            expectedSummaryRevision: s1.revision, output: .init(summary: [.init(text: "S1 edit", citations: [])])))
+        XCTAssertThrowsError(try service.editSummary(meetingID: meeting.id, expectedRevision: s1.revision, content: "old"))
+        XCTAssertEqual(try service.meeting(id: meeting.id)?.summary?.content, s2.content)
+    }
     func testManualCannotFabricateAICitationsAndAIEditRetainsHistory() throws {
         let repo = try repo(), service = MeetingService(repo: repo)
         let meeting = try service.create(title: "회의")

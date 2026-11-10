@@ -24,7 +24,15 @@ struct MeetingManualSummaryView: View {
                         }
                     }
                 }
-                Button("직접 작성한 회의록 저장") { _ = model.save() }.disabled(!model.hasSummaryEdits)
+                HStack {
+                    Button("직접 작성한 회의록 저장") { _ = model.save() }.disabled(!model.hasSummaryEdits)
+                    Button("변경 취소 · 저장본으로 되돌리기") { model.discardSummaryEdits() }.disabled(!model.hasSummaryEdits)
+                }
+                if model.hasSummaryEdits, model.manualOutput.summary.isEmpty, model.manualOutput.decisions.isEmpty,
+                   model.manualOutput.actionItems.isEmpty, model.manualOutput.openQuestions.isEmpty {
+                    Text("모든 항목이 비어 있어 저장할 수 없습니다. 내용을 입력하거나 변경을 취소해 저장본으로 되돌리세요.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 if let summary = model.selected?.summary, summary.isManual {
                     ForEach(Array(summary.structuredOutput.actionItems.enumerated()), id: \.offset) { index, item in
                         HStack {
