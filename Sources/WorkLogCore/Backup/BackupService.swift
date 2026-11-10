@@ -398,12 +398,6 @@ public final class BackupService: @unchecked Sendable {
         return false
     }
 
-    /// 백업이 없거나 실제 파일·DB 검증에 실패하면 false. 변경 없음 생략의 안전 조건으로 쓴다.
-    private static func verifies(_ backup: BackupInfo?) -> Bool {
-        guard let backup else { return false }
-        return (try? verifyBackup(backup)) != nil
-    }
-
     // MARK: - 내부: 검증
 
     /// 이름으로 기존 백업 디렉터리를 찾는다. 안전하지 않은 이름·`backupRoot` 밖·디렉터리 아님은 nil.

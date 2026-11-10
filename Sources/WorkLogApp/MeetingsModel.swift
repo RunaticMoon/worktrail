@@ -67,7 +67,7 @@ struct MeetingTaskReview: Identifiable {
     private var audioTask: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
     private var autosaveTask: Task<Void, Never>?
-    /// 빈 초안 저장 거절 안내. 성공 저장·변경 취소 때 이 두 문구만 지워 다른 안내를 보존한다.
+    /// 빈 초안 저장 거절 안내. 성공 저장은 이 두 문구만 지워 다른 안내를 보존하고, 변경 취소는 요약 관련 안내를 모두 지운다.
     static let emptyManualSummaryRefusal = "직접 작성한 회의록의 모든 항목을 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
     static let emptyAISummaryRefusal = "회의록 요약을 모두 지운 상태는 저장할 수 없습니다. 내용을 입력하거나 '변경 취소'로 마지막 저장본을 복구하세요."
 

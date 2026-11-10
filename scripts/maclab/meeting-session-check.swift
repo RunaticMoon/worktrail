@@ -491,6 +491,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         try check(model.selected?.id == second.id && meetingCountAfterBlockedCreate == meetingCountBeforeClear,
                   "#74: creating a meeting must be blocked while an empty draft is pending")
         model.discardSummaryEdits()
+        try check(model.message == nil, "#74: discard itself must clear the refusal guide before any save")
         try check(!model.hasSummaryEdits && model.manualSummary == savedManual.0 && model.manualDecisions == savedManual.1
                     && model.manualActions == savedManual.2 && model.manualQuestions == savedManual.3,
                   "#74: discard must restore the exact last saved manual sections")

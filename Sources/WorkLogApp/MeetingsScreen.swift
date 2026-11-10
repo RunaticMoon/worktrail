@@ -240,8 +240,9 @@ struct MeetingsScreen: View {
         let availableIDs = Set(available.map(\.id))
         let snapshotIDs = Set((meeting?.memoSnapshots ?? []).map(\.memoID))
         let archived = (meeting?.memoSnapshots ?? []).filter { !availableIDs.contains($0.memoID) }
-        // 다른 창에서 원본이 사라진 등 어디에도 그릴 수 없는 선택. 정렬해 목록 순서를 안정시킨다.
-        let missing = memoIDs.subtracting(availableIDs).subtracting(snapshotIDs).sorted()
+        // 다른 창에서 원본이 사라진 등 실제로 찾을 수 없는 선택. 다른 날짜의 정상 선택은 제외하고 정렬해 순서를 안정시킨다.
+        let missing = memoIDs.subtracting(availableIDs).subtracting(snapshotIDs)
+            .filter { !model.hasMemoSource($0) }.sorted()
         return VStack(alignment: .leading, spacing: 16) {
             Text("요약에 함께 넣을 일반 메모").font(.headline)
             WorkDatePicker(title: "메모 날짜", value: $memoDate, calendar: model.calendar)
