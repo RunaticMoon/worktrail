@@ -149,6 +149,7 @@ struct MeetingsScreen: View {
                     Button("메모 선택…") {
                         memoDate = model.workDate
                         memoIDs = Set(meeting.memoSnapshots.map(\.memoID))
+                        model.message = nil
                         showingMemoPicker = true
                     }.disabled(model.isSummarizing)
                 }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
@@ -224,16 +225,26 @@ struct MeetingsScreen: View {
             Text("요약에 함께 넣을 일반 메모").font(.headline)
             WorkDatePicker(title: "메모 날짜", value: $memoDate, calendar: model.calendar)
             Text("선택 \(memoIDs.count)개 · 다른 날짜의 선택도 유지됩니다.").font(.caption)
+            if let saved = model.selected?.memoSnapshots, !saved.isEmpty {
+                DisclosureGroup("보관된 사본 \(saved.count)개 · 원본이 없어도 유지됩니다") {
+                    ForEach(saved, id: \.memoID) { memo in
+                        Toggle(isOn: Binding(get: { memoIDs.contains(memo.memoID) }, set: {
+                            if $0 { memoIDs.insert(memo.memoID) } else { memoIDs.remove(memo.memoID) }
+                        })) { Text(memo.body).lineLimit(2) }
+                    }
+                }
+            }
             List(model.availableMemos(on: memoDate), id: \.id) { memo in
                 Toggle(isOn: Binding(get: { memoIDs.contains(memo.id) }, set: {
                     if $0 { memoIDs.insert(memo.id) } else { memoIDs.remove(memo.id) }
                 })) { Text(memo.body).lineLimit(5) }
             }
+            if let error = model.message { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
                 Button("선택 해제") { memoIDs = [] }
                 Spacer()
                 Button("취소") { showingMemoPicker = false }.keyboardShortcut(.cancelAction)
-                Button("선택 저장") { model.linkMemos(Array(memoIDs).sorted()); showingMemoPicker = false }.keyboardShortcut(.defaultAction)
+                Button("선택 저장") { if model.linkMemos(Array(memoIDs).sorted()) { showingMemoPicker = false } }.keyboardShortcut(.defaultAction)
             }
         }.padding(20).frame(width: 560, height: 440)
     }

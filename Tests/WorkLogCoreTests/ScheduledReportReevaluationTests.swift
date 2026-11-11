@@ -87,6 +87,30 @@ final class ScheduledReportReevaluationTests: XCTestCase {
         XCTAssertEqual(try versions(reopened, reportId: reportID).count, 2)
     }
 
+    func testFailedReevaluationRetriesOnNextTriggerAndAttemptsAccumulate() async throws {
+        let clock = FixedClock(kst(2026, 10, 21, 10))
+        let env = try makeEnv(now: clock.now(), clock: clock)
+        let day = WorkDate("2026-10-20")!
+        let range = DateRange(start: day, endExclusive: WorkDate("2026-10-21")!)
+        _ = try env.tasks.captureMemo(body: "기록", workDate: day)
+        _ = try await env.runStartupCatchUp()
+        let reportID = try XCTUnwrap(dailyReport(env, on: day)).id
+        _ = try env.repo.importActivities([event(occurredAt: kst(2026, 10, 20, 12))], connection: connection())
+        try env.repo.db.execute("CREATE TRIGGER fail_report BEFORE INSERT ON report_version BEGIN SELECT RAISE(ABORT, 'fixture'); END")
+        for _ in 0..<2 {
+            do { _ = try await env.reevaluateScheduledReports(affecting: range); XCTFail("must fail") } catch { }
+        }
+        let failed = try XCTUnwrap(env.repo.scheduledJob(type: .dailyClose, periodKey: day.iso))
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(failed.attempts, 3, "실패 시도는 누적되어 runDue 한도(3)에서 멈춘다")
+        try env.repo.db.execute("DROP TRIGGER fail_report")
+        _ = try await env.reevaluateScheduledReports(affecting: range)
+        let recovered = try XCTUnwrap(env.repo.scheduledJob(type: .dailyClose, periodKey: day.iso))
+        XCTAssertEqual(recovered.state, .succeeded)
+        XCTAssertNil(recovered.lastError)
+        XCTAssertEqual(try versions(env, reportId: reportID).count, 2)
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() throws -> URL {

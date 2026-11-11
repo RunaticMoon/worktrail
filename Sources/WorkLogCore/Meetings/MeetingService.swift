@@ -89,7 +89,7 @@ public final class MeetingService: @unchecked Sendable {
         try repo.db.transaction {
             let current = try requireMeeting(id, expectedRevision: expectedRevision)
             let now = repo.clock.now()
-            let next = try snapshots(for: memoIDs, capturedAt: now)
+            let next = try snapshots(for: memoIDs, capturedAt: now, existing: current.memoSnapshots)
             // 동일 선택·동일 원문은 캡처 시각만 바꾸거나 기존 요약을 무효화하지 않는다.
             let unchanged = current.memoSnapshots.count == next.count && zip(current.memoSnapshots, next).allSatisfy {
                 $0.memoID == $1.memoID && $0.revision == $1.revision && $0.body == $1.body && $0.workDate == $1.workDate
@@ -321,14 +321,22 @@ public final class MeetingService: @unchecked Sendable {
         guard WorkDate(date.iso) != nil else { throw WorkLogError.validation("유효한 회의 날짜가 필요합니다.") }
     }
 
-    private func snapshots(for memoIDs: [String], capturedAt: Date) throws -> [MeetingMemoSnapshot] {
+    private func snapshots(for memoIDs: [String], capturedAt: Date, existing: [MeetingMemoSnapshot] = []) throws -> [MeetingMemoSnapshot] {
         let unique = Set(memoIDs).sorted()
         guard unique.count <= MeetingLimits.linkedMemoCount else {
             throw WorkLogError.validation("연결 메모는 최대 \(MeetingLimits.linkedMemoCount)개입니다.")
         }
         var totalBytes = 0
         return try unique.map { id in
-            guard let memo = try repo.memo(id: id) else { throw WorkLogError.notFound("선택한 일반 메모") }
+            guard let memo = try repo.memo(id: id) else {
+                // 원본이 삭제·부재여도 이미 보관한 사본은 그대로 유지한다.
+                guard let kept = existing.first(where: { $0.memoID == id }) else { throw WorkLogError.notFound("선택한 일반 메모") }
+                totalBytes += kept.body.utf8.count
+                guard totalBytes <= MeetingLimits.linkedMemoBytes else {
+                    throw WorkLogError.validation("연결 메모의 전체 크기가 허용 범위를 초과했습니다.")
+                }
+                return kept
+            }
             totalBytes += memo.body.utf8.count
             guard totalBytes <= MeetingLimits.linkedMemoBytes else {
                 throw WorkLogError.validation("연결 메모의 전체 크기가 허용 범위를 초과했습니다.")

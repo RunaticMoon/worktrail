@@ -305,6 +305,8 @@ public final class AppEnvironment {
     /// - 기간별 오류가 나도 다음 기간을 계속 평가한 뒤 첫 오류를 호출자에게 전달한다.
     ///   취소(CancellationError)는 오류가 아니므로 다음 기간을 시작하지 않고 그대로 전파한다.
     /// - 반환값: 다시 평가한 작업 중 새 버전을 만든 작업 수.
+    static let reevaluationFailureMarker = "report-reevaluation-failed"
+
     @discardableResult
     public func reevaluateScheduledReports(affecting range: DateRange,
                                            maxLookbackDays: Int = 92,
@@ -335,7 +337,9 @@ public final class AppEnvironment {
         let baseUseAI = aiRunner != nil && settings.aiEnabled
         let aiCutoff = now.addingTimeInterval(-Double(max(0, aiRecentDays)) * 86_400)
 
-        let candidates = try repo.scheduledJobs(states: [.succeeded]).compactMap { job -> DueJob? in
+        // 재평가 실패로 failed가 된 작업은 시도 한도·백오프와 무관하게 다음 트리거에서 다시 평가한다.
+        let candidates = try repo.scheduledJobs(states: [.succeeded, .failed]).compactMap { job -> DueJob? in
+            guard job.state == .succeeded || job.lastError == Self.reevaluationFailureMarker else { return nil }
             guard let jobRange = SchedulePlanner.range(for: job.type, periodKey: job.periodKey,
                                                        periods: periods),
                   jobRange.endExclusive > floor,
@@ -354,15 +358,22 @@ public final class AppEnvironment {
                 if try await Self.handleScheduled(job, reports: reports, useAI: useAI) {
                     reevaluated += 1
                 }
+                if var stored = try repo.scheduledJob(type: job.type, periodKey: job.periodKey),
+                   stored.state == .failed {
+                    stored.state = .succeeded
+                    stored.lastError = nil
+                    stored.lastAttemptAt = now
+                    try repo.updateScheduledJob(stored)
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 // Persist recovery independently of new imports and across application restarts.
                 if var stored = try repo.scheduledJob(type: job.type, periodKey: job.periodKey) {
                     stored.state = .failed
-                    stored.attempts = 1
+                    stored.attempts += 1
                     stored.lastAttemptAt = now
-                    stored.lastError = "report-reevaluation-failed"
+                    stored.lastError = Self.reevaluationFailureMarker
                     try repo.updateScheduledJob(stored)
                 }
                 if firstError == nil { firstError = error }

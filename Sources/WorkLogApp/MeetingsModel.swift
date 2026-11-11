@@ -209,16 +209,24 @@ struct MeetingTaskReview: Identifiable {
     }
     @discardableResult func save() -> Bool {
         guard var selected, selected.deletedAt == nil, let service else { return true }
+        // The summary edit base must survive notes/metadata saves, which return the latest summary.
+        let baseSummary = selected.summary
+        let pendingSummary = hasSummaryEdits
+        func adopt(_ meeting: Meeting) {
+            var meeting = meeting
+            if pendingSummary { meeting.summary = baseSummary }
+            else { summaryDraft = meeting.summary?.content ?? ""; loadManualDraft(meeting.summary) }
+            selected = meeting
+            self.selected = meeting
+        }
         do {
             if hasEdits {
-                selected = try service.update(id: selected.id, expectedRevision: selected.revision,
-                    title: title, workDate: workDate, transcript: transcript, notes: notes)
-                self.selected = selected
+                adopt(try service.update(id: selected.id, expectedRevision: selected.revision,
+                    title: title, workDate: workDate, transcript: transcript, notes: notes))
                 title = selected.title
             }
             if hasMetadataEdits {
-                selected = try service.updateMetadata(meetingID: selected.id, expectedRevision: selected.revision, metadata: metadataDraft)
-                self.selected = selected
+                adopt(try service.updateMetadata(meetingID: selected.id, expectedRevision: selected.revision, metadata: metadataDraft))
             }
             if manualOutput != savedManualOutput {
                 _ = try service.saveManualSummary(meetingID: selected.id, expectedMeetingRevision: selected.revision,
@@ -241,6 +249,14 @@ struct MeetingTaskReview: Identifiable {
             show(error); return false
         }
     }
+    /// Escape hatch when an unsaveable summary draft (e.g. all items removed) blocks navigation.
+    func discardSummaryEdits() {
+        guard let selected else { return }
+        summaryDraft = selected.summary?.content ?? ""
+        loadManualDraft(selected.summary)
+        conflictingSummary = nil
+        message = nil
+    }
     func retrySummaryAfterReview() {
         guard !hasEdits, !hasMetadataEdits, let selected, let latest = try? service?.meeting(id: selected.id) else { return }
         self.selected = latest
@@ -260,10 +276,10 @@ struct MeetingTaskReview: Identifiable {
         do { return try environment?.repo.memos(on: date) ?? [] }
         catch { show(error); return [] }
     }
-    func linkMemos(_ ids: [String]) {
-        guard save(), let selected, let service else { return }
-        do { load(try service.setLinkedMemos(id: selected.id, expectedRevision: selected.revision, memoIDs: ids)); reload() }
-        catch { show(error) }
+    @discardableResult func linkMemos(_ ids: [String]) -> Bool {
+        guard save(), let selected, let service else { return false }
+        do { load(try service.setLinkedMemos(id: selected.id, expectedRevision: selected.revision, memoIDs: ids)); reload(); return true }
+        catch { show(error); return false }
     }
     func summarize() {
         guard canSummarize else { message = selected?.localOnly == true ? "로컬 전용 회의는 외부 AI 요약을 사용할 수 없습니다." : "설정에서 AI 사용과 ChatGPT 연결을 확인하세요."; return }
