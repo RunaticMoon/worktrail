@@ -19,13 +19,20 @@ public final class MeetingTaskService: Sendable {
     public let repo: WorkRepository
     public init(repo: WorkRepository) { self.repo = repo }
 
-    /// Invoke only after the review card is explicitly confirmed. The same action is idempotent.
+    /// Invoke only after the review card is explicitly confirmed. Repeating the same request is idempotent;
+    /// one action links to one task, so a different target or new-task input for a linked action is a conflict.
     public func confirm(meetingID: String, expectedRevision: Int, actionKey: String,
                         title: String, owner: String? = nil, dueOn: WorkDate? = nil,
                         projectIDs: [String] = [], quote: String, transcriptRunID: String? = nil,
                         segmentID: String? = nil, existingTaskID: String? = nil) throws -> MeetingTaskLink {
         try repo.db.transaction {
-            if let existing = try links(meetingID: meetingID).first(where: { $0.actionKey == actionKey }) { return existing }
+            if let existing = try links(meetingID: meetingID).first(where: { $0.actionKey == actionKey }) {
+                guard try isRepeat(of: existing, title: title, dueOn: dueOn, existingTaskID: existingTaskID) else {
+                    let linked = try repo.task(id: existing.taskID)?.title ?? "다른 업무"
+                    throw WorkLogError.conflict("이 근거는 이미 '\(linked)' 업무에 연결되어 있습니다. 연결한 업무를 확인해 주세요.")
+                }
+                return existing
+            }
             guard let meeting = try MeetingService(repo: repo).meeting(id: meetingID) else { throw WorkLogError.notFound("회의") }
             guard meeting.revision == expectedRevision else { throw WorkLogError.conflict("회의 원문이 변경되었습니다. 근거를 다시 검토해 주세요.") }
             guard !actionKey.isEmpty, !quote.isEmpty else { throw WorkLogError.validation("업무 근거가 필요합니다.") }
@@ -64,6 +71,12 @@ public final class MeetingTaskService: Sendable {
                 owner?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, meeting.localOnly, now)
             return try links(meetingID: meetingID).first { $0.id == id }!
         }
+    }
+    /// A retry of the original request: the same chosen task, or the task this action created with the same input.
+    private func isRepeat(of link: MeetingTaskLink, title: String, dueOn: WorkDate?, existingTaskID: String?) throws -> Bool {
+        if let existingTaskID { return existingTaskID == link.taskID }
+        guard let task = try repo.task(id: link.taskID) else { return false }
+        return task.title == title.trimmingCharacters(in: .whitespacesAndNewlines) && task.dueOn == dueOn
     }
     public func links(meetingID: String) throws -> [MeetingTaskLink] {
         try repo.db.queryV("SELECT * FROM meeting_task_link WHERE meeting_id = ? ORDER BY created_at, id", meetingID).map(decode)
