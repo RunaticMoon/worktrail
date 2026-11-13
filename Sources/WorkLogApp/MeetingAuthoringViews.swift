@@ -128,6 +128,21 @@ struct MeetingTaskReviewSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("회의 근거에서 업무 연결 검토").font(.headline)
             DisclosureGroup("선택한 원문") { Text(review.text).textSelection(.enabled) }
+            let linked = model.taskLinks.filter { $0.actionKey.hasPrefix(review.key + ":") }
+            if !linked.isEmpty {
+                GroupBox("이미 연결한 업무") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(linked) { link in
+                            Button(model.availableTasks.first { $0.id == link.taskID }?.title ?? "연결된 업무") {
+                                dismiss(); model.onOpenTask?(link.taskID)
+                            }
+                            Text("근거: \(link.quote)").font(.caption).textSelection(.enabled)
+                        }
+                        Text("같은 근거는 한 업무에만 연결됩니다. 다른 업무로 확정하면 연결하지 않고 알려 드립니다.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
             Text("근거로 남길 문장 (선택한 원문의 일부)").font(.caption)
             TextEditor(text: $quote).frame(minHeight: 64, maxHeight: 120).accessibilityLabel("업무 근거 문장")
             Picker("연결 방식", selection: $existingID) {

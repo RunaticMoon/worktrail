@@ -205,6 +205,10 @@ struct MeetingTaskReview: Identifiable {
         do {
             segments = try viewedRunID.map { try audio.store.segments(runID: $0) } ?? []
             speakers = try viewedRunID.map { try audio.store.speakers(runID: $0) } ?? []
+            if segmentFilter.restrictSpeaker(to: speakers) {
+                message = "선택한 전사 버전에 없는 화자 필터를 해제했습니다."
+            }
+            if let id = selectedSegmentID, !segments.contains(where: { $0.id == id }) { selectedSegmentID = nil }
         } catch { show(error) }
     }
     @discardableResult func save() -> Bool {

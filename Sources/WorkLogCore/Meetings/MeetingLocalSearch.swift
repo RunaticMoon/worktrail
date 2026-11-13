@@ -30,6 +30,14 @@ public struct MeetingSegmentFilter: Hashable, Sendable {
         (!editedOnly || segment.isUserEdited) && (start == nil || segment.end >= start!) &&
         (end == nil || segment.start <= end!)
     }
+    /// Speaker IDs are per transcript version, so a speaker from another version never matches here.
+    /// Only that criterion is cleared; query, time and status filters stay as they are.
+    @discardableResult
+    public mutating func restrictSpeaker(to speakers: [MeetingSpeaker]) -> Bool {
+        guard let speakerID, !speakers.contains(where: { $0.id == speakerID }) else { return false }
+        self.speakerID = nil
+        return true
+    }
 }
 public final class MeetingLocalSearchService: Sendable {
     public let repo: WorkRepository
@@ -47,11 +55,18 @@ public final class MeetingLocalSearchService: Sendable {
             JOIN meeting_transcript_segment s ON s.run_id = r.id
             WHERE m.deleted_at IS NULL AND COALESCE(s.edited_text,s.original_text) LIKE ? ESCAPE char(92)
             UNION ALL
+            -- Manual versions keep their body in manual_text instead of segments. The active one is already
+            -- covered by meeting.transcript below, so only preserved earlier versions are listed here.
+            SELECT m.id, m.title, r.id, NULL, NULL, r.manual_text
+            FROM meeting m JOIN meeting_transcript_run r ON r.meeting_id = m.id
+            WHERE m.deleted_at IS NULL AND r.manual_text IS NOT NULL
+                AND r.id IS NOT COALESCE(m.active_transcript_run_id, '') AND r.manual_text LIKE ? ESCAPE char(92)
+            UNION ALL
             SELECT m.id, m.title, NULL, NULL, NULL, m.title || char(10) || m.notes || char(10) || m.transcript
             FROM meeting m WHERE m.deleted_at IS NULL AND
                 (m.title LIKE ? ESCAPE char(92) OR m.notes LIKE ? ESCAPE char(92) OR m.transcript LIKE ? ESCAPE char(92))
-            ORDER BY meeting_id, run_id, start LIMIT ? OFFSET ?
-            """, pattern, pattern, pattern, pattern, min(limit, 500), offset)
+            ORDER BY meeting_id, run_id, start, segment_id LIMIT ? OFFSET ?
+            """, pattern, pattern, pattern, pattern, pattern, min(limit, 500), offset)
         return rows.compactMap { row -> MeetingLocalSearchHit? in
             guard let id = row.string("meeting_id"), let title = row.string("title"), let snippet = row.string("snippet") else { return nil }
             let range = snippet.range(of: term, options: .caseInsensitive)

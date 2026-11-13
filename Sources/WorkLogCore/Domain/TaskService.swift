@@ -171,6 +171,15 @@ public final class TaskService: @unchecked Sendable {
                             checklistItemIds: [String] = [], kind: ActivityKind = .progress,
                             links: [String] = []) throws -> Activity {
         _ = try requireTask(taskId)
+        // Scope must belong to this task; a stale selection from another task would misattribute the record.
+        let linkedProjects = Set(try repo.taskProjects(taskId: taskId).map(\.projectId))
+        guard Set(projectIds).isSubset(of: linkedProjects) else {
+            throw WorkLogError.validation("업무에 연결된 프로젝트만 선택할 수 있습니다.")
+        }
+        let items = Set(try repo.checklistItems(taskId: taskId).map(\.id))
+        guard Set(checklistItemIds).isSubset(of: items) else {
+            throw WorkLogError.validation("이 업무의 체크리스트 항목만 선택할 수 있습니다.")
+        }
         let date = resolved(workDate)
         let now = repo.clock.now()
         return try repo.db.transaction {
@@ -291,9 +300,10 @@ public final class TaskService: @unchecked Sendable {
 
     /// 체크리스트 완료/해제. 프로젝트·Task 상태는 바뀌지 않는다.
     public func setChecklistItem(itemId: String, done: Bool, workDate: WorkDate? = nil) throws {
-        guard let item = try repo.checklistItem(id: itemId) else {
+        guard let item = try repo.checklistItem(id: itemId), item.deletedAt == nil else {
             throw WorkLogError.notFound("checklist_item \(itemId)")
         }
+        _ = try requireTask(item.taskId)
         let date = resolved(workDate)
         let kind: DomainEventKind = done ? .completed : .reopened
         let toStatus: TaskStatus = done ? .completed : .planned
