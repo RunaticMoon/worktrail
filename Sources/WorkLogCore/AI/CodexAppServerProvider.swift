@@ -137,6 +137,8 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
     }
 
     public func run(_ input: AIJobInput) async throws -> AIJobOutput {
+        locked { state.activeJobs.insert(input.jobId); state.cancelledJobs.remove(input.jobId) }
+        defer { locked { state.activeJobs.remove(input.jobId); state.cancelledJobs.remove(input.jobId) } }
         let instructions = try ChatGPTSkillInstructions.appending(input.skill, to: input.instructions,
                                                                   blockedPathPrefixes: config.blockedSkillPathPrefixes)
         // Resolve at job start so newly saved preferences apply without restarting.
@@ -147,6 +149,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         } catch {
             throw providerError(error)
         }
+        try throwIfCancelled(input.jobId)
         guard Self.supportsEnvironmentIsolation(locked { state.connectionInfo?.userAgent }) else {
             throw AIProviderError(.protocolMismatch, "안전한 일반 기록 처리를 위해 Codex CLI 0.163.0 이상이 필요합니다. CLI를 업데이트하세요.")
         }
@@ -156,6 +159,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
             let models: [DiscoveredAIModel]
             if let cached { models = cached }
             else { models = (try? await listAvailableModels()) ?? [] }
+            try throwIfCancelled(input.jobId)
             let discovered = AITaskProfiles(profiles: [input.jobType.rawValue: profile], models: models)
             profile = discovered.executionProfile(for: input.jobType)
         }
@@ -170,6 +174,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         let configured = try await send(connection, "config/read", .object([
             "includeLayers": .bool(false), "cwd": .string(jobDirectory.path)
         ]))
+        try throwIfCancelled(input.jobId)
         guard let effective = configured["config"]?.objectValue else {
             throw AIProviderError(.protocolMismatch, "Codex 도구 격리 설정을 확인할 수 없습니다. CLI를 업데이트하세요.")
         }
@@ -198,6 +203,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         } catch {
             throw providerError(error)
         }
+        try throwIfCancelled(input.jobId)
         guard let threadId = threadResult["thread"]?["id"]?.stringValue else {
             throw AIProviderError(.protocolMismatch, "thread/start 응답에 thread.id가 없습니다.")
         }
@@ -206,6 +212,7 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
                                  model: threadResult["model"]?.stringValue ?? model)
         register(context)
         defer { unregister(context) }
+        try throwIfCancelled(input.jobId)
 
         // 2) turn/start — payloadJSON(+선택 스킬 언급)을 텍스트 입력으로 보낸다.
         let text = input.payloadJSON
@@ -225,6 +232,14 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
             let turnResult = try await send(connection, "turn/start", .object(turnParams))
             if let turnId = turnResult["turn"]?["id"]?.stringValue {
                 context.setTurnId(turnId)
+                // A cancel that arrived before the turn id existed could not interrupt the turn.
+                if locked({ state.cancelledJobs.contains(input.jobId) }) {
+                    _ = try? await connection.request(
+                        "turn/interrupt",
+                        params: .object(["threadId": .string(threadId), "turnId": .string(turnId)]),
+                        timeout: config.requestTimeout)
+                    throw AIProviderError(.cancelled, "사용자가 취소했습니다.")
+                }
             }
         } catch {
             // 알림(turn/completed 등)이 먼저 도착해 이미 결과가 있으면 그쪽을 우선한다.
@@ -236,7 +251,14 @@ public final class CodexAppServerProvider: AIProvider, AIModelCatalogProvider, @
         return try await awaitCompletion(context, connection: connection)
     }
 
+    private func throwIfCancelled(_ jobId: String) throws {
+        if locked({ state.cancelledJobs.contains(jobId) }) {
+            throw AIProviderError(.cancelled, "사용자가 취소했습니다.")
+        }
+    }
+
     public func cancel(jobId: String) async {
+        locked { if state.activeJobs.contains(jobId) { state.cancelledJobs.insert(jobId) } }
         guard let context = locked({ state.runByJob[jobId] }),
               let connection = locked({ state.connection }) else { return }
         let turnId = context.turnId
@@ -540,6 +562,9 @@ private final class CodexState: @unchecked Sendable {
     var connectTask: Task<CodexAppServerProvider.CodexConnectionInfo, Error>?
     var runsByThread: [String: CodexRunContext] = [:]
     var runByJob: [String: CodexRunContext] = [:]
+    /// Jobs inside run(), including setup before a thread/turn exists, and the cancels aimed at them.
+    var activeJobs: Set<String> = []
+    var cancelledJobs: Set<String> = []
     var capabilities: AICapabilities?
     var models: [DiscoveredAIModel]?
 
