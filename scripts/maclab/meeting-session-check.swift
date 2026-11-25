@@ -375,6 +375,33 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
             try check(failure.underlying is WorkLogError, "Expected persisted-source validation failure")
         }
         try sourceBytes.write(to: secondURL)
+        // #85: a new-copy import of the same audio keeps the completed refined result reusable (IDs are not part of the identity).
+        let copyService = MeetingArchiveService(repo: environment.repo, audioRoot: session.archive.root)
+        let copyArchive = root.appendingPathComponent("reuse-copy.worklogmeeting")
+        try copyService.export(meetingID: second.id, includeAudio: true, to: copyArchive)
+        let copiedMeetingID = try copyService.restore(copyArchive, duplicatePolicy: .newCopy)
+        let copiedRecording = try session.store.recordings(meetingID: copiedMeetingID).first!
+        try check(copiedRecording.id != secondRecording && (try session.store.tracks(recordingID: copiedRecording.id)).allSatisfy { $0.id != second.id },
+                  "New copy must use fresh recording/track IDs")
+        let copyOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: copiedRecording.id, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly,
+            transcriber: FakeFileTranscriber(copyOrder), speakerEngine: FakeFileDiarizer(copyOrder, fails: false), progress: { _ in })
+        let copySteps = await copyOrder.steps
+        try check(copySteps == ["diarize", "unload-speaker"], "Copied archive must reuse the completed refined result without Whisper")
+        try check(try session.store.runs(meetingID: second.id).filter { $0.stage == .refined }.count == 1, "Original meeting runs must be unchanged")
+        let copiedTracks = try session.store.tracks(recordingID: copiedRecording.id)
+        let copiedURL = try session.archive.resolveTrackURL(relativePath: copiedTracks[0].relativePath)
+        try (sourceBytes + Data([0])).write(to: copiedURL)
+        let copyMismatch = FakeInferenceOrder()
+        do {
+            try await MeetingPostProcessing.run(recordingID: copiedRecording.id, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly,
+                transcriber: FakeFileTranscriber(copyMismatch), speakerEngine: FakeFileDiarizer(copyMismatch, fails: false), progress: { _ in })
+            throw SessionCheckError("Changed copied audio must not reuse a refined result")
+        } catch is MeetingFinalizationFailure { }
+        let copyMismatchSteps = await copyMismatch.steps
+        try check(copyMismatchSteps.isEmpty, "Changed copied audio must fail before inference")
         print("PASS: diarization retry calls no Whisper; changed settings/original SHA256 reject reuse before inference; active transcript unchanged")
         let edited = try session.store.editSegment(id: originalSegment.id, expectedRevision: originalSegment.revision, text: "사용자 검토 수정")
         do {
