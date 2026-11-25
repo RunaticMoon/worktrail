@@ -334,6 +334,8 @@ final class EvidenceQuizTests: XCTestCase {
         let input = try XCTUnwrap(mock.receivedInputs.first)
         XCTAssertFalse(input.instructions.contains("{{maxQuestions}}"))
         XCTAssertTrue(input.instructions.contains("3"))
+        // 한국어 근거 원문 → 한국어 출력 지시가 맨 끝에 붙는다.
+        XCTAssertTrue(input.instructions.hasSuffix(SourceLanguage.korean.outputDirective))
 
         let lowered = input.payloadJSON.lowercased()
         XCTAssertFalse(lowered.contains("vault"))

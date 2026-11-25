@@ -64,7 +64,9 @@ public final class MemoLinkSuggestionService {
         let memo = try requireMemo(memoId)
         let prepared = try prepare(memo: memo)
         let versionId = try resolveTemplateVersionId()
-        let instructions = try templates.composeInstructions(versionId: versionId)
+        // 제안 이유(reason)는 메모 원문의 언어를 따른다.
+        let instructions = SourceLanguage.appendingDirective(
+            to: try templates.composeInstructions(versionId: versionId), sources: [memo.body])
 
         let request = AIJobRequest(jobType: .memoTaskSuggestions,
                                    periodStart: nil, periodEndExclusive: nil,
@@ -251,15 +253,15 @@ public final class MemoLinkSuggestionService {
 
         for suggestion in decoded.suggestions {
             guard suggestion.memoId == memo.id else {
-                warnings.append("다른 Memo에 대한 제안을 무시했습니다.")
+                warnings.append("다른 메모에 대한 제안을 무시했습니다.")
                 continue
             }
             guard seenTaskIds.insert(suggestion.taskId).inserted else {
-                warnings.append("같은 Task에 대한 중복 제안 중 첫 번째만 사용했습니다.")
+                warnings.append("같은 업무에 대한 중복 제안 중 첫 번째만 사용했습니다.")
                 continue
             }
             guard prepared.candidateTaskIds.contains(suggestion.taskId) else {
-                warnings.append("후보 Task가 아닌 제안을 무시했습니다.")
+                warnings.append("후보 업무가 아닌 제안을 무시했습니다.")
                 continue
             }
             let reason = suggestion.reason.trimmingCharacters(in: .whitespacesAndNewlines)

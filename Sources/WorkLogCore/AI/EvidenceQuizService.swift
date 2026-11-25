@@ -91,7 +91,10 @@ public final class EvidenceQuizService: @unchecked Sendable {
     public func generate(facts: ReportFacts) async throws -> QuizResult {
         let excluded = try excludedTopicPairs(facts)
         let payloadJSON = try payload(facts: facts, excludedTopics: excluded)
-        let (versionId, instructions) = try resolveTemplate()
+        let (versionId, template) = try resolveTemplate()
+        // 질문·맥락 문장은 근거 원문과 업무 제목의 언어를 따른다.
+        let instructions = SourceLanguage.appendingDirective(
+            to: template, sources: facts.sources.map(\.text) + facts.tasks.map(\.title))
 
         let request = AIJobRequest(jobType: .evidenceQuiz,
                                    periodStart: facts.range.start,
@@ -222,7 +225,7 @@ public final class EvidenceQuizService: @unchecked Sendable {
             if questions.count >= maxQuestions { break }
 
             guard let task = facts.task(raw.taskId) else {
-                warnings.append("알 수 없는 Task의 질문을 건너뜀")
+                warnings.append("알 수 없는 업무의 질문을 건너뜀")
                 continue
             }
 

@@ -69,7 +69,7 @@ public enum PerformanceValidator {
                         coveredTaskIds.insert(taskId)
                     } else {
                         findings.append(.init(severity: .error, code: "unknown_task",
-                                              message: "입력에 없는 Task입니다: \(taskId)", itemId: itemId))
+                                              message: "입력에 없는 업무입니다: \(taskId)", itemId: itemId))
                     }
                 }
                 for projectId in item.projectIds where !validProjectIds.contains(projectId) {
@@ -135,7 +135,7 @@ public enum PerformanceValidator {
                         stateTaskCounts[taskId] = count
                         if count >= 2 {
                             findings.append(.init(severity: .error, code: "duplicate_task_state",
-                                                  message: "같은 Task의 상태가 여러 건으로 중복됩니다: \(taskId)",
+                                                  message: "같은 업무의 상태가 여러 건으로 중복됩니다: \(taskId)",
                                                   itemId: itemId))
                         }
                     }
@@ -181,9 +181,9 @@ public enum PerformanceValidator {
                    task.completionDatesInRange.isEmpty {
                     var probe = item.text.replacingOccurrences(of: "미완료", with: "")
                     probe = probe.replacingOccurrences(of: "적용 완료", with: "")
-                    if probe.contains("완료") {
+                    if probe.contains("완료") || Self.claimsCompletionInEnglish(item.text) {
                         findings.append(.init(severity: .error, code: "status_misrepresented",
-                                              message: "취소·보류 Task를 완료로 표현했습니다: \(taskId)",
+                                              message: "취소·보류 업무를 완료로 표현했습니다: \(taskId)",
                                               itemId: itemId))
                     }
                 }
@@ -192,14 +192,14 @@ public enum PerformanceValidator {
 
         for missing in draft.missingEvidence where !validTaskIds.contains(missing.taskId) {
             findings.append(.init(severity: .error, code: "unknown_task",
-                                  message: "확인 필요 항목의 Task가 입력에 없습니다: \(missing.taskId)"))
+                                  message: "확인 필요 항목의 업무가 입력에 없습니다: \(missing.taskId)"))
         }
 
         // Task 커버리지
         for task in facts.tasks where !task.activitySourceIds.isEmpty {
             if !coveredTaskIds.contains(task.id) {
                 findings.append(.init(severity: .warning, code: "missing_task_coverage",
-                                      message: "활동 근거가 있는 Task가 리포트에 포함되지 않았습니다: \(task.id)"))
+                                      message: "활동 근거가 있는 업무가 리포트에 포함되지 않았습니다: \(task.id)"))
             }
         }
 
@@ -208,7 +208,23 @@ public enum PerformanceValidator {
 
     // MARK: - 정규식 유틸
 
-    private static let numberPattern = "[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|ms)"
+    /// 영어 출력의 단위도 검사한다. 영문 단위는 더 긴 단어의 앞부분과 겹치지 않게 뒤에 영문자가 없을 때만 맞춘다.
+    private static let numberPattern = "(?i)[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|(?:ms|percent|hours?|hrs?|minutes?|mins?|seconds?|secs?|times|cases?|people|won|krw)(?![a-z]))"
+
+    /// 영어 완료 표현. 앞뒤가 영문자가 아니면 맞춘다("completed로 기록"처럼 한글 조사가 붙어도 잡고,
+    /// "incomplete"·"abandoned" 같은 다른 단어의 일부는 제외한다).
+    private static let englishCompletionPattern = "(?i)(?<![a-z])(?:completed?|done|finished)(?![a-z])"
+    /// "not completed", "not yet fully done"처럼 not 뒤 두 단어 안에 오는 완료 표현은 부정이다.
+    private static let englishNegatedCompletionPattern =
+        "(?i)(?<![a-z])not(?:\\s+[a-z]+){0,2}\\s+(?:completed?|done|finished)(?![a-z])"
+
+    /// 영어 문장에서 완료를 주장하는지. 부정된 완료 표현은 제외한다.
+    static func claimsCompletionInEnglish(_ text: String) -> Bool {
+        guard let negated = try? NSRegularExpression(pattern: englishNegatedCompletionPattern) else { return false }
+        let probe = negated.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+        return !uniqueMatches(englishCompletionPattern, in: probe).isEmpty
+    }
     private static let urlPattern = "https?://[^\\s]+"
 
     private static func uniqueMatches(_ pattern: String, in text: String) -> [String] {

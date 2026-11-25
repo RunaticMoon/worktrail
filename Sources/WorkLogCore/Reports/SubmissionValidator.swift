@@ -50,12 +50,12 @@ public enum SubmissionValidator {
 
                 if item.taskIds.isEmpty {
                     findings.append(ValidationFinding(
-                        severity: .error, code: "missing_task", message: "Task가 지정되지 않았습니다.", itemId: itemId))
+                        severity: .error, code: "missing_task", message: "업무가 지정되지 않았습니다.", itemId: itemId))
                 }
                 for taskId in item.taskIds where !knownTaskIds.contains(taskId) {
                     findings.append(ValidationFinding(
                         severity: .error, code: "unknown_task",
-                        message: "존재하지 않는 Task입니다: \(taskId)", itemId: itemId))
+                        message: "존재하지 않는 업무입니다: \(taskId)", itemId: itemId))
                 }
                 for projectId in item.projectIds where !knownProjectIds.contains(projectId) {
                     findings.append(ValidationFinding(
@@ -95,7 +95,7 @@ public enum SubmissionValidator {
                     for taskId in item.taskIds where !confirmedPlanTaskIds.contains(taskId) {
                         findings.append(ValidationFinding(
                             severity: .error, code: "unconfirmed_plan",
-                            message: "확정 계획에 없는 Task입니다: \(taskId)", itemId: itemId))
+                            message: "확정 계획에 없는 업무입니다: \(taskId)", itemId: itemId))
                     }
                 }
 
@@ -144,7 +144,7 @@ public enum SubmissionValidator {
                 for taskId in item.taskIds where (counts[taskId] ?? 0) > 1 {
                     findings.append(ValidationFinding(
                         severity: .error, code: "duplicate_in_category",
-                        message: "같은 \(category.koreanLabel) 구분에서 Task가 중복됩니다: \(taskId)",
+                        message: "같은 \(category.koreanLabel) 구분에서 업무가 중복됩니다: \(taskId)",
                         itemId: item.itemId))
                 }
             }
@@ -157,7 +157,7 @@ public enum SubmissionValidator {
             if !present {
                 findings.append(ValidationFinding(
                     severity: .warning, code: "missing_reportable",
-                    message: "지난주 보고 대상 Task가 초안에 없습니다: \(task.title)", itemId: nil))
+                    message: "지난주 보고 대상 업무가 초안에 없습니다: \(task.title)", itemId: nil))
             }
         }
 

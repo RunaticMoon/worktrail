@@ -90,6 +90,8 @@ final class MemoLinkSuggestionTests: XCTestCase {
         XCTAssertTrue(input.instructions.hasPrefix(DefaultPrompts.commonInstructions))
         XCTAssertTrue(input.payloadJSON.contains(memo.body))
         XCTAssertEqual(input.jobType, .memoTaskSuggestions)
+        // 제안 이유는 메모 원문 언어를 따른다.
+        XCTAssertTrue(input.instructions.hasSuffix(SourceLanguage.detect(memo.body).outputDirective))
     }
 
     // MARK: 2. 검증 탈락 → warning

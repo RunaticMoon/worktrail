@@ -303,8 +303,11 @@ final class AcceptanceGapTests: XCTestCase {
 
         let template = try XCTUnwrap(try env.templates.preferredTemplate(for: .groundedAnswer))
         let version = try XCTUnwrap(try env.templates.activeVersion(templateId: template.id))
-        let expected = try env.templates.composeInstructions(versionId: version.id)
-            .replacingOccurrences(of: "{{question}}", with: "배포")
+        // 템플릿 원문 + 질문 언어에 맞춘 출력 언어 지시(앱이 붙이는 고정 문장)만 있다.
+        let expected = SourceLanguage.appendingDirective(
+            to: try env.templates.composeInstructions(versionId: version.id)
+                .replacingOccurrences(of: "{{question}}", with: "배포"),
+            sources: ["배포"])
         XCTAssertEqual(input.instructions, expected, "지침은 템플릿 원문 그대로여야 함")
 
         // 민감 출력은 저장되지 않는다(job failed / output_invalid / result_json 없음).

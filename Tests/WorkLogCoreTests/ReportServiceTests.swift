@@ -354,4 +354,23 @@ final class ReportServiceTests: XCTestCase {
         XCTAssertTrue(performanceInput.instructions.contains("제출용 주간보고 형식으로 축약하지 않는다"))
         XCTAssertEqual(performanceInput.jobType, .performanceReport)
     }
+
+    // MARK: - 12. 출력 언어는 원문 언어를 따른다
+
+    func testPromptCarriesSourceLanguageDirective() async throws {
+        let h = try makeHarness()
+        _ = try await h.service.generateSubmission(reportDate: reportDate, mode: .userRequested, useAI: true)
+        let koreanInput = try XCTUnwrap(h.provider.receivedInputs.last)
+        // 언어 지시는 들어가되, 앱 출력 계약과 JSON Schema가 지시문 마지막에 남는다.
+        let directive = try XCTUnwrap(koreanInput.instructions.range(of: SourceLanguage.korean.outputDirective))
+        let contract = try XCTUnwrap(koreanInput.instructions.range(of: "앱 필수 주간보고 계약:"))
+        XCTAssertLessThan(directive.lowerBound, contract.lowerBound)
+
+        let range = DateRange(start: WorkDate("2026-09-28")!, endExclusive: WorkDate("2026-10-05")!)
+        var facts = try h.builder.build(family: .performance, periodType: .weekly, range: range,
+                                        knownAt: h.clock.now())
+        facts.sources = facts.sources.map { var s = $0; s.text = "Investigated the flaky deploy job"; return s }
+        facts.tasks = facts.tasks.map { var t = $0; t.title = "Release pipeline cleanup"; return t }
+        XCTAssertEqual(ReportService.languageDirective(for: facts), SourceLanguage.english.outputDirective)
+    }
 }

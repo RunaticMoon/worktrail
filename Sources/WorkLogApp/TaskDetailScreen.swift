@@ -276,7 +276,7 @@ import WorkLogCore
             .focusable()
             .worklogKeyboardActivation { model.cancelCompletion() }
             .worklogHelp("전체 완료를 취소하고 작성 중인 내용으로 돌아가기", keys: "Esc")
-        Button("남겨두고 Task 전체 완료") { model.complete(confirmRemaining: true) }
+        Button("남겨두고 업무 전체 완료") { model.complete(confirmRemaining: true) }
             .buttonStyle(.borderedProminent)
             .focusable()
             .worklogKeyboardActivation { model.complete(confirmRemaining: true) }
@@ -284,7 +284,7 @@ import WorkLogCore
 
     @ViewBuilder private func taskStatus(_ detail: TaskDetail) -> some View {
         HStack(spacing: 8) {
-            Text("Task 전체 상태").font(.callout).foregroundStyle(WorkLogTheme.muted)
+            Text("업무 전체 상태").font(.callout).foregroundStyle(WorkLogTheme.muted)
             if let status = detail.status { TaskStatusBadge(status: status) }
             else { Text("상태 없음").font(.callout) }
         }
@@ -303,11 +303,11 @@ import WorkLogCore
             .buttonStyle(.borderedProminent)
             .focusable().focused($actionsFocused)
             .worklogKeyboardActivation { activityFocused = true }
-        Button("Task 전체 완료") { model.complete() }
+        Button("업무 전체 완료") { model.complete() }
             .focusable()
             .worklogKeyboardActivation { model.complete() }
             .disabled(detail.status == .completed)
-            .worklogHelp("Task 전체 완료. 체크리스트·프로젝트 상태는 별도입니다")
+            .worklogHelp("업무 전체 완료. 체크리스트·프로젝트 상태는 별도입니다")
     }
 
     private var hasMarkedText: Bool {
@@ -337,7 +337,7 @@ import WorkLogCore
                     .worklogKeyboardActivation { model.changeStatus(.replanned) }
             }
             if detail.status != .cancelled {
-                Button("Task 취소") { model.changeStatus(.cancelled) }.focusable()
+                Button("업무 취소") { model.changeStatus(.cancelled) }.focusable()
                     .worklogKeyboardActivation { model.changeStatus(.cancelled) }
             }
         }
@@ -429,7 +429,7 @@ import WorkLogCore
                         .disabled(model.checklistText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("task-detail-checklist-add")
                 }
-                Text("체크리스트를 모두 체크해도 Task 전체 상태는 바뀌지 않습니다.")
+                Text("체크리스트를 모두 체크해도 업무 전체 상태는 바뀌지 않습니다.")
                     .font(.callout).foregroundStyle(WorkLogTheme.muted)
             }
         }.padding(.top, 8)
