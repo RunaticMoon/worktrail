@@ -182,7 +182,7 @@ import WorkLogCore
             let failures = coordinator.start(capture: settings.captureHotkey, search: settings.searchHotkey)
             if !failures.isEmpty {
                 AppDiagnostics.shared.record(.operationFailed, category: .settings, level: .warning, fields: [.itemCount: .integer(failures.count)])
-                notice = failures.joined(separator: "\n")
+                notice = [notice, failures.joined(separator: "\n")].compactMap { $0 }.joined(separator: "\n")
             }
             // Scheduled AI reports read the API key without a dialog; give the launch approval a
             // bounded head start so an unanswered dialog cannot hold back reports indefinitely.
@@ -847,9 +847,13 @@ import WorkLogCore
             includeVault: includeVault, clock: options.clock)
         AppDiagnostics.shared.record(restored ? .operationSucceeded : .operationFailed, category: .backup, level: restored ? .info : .error)
         isRestoring = false; didStart = false; startupError = nil
+        notice = nil // only notices raised by the reopened stores' start() may be merged below
         await start()
         route = .backups
-        if restored { notice = "백업 복원을 완료하고 저장소를 다시 열었습니다." }
+        if restored {
+            // Keep any launch warning that start() just raised for the reopened stores.
+            notice = ["백업 복원을 완료하고 저장소를 다시 열었습니다.", notice].compactMap { $0 }.joined(separator: "\n")
+        }
         else {
             notice = model.message
             if let current = backups {
