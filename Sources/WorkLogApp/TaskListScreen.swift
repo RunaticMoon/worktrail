@@ -51,7 +51,7 @@ import WorkLogCore
             if let error = model.errorMessage {
                 RecoveryNotice(failed: error, preserved: "저장된 업무와 검색어는 그대로입니다.", retry: { model.load() })
             } else if model.rows.isEmpty {
-                StateView(kind: .empty, title: "첫 업무를 기록하세요", detail: "빠른 입력의 Task 유형에서 업무를 등록할 수 있습니다.",
+                StateView(kind: .empty, title: "첫 업무를 기록하세요", detail: "빠른 입력의 업무 유형에서 업무를 등록할 수 있습니다.",
                     actionTitle: "새 업무 ⌘N", action: onCapture)
             } else if results.rows.isEmpty {
                 StateView(kind: .noResults, title: "일치하는 업무가 없습니다", detail: "검색어·프로젝트·실행·상태 조건을 확인하세요.",

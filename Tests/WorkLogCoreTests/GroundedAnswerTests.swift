@@ -103,6 +103,8 @@ final class GroundedAnswerTests: XCTestCase {
         XCTAssertEqual(input.jobType, .groundedAnswer)
         XCTAssertFalse(input.instructions.contains("{{question}}"))
         XCTAssertTrue(input.instructions.contains("배포"))
+        // 답변 언어는 질문 언어를 따른다.
+        XCTAssertTrue(input.instructions.hasSuffix(SourceLanguage.korean.outputDirective))
 
         let payload = try StableJSON.decode(DecodedPayload.self, from: input.payloadJSON)
         XCTAssertEqual(payload.jobType, "grounded_answer")

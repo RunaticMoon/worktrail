@@ -194,8 +194,10 @@ public final class GroundedAnswerService {
         guard let template = try resolvedTemplate() else {
             throw WorkLogError.storage("기록 기반 답변 템플릿을 찾을 수 없습니다.")
         }
-        let instructions = template.instructions
-            .replacingOccurrences(of: "{{question}}", with: trimmed)
+        // 답변은 질문의 언어를 따른다(저장된 예전 템플릿의 "한국어로 작성" 지시보다 우선).
+        let instructions = SourceLanguage.appendingDirective(
+            to: template.instructions.replacingOccurrences(of: "{{question}}", with: trimmed),
+            sources: [trimmed])
         let request = AIJobRequest(jobType: .groundedAnswer, instructions: instructions,
                                    payloadJSON: payload, templateVersionId: template.versionId,
                                    regenerationNonce: nil)

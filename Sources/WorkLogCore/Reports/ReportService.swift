@@ -191,8 +191,8 @@ public final class ReportService {
         }
 
         let jobType: AIJobType = facts.family == .submission ? .submissionWeekly : .performanceReport
-        let instructions = substitutePlaceholders(
-            try templates.composeInstructions(versionId: version.id), facts: facts)
+        let instructions = Self.addingLanguageDirective(to: substitutePlaceholders(
+            try templates.composeInstructions(versionId: version.id), facts: facts), facts: facts)
         // 실행 시각(generatedAt·knownAt)은 내용이 아니므로 payload에서 고정값으로 둔다.
         // 그래야 같은 원본의 자동 재시도가 같은 idempotency key를 써서 재시도 한도가 적용된다.
         var payloadFacts = facts
@@ -389,6 +389,20 @@ public final class ReportService {
         case .performance:
             return facts.periodType == .daily ? .performanceDaily : .performancePeriodic
         }
+    }
+
+    /// 메모·진행 기록(sources)과 업무 제목의 주된 언어에 맞춘 출력 언어 지시.
+    static func languageDirective(for facts: ReportFacts) -> String {
+        sourceLanguage(for: facts).outputDirective
+    }
+
+    static func addingLanguageDirective(to instructions: String, facts: ReportFacts) -> String {
+        SourceLanguage.appendingDirective(to: instructions,
+                                          sources: facts.sources.map(\.text) + facts.tasks.map(\.title))
+    }
+
+    private static func sourceLanguage(for facts: ReportFacts) -> SourceLanguage {
+        SourceLanguage.detect(facts.sources.map(\.text) + facts.tasks.map(\.title))
     }
 
     /// 있는 플레이스홀더만 치환한다. 날짜는 WorkDate.iso, 상태 기준 시각은 ISO8601.

@@ -69,7 +69,7 @@ public enum PerformanceValidator {
                         coveredTaskIds.insert(taskId)
                     } else {
                         findings.append(.init(severity: .error, code: "unknown_task",
-                                              message: "입력에 없는 Task입니다: \(taskId)", itemId: itemId))
+                                              message: "입력에 없는 업무입니다: \(taskId)", itemId: itemId))
                     }
                 }
                 for projectId in item.projectIds where !validProjectIds.contains(projectId) {
@@ -135,7 +135,7 @@ public enum PerformanceValidator {
                         stateTaskCounts[taskId] = count
                         if count >= 2 {
                             findings.append(.init(severity: .error, code: "duplicate_task_state",
-                                                  message: "같은 Task의 상태가 여러 건으로 중복됩니다: \(taskId)",
+                                                  message: "같은 업무의 상태가 여러 건으로 중복됩니다: \(taskId)",
                                                   itemId: itemId))
                         }
                     }
@@ -183,7 +183,7 @@ public enum PerformanceValidator {
                     probe = probe.replacingOccurrences(of: "적용 완료", with: "")
                     if probe.contains("완료") {
                         findings.append(.init(severity: .error, code: "status_misrepresented",
-                                              message: "취소·보류 Task를 완료로 표현했습니다: \(taskId)",
+                                              message: "취소·보류 업무를 완료로 표현했습니다: \(taskId)",
                                               itemId: itemId))
                     }
                 }
@@ -192,14 +192,14 @@ public enum PerformanceValidator {
 
         for missing in draft.missingEvidence where !validTaskIds.contains(missing.taskId) {
             findings.append(.init(severity: .error, code: "unknown_task",
-                                  message: "확인 필요 항목의 Task가 입력에 없습니다: \(missing.taskId)"))
+                                  message: "확인 필요 항목의 업무가 입력에 없습니다: \(missing.taskId)"))
         }
 
         // Task 커버리지
         for task in facts.tasks where !task.activitySourceIds.isEmpty {
             if !coveredTaskIds.contains(task.id) {
                 findings.append(.init(severity: .warning, code: "missing_task_coverage",
-                                      message: "활동 근거가 있는 Task가 리포트에 포함되지 않았습니다: \(task.id)"))
+                                      message: "활동 근거가 있는 업무가 리포트에 포함되지 않았습니다: \(task.id)"))
             }
         }
 

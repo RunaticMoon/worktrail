@@ -42,7 +42,7 @@ public enum StatusRules {
         // 상태를 정하지 않는 사건: 상태 불변.
         if !kind.isStatusEvent {
             if scopeType == .task && from == nil {
-                return .failure("생성 전 사건: Task가 생성되기 전에는 \(kind.rawValue) 사건을 기록할 수 없습니다.")
+                return .failure("생성 전 사건: 업무가 생성되기 전에는 \(kind.rawValue) 사건을 기록할 수 없습니다.")
             }
             return .success(from)
         }
@@ -51,13 +51,13 @@ public enum StatusRules {
         case .task:
             if let current = from {
                 if kind == .created {
-                    return .failure("Task가 이미 생성되어 created 사건을 다시 적용할 수 없습니다.")
+                    return .failure("업무가 이미 생성되어 created 사건을 다시 적용할 수 없습니다.")
                 }
-                return transition(from: current, kind: kind, toStatus: toStatus, label: "Task")
+                return transition(from: current, kind: kind, toStatus: toStatus, label: "업무")
             }
             // 아직 상태가 없다 → 첫 사건은 반드시 created.
             guard kind == .created else {
-                return .failure("생성 전 사건: Task의 첫 상태 사건은 created여야 합니다.")
+                return .failure("생성 전 사건: 업무의 첫 상태 사건은 created여야 합니다.")
             }
             guard let to = toStatus else {
                 return .failure("created 사건에는 상태가 필요합니다.")

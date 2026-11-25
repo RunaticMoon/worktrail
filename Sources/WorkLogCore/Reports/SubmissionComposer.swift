@@ -134,7 +134,7 @@ public enum SubmissionComposer {
                     order: index
                 ))
             } else {
-                warnings.append("계획 Task 정보 없음: \(taskId)")
+                warnings.append("계획 업무 정보 없음: \(taskId)")
                 guard !explicitLabels.isEmpty else { continue }
                 lines.append(SubmissionLine(
                     category: .planned,

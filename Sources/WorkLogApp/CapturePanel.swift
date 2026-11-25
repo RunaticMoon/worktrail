@@ -1050,7 +1050,7 @@ extension View {
             }
             .fixedSize().disabled(model.isSubmitting)
             .captureFocus("targetStatus", order: 410)
-            .worklogHelp("Task 전체 상태 선택", keys: "⌥1–5")
+            .worklogHelp("업무 전체 상태 선택", keys: "⌥1–5")
             Text("프로젝트별 상태와 체크리스트는 따로 유지됩니다.")
                 .font(.caption).foregroundStyle(WorkLogTheme.muted)
         }
