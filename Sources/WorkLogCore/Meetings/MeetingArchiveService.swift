@@ -131,8 +131,8 @@ public final class MeetingArchiveService: @unchecked Sendable {
         try fm.moveItem(at: temporary, to: destination)
     }
 
-    public func inspect(_ archive: URL) throws -> MeetingArchivePreview {
-        let (manifest, _) = try verified(archive)
+    public func inspect(_ archive: URL, checkCancellation: () throws -> Void = {}) throws -> MeetingArchivePreview {
+        let (manifest, _) = try verified(archive, checkCancellation: checkCancellation)
         let audio = manifest.entries.filter { $0.trackID != nil }
         return MeetingArchivePreview(title: manifest.title, audioFileCount: audio.count,
             audioBytes: audio.reduce(0) { $0 + $1.size }, missingTrackCount: manifest.missingTrackIDs.count,
@@ -143,7 +143,7 @@ public final class MeetingArchiveService: @unchecked Sendable {
     /// files and rolls back every inserted row. Existing rows/files are never replaced.
     @discardableResult public func restore(_ archive: URL, duplicatePolicy: MeetingArchiveDuplicatePolicy,
                                             checkCancellation: () throws -> Void = {}) throws -> String {
-        let (manifest, original) = try verified(archive)
+        let (manifest, original) = try verified(archive, checkCancellation: checkCancellation)
         if duplicatePolicy == .reject,
            try repo.db.scalarIntV("SELECT COUNT(*) FROM meeting WHERE id = ?", manifest.meetingID) > 0 {
             throw failure("같은 회의가 이미 있습니다. 새 복사본으로 가져오기를 선택하세요.")
@@ -264,7 +264,7 @@ public final class MeetingArchiveService: @unchecked Sendable {
         }
     }
 
-    private func verified(_ archive: URL) throws -> (ArchiveManifest, ArchivePayload) {
+    private func verified(_ archive: URL, checkCancellation: () throws -> Void = {}) throws -> (ArchiveManifest, ArchivePayload) {
         let manifestURL = try safeFile(root: archive, path: "manifest.json", mustExist: true)
         guard try size(manifestURL) < 2 * 1024 * 1024 else { throw failure("아카이브 목록이 너무 큽니다.") }
         let manifest = try StableJSON.decode(ArchiveManifest.self, from: Data(contentsOf: manifestURL))
@@ -273,10 +273,11 @@ public final class MeetingArchiveService: @unchecked Sendable {
               manifest.entries.filter({ $0.path == "records.json" && $0.trackID == nil }).count == 1 else { throw failure("지원하지 않거나 손상된 아카이브입니다.") }
         var total: Int64 = 0
         for entry in manifest.entries {
+            try checkCancellation()
             guard entry.size >= 0, entry.size <= Self.maxArchiveBytes - total else { throw failure("아카이브 용량 제한을 넘습니다.") }
             total += entry.size
             let url = try safeFile(root: archive, path: entry.path, mustExist: true)
-            let actual = try fileEntry(url, path: entry.path, trackID: entry.trackID)
+            let actual = try fileEntry(url, path: entry.path, trackID: entry.trackID, checkCancellation: checkCancellation)
             guard actual.size == entry.size, actual.sha256 == entry.sha256 else { throw failure("파일 크기 또는 SHA-256이 일치하지 않습니다.") }
         }
         let recordsURL = archive.appendingPathComponent("records.json")
@@ -423,10 +424,15 @@ public final class MeetingArchiveService: @unchecked Sendable {
         guard bytes <= Self.maxArchiveBytes, try availableBytes(url) >= bytes + 1024 * 1024 else { throw failure("저장 공간이 부족합니다. 기존 데이터는 유지됩니다.") }
     }
     private func size(_ url: URL) throws -> Int64 { (try fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0 }
-    private func fileEntry(_ url: URL, path: String, trackID: String?) throws -> ArchiveEntry {
+    private func fileEntry(_ url: URL, path: String, trackID: String?, checkCancellation: () throws -> Void = {}) throws -> ArchiveEntry {
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
         var digest = SHA256(); var length: Int64 = 0
-        while let block = try handle.read(upToCount: 1024 * 1024), !block.isEmpty { digest.update(data: block); length += Int64(block.count) }
+        // Cancellation is checked between 1 MiB blocks so a large original never delays cancel/close.
+        while true {
+            try checkCancellation()
+            guard let block = try handle.read(upToCount: 1024 * 1024), !block.isEmpty else { break }
+            digest.update(data: block); length += Int64(block.count)
+        }
         return ArchiveEntry(path: path, size: length, sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(), trackID: trackID)
     }
     private func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }

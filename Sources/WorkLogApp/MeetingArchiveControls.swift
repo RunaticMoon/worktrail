@@ -24,6 +24,7 @@ private struct MeetingArchiveSheet: View {
     @State private var busy = false
     @State private var message: String?
     @State private var worker: Task<String?, Error>?
+    @State private var previewWorker: Task<MeetingArchivePreview, Error>?
     private var service: MeetingArchiveService {
         MeetingArchiveService(repo: model.audio.store.repo, audioRoot: model.audio.archive.root)
     }
@@ -61,14 +62,14 @@ private struct MeetingArchiveSheet: View {
             .disabled(busy)
             if let message { Text(message).font(.callout).fixedSize(horizontal: false, vertical: true) }
             HStack {
-                if busy { ProgressView().controlSize(.small); Text("로컬 파일 처리 중…"); Button("작업 취소") { worker?.cancel() }.disabled(worker == nil) }
+                if busy { ProgressView().controlSize(.small); Text("로컬 파일 처리 중…"); Button("작업 취소") { worker?.cancel(); previewWorker?.cancel() }.disabled(worker == nil && previewWorker == nil) }
                 Spacer()
                 Button("닫기") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
             }
         }
         .padding(24).frame(width: 540)
         .interactiveDismissDisabled(busy)
-        .onDisappear { worker?.cancel() }
+        .onDisappear { worker?.cancel(); previewWorker?.cancel() }
     }
     private func previewLabel(_ preview: MeetingArchivePreview) -> some View {
         Text("\(preview.includesAudio ? "원본 포함" : "텍스트만") · 음성 \(preview.audioFileCount)개 · \(ByteCountFormatter.string(fromByteCount: preview.audioBytes, countStyle: .file)) · 미포함/누락 원본 \(preview.missingTrackCount)개")
@@ -107,12 +108,16 @@ private struct MeetingArchiveSheet: View {
             guard result == .OK, let url = panel.url else { return }
             busy = true; message = nil; importPreview = nil; importURL = nil
             let service = service
+            // Track the preview so cancel/close can interrupt the full-file SHA-256 verification.
+            let task = Task.detached { try service.inspect(url) { try Task.checkCancellation() } }
+            previewWorker = task
             Task {
                 do {
-                    importPreview = try await Task.detached { try service.inspect(url) }.value
+                    importPreview = try await task.value
                     importURL = url
-                } catch { message = error.localizedDescription }
-                busy = false
+                } catch is CancellationError { message = "취소했습니다. 다른 아카이브를 선택할 수 있습니다." }
+                catch { message = error.localizedDescription }
+                previewWorker = nil; busy = false
             }
         }
     }
