@@ -277,6 +277,7 @@ import WorkLogCore
             .multilineTextAlignment(.leading).contentShape(Rectangle())
         }
         .buttonStyle(.plain).focusable(false)
+        .help([presentation.headline, presentation.subtitle].compactMap { $0 }.joined(separator: "\n"))
         .accessibilityLabel("\(presentation.sourceName) 활동, \(presentation.headline)" + (presentation.subtitle.map { ", \($0)" } ?? ""))
         .accessibilityValue(selectedRows[region] == rowID ? "선택됨" : "")
         .accessibilityHint("Return으로 수집 활동 상세 열기")

@@ -1750,7 +1750,7 @@ extension View {
             }
         }
     }
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CaptureTextEditor
         weak var editor: CaptureNSTextView?
         private let draftUndoManager = UndoManager()

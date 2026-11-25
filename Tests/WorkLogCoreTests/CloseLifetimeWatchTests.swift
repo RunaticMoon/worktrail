@@ -21,8 +21,8 @@ final class CloseLifetimeWatchTests: XCTestCase {
     func testTracksAliveSlotsInRegistrationOrder() {
         let first: Holder? = Holder()
         let second: Holder? = Holder()
-        weak var weakFirst = first
-        weak var weakSecond = second
+        weak let weakFirst = first
+        weak let weakSecond = second
         var watch = CloseLifetimeWatch()
         watch.track("environment") { weakFirst != nil }
         watch.track("day") { weakSecond != nil }
@@ -37,8 +37,8 @@ final class CloseLifetimeWatchTests: XCTestCase {
     func testReportsOnlySurvivingSlots() {
         var environment: Holder? = Holder()
         var day: Holder? = Holder()
-        weak var weakEnvironment = environment
-        weak var weakDay = day
+        weak let weakEnvironment = environment
+        weak let weakDay = day
         var watch = CloseLifetimeWatch()
         watch.track("environment") { weakEnvironment != nil }
         watch.track("day") { weakDay != nil }
@@ -58,8 +58,8 @@ final class CloseLifetimeWatchTests: XCTestCase {
     func testMaskUsesSlotIndexAsBitPosition() {
         let kept: Holder? = Holder()
         var released: Holder? = Holder()
-        weak var weakKept = kept
-        weak var weakReleased = released
+        weak let weakKept = kept
+        weak let weakReleased = released
         var watch = CloseLifetimeWatch()
         watch.track("zero") { weakReleased != nil }
         watch.track("one") { weakKept != nil }
@@ -71,7 +71,7 @@ final class CloseLifetimeWatchTests: XCTestCase {
 
     func testTrackingDoesNotExtendLifetime() {
         var holder: Holder? = Holder()
-        weak var weakHolder = holder
+        weak let weakHolder = holder
         var watch = CloseLifetimeWatch()
         watch.track("holder") { weakHolder != nil }
 
