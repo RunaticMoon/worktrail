@@ -468,6 +468,38 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         catch is MeetingAudioArchiveError { }
         print("PASS: restored import-folder PCM reprocesses and loads playback; symlink/path escape rejected")
 
+        // #84: a DB-owned imported file that went missing returns to available only when the exact valid file is restored.
+        let revivalRecording = try session.store.createRecording(meetingID: importedMeeting.id)
+        let revivalURL = importedFolder.appendingPathComponent("track-3.caf")
+        try sourceBytes.write(to: revivalURL)
+        let revivalTrack = try session.store.addTrack(recordingID: revivalRecording.id, kind: .imported,
+            relativePath: "import-fixture-safe/track-3.caf", sampleRate: 48_000, channels: 1)
+        _ = try session.store.updateTrack(id: revivalTrack.id, expectedRevision: revivalTrack.revision, fileState: .available, duration: 0.2)
+        let held = root.appendingPathComponent("held-track-3.caf")
+        func relaunch() async throws -> MeetingAudioTrack {
+            let relaunched = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+            try await waitUntil("relaunch recovery", { !relaunched.isRecovering })
+            _ = await relaunched.shutdown()
+            return try session.store.track(id: revivalTrack.id)!
+        }
+        try FileManager.default.moveItem(at: revivalURL, to: held)
+        let stateMissing1 = try await relaunch().fileState; try check(stateMissing1 == .missing, "Missing imported file must become missing")
+        try Data("not audio".utf8).write(to: revivalURL)
+        let stateMissing2 = try await relaunch().fileState; try check(stateMissing2 == .missing, "Unreadable replacement must stay missing")
+        try FileManager.default.removeItem(at: revivalURL)
+        try FileManager.default.createSymbolicLink(at: revivalURL, withDestinationURL: held)
+        let stateMissing3 = try await relaunch().fileState; try check(stateMissing3 == .missing, "Symlink replacement must stay missing")
+        try FileManager.default.removeItem(at: revivalURL)
+        try FileManager.default.moveItem(at: held, to: revivalURL)
+        let revived = try await relaunch()
+        try check(revived.fileState == .available && revived.id == revivalTrack.id && revived.duration == 0.2,
+                  "Restoring the exact valid file must revive the same track")
+        try check(try session.store.tracks(recordingID: revivalRecording.id).count == 1, "Revival must not create a duplicate track")
+        _ = try session.store.updateTrack(id: revived.id, expectedRevision: revived.revision, fileState: .deleted)
+        let state_deleted = try await relaunch().fileState; try check(state_deleted == .deleted, "An explicitly deleted original must never be revived by an existing file")
+        try FileManager.default.removeItem(at: revivalURL)
+        print("PASS: restored imported original revives the same missing track; other/corrupt/symlink/deleted files do not")
+
         let siblingRecording = try session.store.createRecording(meetingID: importedMeeting.id)
         let siblingURL = importedFolder.appendingPathComponent("track-2.caf")
         try sourceBytes.write(to: siblingURL)

@@ -1,4 +1,5 @@
 #if os(macOS)
+import AVFoundation
 import Darwin
 import Foundation
 import WorkLogCore
@@ -11,6 +12,22 @@ struct MeetingImportedAudioArchive {
 
     static func owns(_ track: MeetingAudioTrack) -> Bool {
         track.relativePath.split(separator: "/", omittingEmptySubsequences: false).first?.hasPrefix("import-") == true
+    }
+
+    /// A missing imported track may become available again only when the file at its exact DB-owned path
+    /// passes the same path/regular-file checks as playback and still matches the track's recorded audio format
+    /// and duration. Anything else (other format, unreadable, symlink, directory, escape) stays missing.
+    func restoredFileMatches(_ track: MeetingAudioTrack) -> Bool {
+        guard Self.owns(track), track.fileState == .missing,
+              let url = try? archive.resolveTrackURL(relativePath: track.relativePath),
+              let file = try? AVAudioFile(forReading: url) else { return false }
+        let format = file.processingFormat
+        guard format.sampleRate == track.sampleRate, Int(format.channelCount) == track.channels, file.length > 0 else { return false }
+        if let expected = track.duration {
+            let actual = Double(file.length) / format.sampleRate
+            guard abs(actual - expected) <= max(0.5, expected * 0.01) else { return false }
+        }
+        return true
     }
 
     func delete(recordingID: String, tracks: [MeetingAudioTrack]) throws {

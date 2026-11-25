@@ -464,6 +464,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                         let url = archive.root.appendingPathComponent(track.relativePath)
                         if !FileManager.default.fileExists(atPath: url.path) {
                             _ = try store.updateTrack(id: track.id, expectedRevision: track.revision, fileState: .missing)
+                        } else if track.fileState == .missing,
+                                  MeetingImportedAudioArchive(archive: archive, ids: ids).restoredFileMatches(track) {
+                            // A restored DB-owned imported file returns to the same track (never a deleted one).
+                            _ = try store.updateTrack(id: track.id, expectedRevision: track.revision, fileState: .available)
                         }
                     }
                 }
