@@ -14,9 +14,10 @@ public enum SourceLanguage: String, Sendable, Hashable {
     /// 영어 메모에 한글 단어가 섞이는 일은 드물다. 그래서 한글 단어 하나에 더 큰 무게를 준다.
     static let koreanWordWeight = 3
 
-    /// scheme://… 또는 www.… 형태의 URL. 공백·괄호·꺾쇠에서 끝난다(Markdown 링크의 닫는 괄호 포함).
+    /// scheme://… 또는 www.… 형태의 URL(IPv6 [호스트] 포함). 공백·괄호·꺾쇠에서 끝난다.
+    /// Markdown 링크 `[표시](url)`의 닫는 괄호에서 끊기 위해 괄호가 든 URL 경로는 거기서 잘린다.
     private static let urlRegex = try! NSRegularExpression(
-        pattern: "(?i)(?:[a-z][a-z0-9+.-]*://|www\\.)[^\\s()<>\\[\\]]+")
+        pattern: "(?i)(?:[a-z][a-z0-9+.-]*://|www\\.)(?:\\[[0-9a-f:.]+\\])?[^\\s()<>\\[\\]]*")
 
     /// 여러 원문을 합쳐 한글이 들어간 단어와 영문만으로 된 단어 수를 비교한다.
     /// 숫자·기호·URL 조각처럼 글자가 없는 토큰은 세지 않는다.

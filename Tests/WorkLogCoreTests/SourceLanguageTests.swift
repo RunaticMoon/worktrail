@@ -20,6 +20,7 @@ final class SourceLanguageTests: XCTestCase {
         XCTAssertEqual(SourceLanguage.detect("API [배포](https://example.com/deploy/pipeline)"), .korean)
         XCTAssertEqual(SourceLanguage.detect("[Deployment notes](https://example.com/배포)"), .english)
         XCTAssertEqual(SourceLanguage.detect("https://example.com/설명을 참고"), .korean)
+        XCTAssertEqual(SourceLanguage.detect("https://[2001:db8::1]/api/deploy/status 확인"), .korean)
     }
 
     func testAppendingDirectivePutsLanguageLast() {

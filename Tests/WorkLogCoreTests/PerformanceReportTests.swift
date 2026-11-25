@@ -402,6 +402,12 @@ final class PerformanceReportTests: XCTestCase {
         XCTAssertTrue(stateCodes("Migration is done").contains("status_misrepresented"))
         XCTAssertFalse(stateCodes("On hold; not completed yet").contains("status_misrepresented"))
         XCTAssertFalse(stateCodes("Moved to on hold, work incomplete").contains("status_misrepresented"))
+        XCTAssertFalse(stateCodes("On hold; not fully completed").contains("status_misrepresented"))
+        XCTAssertFalse(stateCodes("On hold until completion of the vendor review").contains("status_misrepresented"))
+        XCTAssertFalse(stateCodes("Abandoned the old approach").contains("status_misrepresented"))
+        // 한글 조사가 붙은 영어 완료 표현도 잡는다.
+        XCTAssertTrue(stateCodes("업무를 completed로 기록").contains("status_misrepresented"))
+        XCTAssertTrue(stateCodes("done으로 전환").contains("status_misrepresented"))
     }
 
     func testUnverifiedEnglishNumbers() {
@@ -414,6 +420,14 @@ final class PerformanceReportTests: XCTestCase {
                                      sections: [PerformanceSection(heading: "H", projectIds: [], items: [item])])
         let numbers = PerformanceValidator.validate(draft, facts: input).filter { $0.code == "unverified_number" }
         XCTAssertEqual(numbers.count, 2)
+
+        // 기존 한국어·% 단위는 그대로 잡는다("40%p"의 40%도 포함).
+        let koreanItem = PerformanceItem(itemId: "item-2", taskIds: [], projectIds: [], kind: .activity,
+                                         text: "오류 40%p 감소, 3시간 절감", evidenceIds: ["activity:a1"])
+        let koreanDraft = PerformanceDraft(periodType: .weekly, title: "x",
+                                           sections: [PerformanceSection(heading: "H", projectIds: [], items: [koreanItem])])
+        XCTAssertEqual(PerformanceValidator.validate(koreanDraft, facts: input)
+            .filter { $0.code == "unverified_number" }.count, 2)
     }
 
     // MARK: - 9. render

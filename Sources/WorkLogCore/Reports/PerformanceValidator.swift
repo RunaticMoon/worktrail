@@ -209,16 +209,21 @@ public enum PerformanceValidator {
     // MARK: - 정규식 유틸
 
     /// 영어 출력의 단위도 검사한다. 영문 단위는 더 긴 단어의 앞부분과 겹치지 않게 뒤에 영문자가 없을 때만 맞춘다.
-    private static let numberPattern = "(?i)[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|ms|percent|hours?|hrs?|minutes?|mins?|seconds?|secs?|times|cases?|people|won|krw)(?![a-z])"
+    private static let numberPattern = "(?i)[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|(?:ms|percent|hours?|hrs?|minutes?|mins?|seconds?|secs?|times|cases?|people|won|krw)(?![a-z]))"
 
-    /// 영어 문장에서 완료를 주장하는지. "not completed", "incomplete" 같은 부정은 제외한다.
+    /// 영어 완료 표현. 앞뒤가 영문자가 아니면 맞춘다("completed로 기록"처럼 한글 조사가 붙어도 잡고,
+    /// "incomplete"·"abandoned" 같은 다른 단어의 일부는 제외한다).
+    private static let englishCompletionPattern = "(?i)(?<![a-z])(?:completed?|done|finished)(?![a-z])"
+    /// "not completed", "not yet fully done"처럼 not 뒤 두 단어 안에 오는 완료 표현은 부정이다.
+    private static let englishNegatedCompletionPattern =
+        "(?i)(?<![a-z])not(?:\\s+[a-z]+){0,2}\\s+(?:completed?|done|finished)(?![a-z])"
+
+    /// 영어 문장에서 완료를 주장하는지. 부정된 완료 표현은 제외한다.
     static func claimsCompletionInEnglish(_ text: String) -> Bool {
-        var probe = text.lowercased()
-        for negation in ["not yet completed", "not yet complete", "not yet done", "not yet finished",
-                         "not completed", "not complete", "not done", "not finished"] {
-            probe = probe.replacingOccurrences(of: negation, with: "")
-        }
-        return !uniqueMatches("\\b(completed?|completion|done|finished)\\b", in: probe).isEmpty
+        guard let negated = try? NSRegularExpression(pattern: englishNegatedCompletionPattern) else { return false }
+        let probe = negated.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+        return !uniqueMatches(englishCompletionPattern, in: probe).isEmpty
     }
     private static let urlPattern = "https?://[^\\s]+"
 
