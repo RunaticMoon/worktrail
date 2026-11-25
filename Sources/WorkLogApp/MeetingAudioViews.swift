@@ -406,8 +406,13 @@ struct MeetingTranscriptVersionsView: View {
                 }.frame(maxWidth: 100)
                 Text(meetingDuration(model.audio.playbackPosition)).monospacedDigit()
             }
-            Slider(value: Binding(get: { model.audio.playbackPosition }, set: { model.audio.seekPlayback(to: $0) }),
-                   in: 0...max(1, model.audio.playbackDuration)).accessibilityLabel("원본 재생 위치")
+            if let range = model.audio.playbackRange, range.upperBound > range.lowerBound {
+                Slider(value: Binding(get: { min(max(model.audio.playbackPosition, range.lowerBound), range.upperBound) },
+                                      set: { model.audio.seekPlayback(to: $0) }), in: range)
+                    .accessibilityLabel("구간 재생 위치")
+                    .accessibilityValue("\(meetingDuration(range.lowerBound)) ~ \(meetingDuration(range.upperBound))")
+                Text("재생 구간 \(meetingDuration(range.lowerBound)) ~ \(meetingDuration(range.upperBound)) 안에서만 이동합니다.").font(.caption).foregroundStyle(.secondary)
+            }
             Text("구간 버튼으로 재생하면 끝에서 멈춥니다. 정지하거나 다른 회의로 이동하면 재생을 종료합니다.").font(.caption).foregroundStyle(.secondary)
         }
     }

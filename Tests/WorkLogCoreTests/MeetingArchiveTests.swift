@@ -52,6 +52,24 @@ final class MeetingArchiveTests: XCTestCase {
         XCTAssertEqual(try source.db.scalarInt("SELECT COUNT(*) FROM meeting"), 1)
     }
 
+    func testCancellationDuringVerificationLeavesNoStateAndArchiveStillImports() throws {
+        let (root, repo, meeting, service) = try fixture()
+        let archive = root.appendingPathComponent("cancel.worklogmeeting")
+        try service.export(meetingID: meeting.id, includeAudio: true, to: archive)
+        let meetingsBefore = try repo.db.scalarInt("SELECT COUNT(*) FROM meeting")
+        for failAt in 1...4 {
+            var calls = 0
+            let cancel: () throws -> Void = { calls += 1; if calls >= failAt { throw CancellationError() } }
+            XCTAssertThrowsError(try service.inspect(archive, checkCancellation: cancel)) { XCTAssertTrue($0 is CancellationError) }
+            XCTAssertEqual(calls, failAt, "verification must stop at the first cancellation check")
+            XCTAssertThrowsError(try service.restore(archive, duplicatePolicy: .newCopy, checkCancellation: cancel)) { XCTAssertTrue($0 is CancellationError) }
+        }
+        XCTAssertEqual(try repo.db.scalarInt("SELECT COUNT(*) FROM meeting"), meetingsBefore)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("import-archive-1").path))
+        XCTAssertEqual(try service.inspect(archive).audioFileCount, 1)
+        XCTAssertNotEqual(try service.restore(archive, duplicatePolicy: .newCopy), meeting.id)
+    }
+
     func testTextOnlyMissingAudioAndExplicitDuplicateCopy() throws {
         let (root, repo, meeting, service) = try fixture()
         let archive = root.appendingPathComponent("text.worklogmeeting")

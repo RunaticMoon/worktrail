@@ -144,6 +144,75 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         print("PASS: DB reconciliation failure blocks shutdown/new capture until retry succeeds, preserving original PCM bytes")
     }
 
+    /// #89: the file is fully read and archived; one transient DB save failure followed by a successful retry
+    /// must be a successful import with exactly one recording.
+    @MainActor static func checkImportTransientSaveFailure(at root: URL) async throws {
+        let environment = try fixtureEnvironment(at: root)
+        let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 가져오기 저장 일시 실패 회의")
+        let session = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        session.preferences.automaticFinalization = false
+        try await waitUntil("startup recovery", { !session.isRecovering })
+        let source = root.appendingPathComponent("fixture-import.wav")
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000)!
+        buffer.frameLength = 8_000
+        for index in 0..<8_000 { buffer.floatChannelData![0][index] = 0.1 }
+        do {
+            let file = try AVAudioFile(forWriting: source, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: buffer)
+        }
+        // Fail only the first recording-state update: that attempt leaves the track at revision 2, the retry bumps it to 3.
+        try environment.repo.db.run("""
+            CREATE TRIGGER fixture_fail_once BEFORE UPDATE ON meeting_recording
+            WHEN (SELECT MAX(revision) FROM meeting_audio_track) = 2
+            BEGIN SELECT RAISE(ABORT, 'fixture transient failure'); END
+            """)
+        try await session.importAudio(source, meetingID: meeting.id)
+        try check(!session.isSavePending, "Transient save failure followed by a successful retry must clear the pending save")
+        let recordings = try session.store.recordings(meetingID: meeting.id)
+        try check(recordings.count == 1 && recordings[0].state == .completed, "Import must leave exactly one completed recording")
+        print("PASS: import with one transient DB save failure succeeds without a duplicate recording")
+    }
+
+    /// #83: one missing track of a native recording must not stop its sibling from reconciling in the DB.
+    @MainActor static func checkPartialRecordingRecovery(at root: URL) async throws {
+        let environment = try fixtureEnvironment(at: root)
+        let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 부분 복구 회의")
+        let first = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        try await waitUntil("initial recovery", { !first.isRecovering })
+        let recordingID = "fixture-partial-recording"
+        let writer = try MeetingAudioArchiveWriter(archive: first.archive, recordingID: recordingID, meetingID: meeting.id,
+            clock: FixedClock(Date(timeIntervalSince1970: 1_700_000_000)), onPCM: { _ in }, onLevel: { _, _ in }, onFailure: { _ in })
+        func packet(_ track: MeetingAudioTrackID, at time: Double) throws -> MeetingCapturedPCM {
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!
+            buffer.frameLength = 4_800
+            for index in 0..<4_800 { buffer.floatChannelData![0][index] = 0.25 }
+            return try .copy(track: track, buffer: buffer, relativeStartSeconds: time)
+        }
+        try await writer.appendForImport(packet(.microphone, at: 0.2))
+        try await writer.appendForImport(packet(.system, at: 0.1))
+        _ = await writer.finish()
+        let systemURL = try first.archive.audioURL(recordingID: recordingID, track: .system)
+        let held = root.appendingPathComponent("held-system.caf")
+        try FileManager.default.moveItem(at: systemURL, to: held)
+        let relaunched = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        try await waitUntil("partial recovery", { !relaunched.isRecovering })
+        let tracks = try relaunched.store.tracks(recordingID: recordingID)
+        let mic = tracks.first { $0.relativePath.hasSuffix("microphone.caf") }
+        let system = tracks.first { $0.relativePath.hasSuffix("system.caf") }
+        try check(tracks.count == 2 && mic?.fileState == .available && abs((mic?.duration ?? 0) - 0.1) < 0.001 && mic?.startOffset == 0.2,
+                  "Healthy track must be available with real duration/offset")
+        try check(system?.fileState == .missing, "Missing track must be recorded as missing, not silently dropped")
+        try FileManager.default.moveItem(at: held, to: systemURL)
+        let retried = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        try await waitUntil("partial retry", { !retried.isRecovering })
+        let after = try retried.store.tracks(recordingID: recordingID)
+        try check(after.count == 2 && after.allSatisfy { $0.fileState == .available }, "Restored track must recover on the next launch without duplicates")
+        _ = await relaunched.shutdown(); _ = await retried.shutdown(); _ = await first.shutdown()
+        print("PASS: partially missing native recording keeps the healthy track available and retries the other after restore")
+    }
+
     @MainActor static func checkJournalSaveRetry(at root: URL) async throws {
         let environment = try fixtureEnvironment(at: root)
         let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 저널 저장 실패 회의")
@@ -345,6 +414,33 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
             try check(failure.underlying is WorkLogError, "Expected persisted-source validation failure")
         }
         try sourceBytes.write(to: secondURL)
+        // #85: a new-copy import of the same audio keeps the completed refined result reusable (IDs are not part of the identity).
+        let copyService = MeetingArchiveService(repo: environment.repo, audioRoot: session.archive.root)
+        let copyArchive = root.appendingPathComponent("reuse-copy.worklogmeeting")
+        try copyService.export(meetingID: second.id, includeAudio: true, to: copyArchive)
+        let copiedMeetingID = try copyService.restore(copyArchive, duplicatePolicy: .newCopy)
+        let copiedRecording = try session.store.recordings(meetingID: copiedMeetingID).first!
+        try check(copiedRecording.id != secondRecording && (try session.store.tracks(recordingID: copiedRecording.id)).allSatisfy { $0.id != second.id },
+                  "New copy must use fresh recording/track IDs")
+        let copyOrder = FakeInferenceOrder()
+        try await MeetingPostProcessing.run(recordingID: copiedRecording.id, store: session.store, archive: session.archive,
+            models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly,
+            transcriber: FakeFileTranscriber(copyOrder), speakerEngine: FakeFileDiarizer(copyOrder, fails: false), progress: { _ in })
+        let copySteps = await copyOrder.steps
+        try check(copySteps == ["diarize", "unload-speaker"], "Copied archive must reuse the completed refined result without Whisper")
+        try check(try session.store.runs(meetingID: second.id).filter { $0.stage == .refined }.count == 1, "Original meeting runs must be unchanged")
+        let copiedTracks = try session.store.tracks(recordingID: copiedRecording.id)
+        let copiedURL = try session.archive.resolveTrackURL(relativePath: copiedTracks[0].relativePath)
+        try (sourceBytes + Data([0])).write(to: copiedURL)
+        let copyMismatch = FakeInferenceOrder()
+        do {
+            try await MeetingPostProcessing.run(recordingID: copiedRecording.id, store: session.store, archive: session.archive,
+                models: session.modelStore, preferences: session.preferences, mode: .diarizationOnly,
+                transcriber: FakeFileTranscriber(copyMismatch), speakerEngine: FakeFileDiarizer(copyMismatch, fails: false), progress: { _ in })
+            throw SessionCheckError("Changed copied audio must not reuse a refined result")
+        } catch is MeetingFinalizationFailure { }
+        let copyMismatchSteps = await copyMismatch.steps
+        try check(copyMismatchSteps.isEmpty, "Changed copied audio must fail before inference")
         print("PASS: diarization retry calls no Whisper; changed settings/original SHA256 reject reuse before inference; active transcript unchanged")
         let edited = try session.store.editSegment(id: originalSegment.id, expectedRevision: originalSegment.revision, text: "사용자 검토 수정")
         do {
@@ -406,9 +502,27 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
             transcriber: FakeFileTranscriber(importedOrder), speakerEngine: FakeFileDiarizer(importedOrder, fails: true), progress: { _ in })
         let importedRun = try session.store.runs(meetingID: importedMeeting.id).first!
         let importedSegment = try session.store.segments(runID: importedRun.id).first!
+        let playbackModel = MeetingsModel(environment: environment, audio: session)
+        playbackModel.select(importedMeeting.id)
         session.play(importedSegment)
         try check(session.playingSegmentID == importedSegment.id && session.playbackMessage == nil,
             "Imported relative-path PCM must load through actual playback, not native microphone.caf convention")
+        // #87: seeking and +/-5 s stay inside the segment range and never snap back.
+        let segmentRange = session.playbackRange!
+        session.seekPlayback(to: segmentRange.upperBound + 60)
+        try check(session.playbackPosition <= segmentRange.upperBound + 0.001, "Seeking past the segment must clamp to its end")
+        session.skipPlayback(-5)
+        try check(session.playbackPosition >= segmentRange.lowerBound - 0.001, "Skipping back must not leave the segment")
+        session.seekPlayback(to: segmentRange.lowerBound - 60)
+        try check(session.playbackPosition >= segmentRange.lowerBound - 0.001, "Seeking before the segment must clamp to its start")
+        // #86: deleting the selected meeting while playing must stop playback immediately.
+        try check(session.playingSegmentID != nil, "Fixture playback must be active before deletion")
+        playbackModel.deleteSelected()
+        try check(playbackModel.selected == nil && session.playingSegmentID == nil && session.playbackRange == nil,
+                  "Deleting the playing meeting must stop playback and release the player")
+        if let trashed = try meetings.meeting(id: importedMeeting.id, includeDeleted: true) {
+            _ = try meetings.restore(id: trashed.id, expectedRevision: trashed.revision)
+        }
         session.stopPlayback()
         let outside = root.appendingPathComponent("outside-fixture.caf")
         try sourceBytes.write(to: outside)
@@ -419,6 +533,38 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         do { _ = try session.archive.resolveTrackURL(relativePath: "../outside-fixture.caf"); throw SessionCheckError("Escaping audio path must be rejected") }
         catch is MeetingAudioArchiveError { }
         print("PASS: restored import-folder PCM reprocesses and loads playback; symlink/path escape rejected")
+
+        // #84: a DB-owned imported file that went missing returns to available only when the exact valid file is restored.
+        let revivalRecording = try session.store.createRecording(meetingID: importedMeeting.id)
+        let revivalURL = importedFolder.appendingPathComponent("track-3.caf")
+        try sourceBytes.write(to: revivalURL)
+        let revivalTrack = try session.store.addTrack(recordingID: revivalRecording.id, kind: .imported,
+            relativePath: "import-fixture-safe/track-3.caf", sampleRate: 48_000, channels: 1)
+        _ = try session.store.updateTrack(id: revivalTrack.id, expectedRevision: revivalTrack.revision, fileState: .available, duration: 0.2)
+        let held = root.appendingPathComponent("held-track-3.caf")
+        func relaunch() async throws -> MeetingAudioTrack {
+            let relaunched = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+            try await waitUntil("relaunch recovery", { !relaunched.isRecovering })
+            _ = await relaunched.shutdown()
+            return try session.store.track(id: revivalTrack.id)!
+        }
+        try FileManager.default.moveItem(at: revivalURL, to: held)
+        let stateMissing1 = try await relaunch().fileState; try check(stateMissing1 == .missing, "Missing imported file must become missing")
+        try Data("not audio".utf8).write(to: revivalURL)
+        let stateMissing2 = try await relaunch().fileState; try check(stateMissing2 == .missing, "Unreadable replacement must stay missing")
+        try FileManager.default.removeItem(at: revivalURL)
+        try FileManager.default.createSymbolicLink(at: revivalURL, withDestinationURL: held)
+        let stateMissing3 = try await relaunch().fileState; try check(stateMissing3 == .missing, "Symlink replacement must stay missing")
+        try FileManager.default.removeItem(at: revivalURL)
+        try FileManager.default.moveItem(at: held, to: revivalURL)
+        let revived = try await relaunch()
+        try check(revived.fileState == .available && revived.id == revivalTrack.id && revived.duration == 0.2,
+                  "Restoring the exact valid file must revive the same track")
+        try check(try session.store.tracks(recordingID: revivalRecording.id).count == 1, "Revival must not create a duplicate track")
+        _ = try session.store.updateTrack(id: revived.id, expectedRevision: revived.revision, fileState: .deleted)
+        let state_deleted = try await relaunch().fileState; try check(state_deleted == .deleted, "An explicitly deleted original must never be revived by an existing file")
+        try FileManager.default.removeItem(at: revivalURL)
+        print("PASS: restored imported original revives the same missing track; other/corrupt/symlink/deleted files do not")
 
         let siblingRecording = try session.store.createRecording(meetingID: importedMeeting.id)
         let siblingURL = importedFolder.appendingPathComponent("track-2.caf")
@@ -488,6 +634,8 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
+        try await checkPartialRecordingRecovery(at: root.appendingPathComponent("partial-recovery"))
+        try await checkImportTransientSaveFailure(at: root.appendingPathComponent("import-transient-save"))
         try await checkMeetingErrorSessions(at: root.appendingPathComponent("error-sessions"))
         try await checkMeetingFinalizationFailures(at: root.appendingPathComponent("finalization-errors"))
         print("15 existing native session suites plus issue #50 failure regression suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")

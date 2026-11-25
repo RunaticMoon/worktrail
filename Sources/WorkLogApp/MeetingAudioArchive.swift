@@ -98,31 +98,61 @@ struct MeetingAudioArchive: Sendable {
     }
 
     /// A broken archive must not prevent unrelated recordings from recovering.
-    func recoverAvailable() throws -> (snapshots: [MeetingAudioArchiveSnapshot], unavailableCount: Int) {
+    /// Within one recording, a missing/corrupt track must not block its verified siblings either:
+    /// `failedTracks` names the unverifiable tracks per recording; their manifest entries and files stay untouched.
+    func recoverAvailable() throws -> (snapshots: [MeetingAudioArchiveSnapshot], unavailableCount: Int,
+                                       failedTracks: [String: Set<MeetingAudioTrackID>]) {
         try validateRoot()
-        guard manager.fileExists(atPath: root.path) else { return ([], 0) }
+        guard manager.fileExists(atPath: root.path) else { return ([], 0, [:]) }
         var snapshots: [MeetingAudioArchiveSnapshot] = [], failures = 0
+        var failedTracks: [String: Set<MeetingAudioTrackID>] = [:]
         for url in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
             // import-* folders are restored DB-owned files, not live recording recovery journals.
             where !url.lastPathComponent.hasPrefix(".") && !url.lastPathComponent.hasPrefix("import-") {
-            do { snapshots.append(try recover(recordingID: url.lastPathComponent)) }
-            catch { failures += 1 }
+            do {
+                let result = try recoverTolerant(recordingID: url.lastPathComponent)
+                snapshots.append(result.snapshot)
+                if !result.failedTracks.isEmpty {
+                    failedTracks[result.snapshot.recordingID] = result.failedTracks
+                    failures += result.failedTracks.count
+                }
+            } catch { failures += 1 }
         }
-        return (snapshots.sorted { $0.startedAt < $1.startedAt }, failures)
+        return (snapshots.sorted { $0.startedAt < $1.startedAt }, failures, failedTracks)
     }
 
     func recover(recordingID: String) throws -> MeetingAudioArchiveSnapshot {
         var snapshot = try read(recordingID: recordingID)
         for index in snapshot.tracks.indices {
-            let url = try audioURL(recordingID: recordingID, track: snapshot.tracks[index].id)
-            try requireRegularFile(url)
-            let file = try AVAudioFile(forReading: url)
-            let track = snapshot.tracks[index]
-            guard file.processingFormat.sampleRate == track.sampleRate,
-                  file.processingFormat.channelCount == track.channelCount else { throw MeetingAudioArchiveError.invalidManifest }
-            // CAF's actual frame count is authoritative after an unclean exit.
-            snapshot.tracks[index].frameCount = file.length
+            snapshot.tracks[index].frameCount = try verifiedFrameCount(recordingID: recordingID, track: snapshot.tracks[index])
         }
+        return closePendingJournal(snapshot)
+    }
+
+    /// Per-track recovery: tracks that fail validation keep their manifest entry unchanged and are reported
+    /// in `failedTracks` so the caller can reconcile only the verified ones and retry the rest later.
+    func recoverTolerant(recordingID: String) throws -> (snapshot: MeetingAudioArchiveSnapshot, failedTracks: Set<MeetingAudioTrackID>) {
+        var snapshot = try read(recordingID: recordingID)
+        var failed: Set<MeetingAudioTrackID> = []
+        for index in snapshot.tracks.indices {
+            do { snapshot.tracks[index].frameCount = try verifiedFrameCount(recordingID: recordingID, track: snapshot.tracks[index]) }
+            catch { failed.insert(snapshot.tracks[index].id) }
+        }
+        return (closePendingJournal(snapshot), failed)
+    }
+
+    private func verifiedFrameCount(recordingID: String, track: MeetingAudioTrackSnapshot) throws -> Int64 {
+        let url = try audioURL(recordingID: recordingID, track: track.id)
+        try requireRegularFile(url)
+        let file = try AVAudioFile(forReading: url)
+        guard file.processingFormat.sampleRate == track.sampleRate,
+              file.processingFormat.channelCount == track.channelCount else { throw MeetingAudioArchiveError.invalidManifest }
+        // CAF's actual frame count is authoritative after an unclean exit.
+        return file.length
+    }
+
+    private func closePendingJournal(_ input: MeetingAudioArchiveSnapshot) -> MeetingAudioArchiveSnapshot {
+        var snapshot = input
         if snapshot.status == .pending {
             snapshot.status = .interrupted
             snapshot.error = "앱이 녹음을 정상 종료하지 못했습니다. 저장된 PCM 원본을 복구했습니다."
@@ -195,6 +225,15 @@ struct MeetingAudioArchive: Sendable {
         snapshot.journalNeedsRetry = false
         try save(snapshot)
         return snapshot
+    }
+
+    /// Like `acknowledgeRecovery`, but unverifiable tracks are reported instead of aborting the whole recording.
+    /// Their manifest entries and files are preserved so a later launch can retry them.
+    func acknowledgeRecoveryTolerant(recordingID: String) throws -> (snapshot: MeetingAudioArchiveSnapshot, failedTracks: Set<MeetingAudioTrackID>) {
+        var result = try recoverTolerant(recordingID: recordingID)
+        result.snapshot.journalNeedsRetry = false
+        try save(result.snapshot)
+        return result
     }
 
     func retryClosedJournal(_ snapshot: MeetingAudioArchiveSnapshot) throws -> MeetingAudioArchiveSnapshot {

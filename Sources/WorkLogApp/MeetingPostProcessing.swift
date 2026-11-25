@@ -101,11 +101,13 @@ enum MeetingPostProcessing {
         }
         let tracks = allTracks
         let descriptor = try await models.descriptor(for: .final)
-        let fingerprint = try sourceFingerprint(tracks, archive: archive)
-        let settings = try StableJSON.string(MeetingRunConfiguration(preferences: preferences, stage: "refined", sourceFingerprint: fingerprint))
+        let hashes = try tracks.map { try sourceHash($0, archive: archive) }
+        let fingerprint = try sourceFingerprint(tracks, hashes: hashes)
+        let settings = try refinedSettings(preferences: preferences, fingerprint: fingerprint)
+        let accepted = try acceptedRefinedSettings(preferences: preferences, tracks: tracks, hashes: hashes, current: settings)
         let existing = try store.runs(meetingID: recording.meetingID)
         let reusable = try reusableRefinedRun(in: existing, store: store, recordingID: recordingID,
-            descriptor: descriptor, settings: settings, sourceRunID: sourceRunID)
+            descriptor: descriptor, acceptedSettings: accepted, sourceRunID: sourceRunID)
         let refined: MeetingTranscriptRun
         let total = tracks.reduce(0) { $0 + ($1.duration ?? 0) }
         if mode != .refinedOnly, let reusable {
@@ -194,25 +196,26 @@ enum MeetingPostProcessing {
         let tracks = try store.tracks(recordingID: recordingID)
         guard !tracks.isEmpty, tracks.allSatisfy({ $0.fileState == .available }) else { return nil }
         let descriptor = try await models.descriptor(for: .final)
-        let fingerprint = try sourceFingerprint(tracks, archive: archive)
-        let settings = try StableJSON.string(MeetingRunConfiguration(preferences: preferences,
-            stage: "refined", sourceFingerprint: fingerprint))
+        let hashes = try tracks.map { try sourceHash($0, archive: archive) }
+        let fingerprint = try sourceFingerprint(tracks, hashes: hashes)
+        let settings = try refinedSettings(preferences: preferences, fingerprint: fingerprint)
+        let accepted = try acceptedRefinedSettings(preferences: preferences, tracks: tracks, hashes: hashes, current: settings)
         return try reusableRefinedRun(in: store.runs(meetingID: recording.meetingID), store: store,
-            recordingID: recordingID, descriptor: descriptor, settings: settings,
+            recordingID: recordingID, descriptor: descriptor, acceptedSettings: accepted,
             sourceRunID: sourceRunID, expectedRevision: expectedRevision)
     }
 
     private static func reusableRefinedRun(in runs: [MeetingTranscriptRun], store: MeetingAudioStore,
                                           recordingID: String, descriptor: MeetingModelDescriptor,
-                                          settings: String, sourceRunID: String?, expectedRevision: Int? = nil) throws -> MeetingTranscriptRun? {
+                                          acceptedSettings: [String], sourceRunID: String?, expectedRevision: Int? = nil) throws -> MeetingTranscriptRun? {
         try runs.first { run in
             if let sourceRunID, run.id != sourceRunID { return false }
             if let expectedRevision, run.revision != expectedRevision { return false }
             guard run.stage == .refined, run.status == .completed, run.recordingID == recordingID,
                   run.modelIdentifier == descriptor.modelID, run.modelRevision == descriptor.revision,
-                  run.settingsJSON == settings else { return false }
+                  acceptedSettings.contains(run.settingsJSON) else { return false }
             return MeetingProcessingReuse.isReusable(run, recordingID: recordingID, modelIdentifier: descriptor.modelID,
-                modelRevision: descriptor.revision, settingsJSON: settings,
+                modelRevision: descriptor.revision, settingsJSON: run.settingsJSON,
                 hasUserEdits: try store.segments(runID: run.id).contains(where: \.isUserEdited))
         }
     }
@@ -223,7 +226,19 @@ enum MeetingPostProcessing {
         let speakerLabels = "provisional"
         let chunkSeconds = 120
     }
-    private struct SourceIdentity: Encodable {
+    /// Content-only identity of one source track. The track ID is deliberately excluded so an archive imported
+    /// as a new copy (all IDs replaced) of the same audio keeps the same fingerprint and its completed result stays reusable.
+    private struct SourceContent: Encodable {
+        let hash: String
+        let startOffset: Double
+        let duration: Double?
+        let sampleRate: Double
+        let channels: Int
+        let kind: MeetingTrackKind
+        let interruptions: [MeetingTrackInterruption]
+    }
+    /// Identity used before this fix; kept only to recognise already completed runs (same IDs).
+    private struct LegacySourceIdentity: Encodable {
         let id: String
         let hash: String
         let startOffset: Double
@@ -233,19 +248,42 @@ enum MeetingPostProcessing {
         let kind: MeetingTrackKind
         let interruptions: [MeetingTrackInterruption]
     }
+    private static func sourceHash(_ track: MeetingAudioTrack, archive: MeetingAudioArchive) throws -> String {
+        let handle = try FileHandle(forReadingFrom: audioURL(track, archive: archive))
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            try Task.checkCancellation(); hash.update(data: data)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
     private static func sourceFingerprint(_ tracks: [MeetingAudioTrack], archive: MeetingAudioArchive) throws -> String {
-        let sources = try tracks.map { track -> SourceIdentity in
-            let handle = try FileHandle(forReadingFrom: audioURL(track, archive: archive))
-            defer { try? handle.close() }
-            var hash = SHA256()
-            while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
-                try Task.checkCancellation(); hash.update(data: data)
-            }
-            return .init(id: track.id, hash: hash.finalize().map { String(format: "%02x", $0) }.joined(),
+        try sourceFingerprint(tracks, hashes: tracks.map { try sourceHash($0, archive: archive) })
+    }
+    private static func sourceFingerprint(_ tracks: [MeetingAudioTrack], hashes: [String]) throws -> String {
+        let sources = zip(tracks, hashes).map { track, hash in
+            SourceContent(hash: hash,
+                startOffset: track.startOffset, duration: track.duration, sampleRate: track.sampleRate,
+                channels: track.channels, kind: track.kind, interruptions: track.interruptions)
+        }.sorted { ($0.kind.rawValue, $0.startOffset, $0.hash) < ($1.kind.rawValue, $1.startOffset, $1.hash) }
+        return SHA256.hash(data: Data(try StableJSON.string(sources).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    private static func legacySourceFingerprint(_ tracks: [MeetingAudioTrack], hashes: [String]) throws -> String {
+        let sources = zip(tracks, hashes).map { track, hash in
+            LegacySourceIdentity(id: track.id, hash: hash,
                 startOffset: track.startOffset, duration: track.duration, sampleRate: track.sampleRate,
                 channels: track.channels, kind: track.kind, interruptions: track.interruptions)
         }
         return SHA256.hash(data: Data(try StableJSON.string(sources).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    private static func refinedSettings(preferences: MeetingAudioPreferences, fingerprint: String) throws -> String {
+        try StableJSON.string(MeetingRunConfiguration(preferences: preferences, stage: "refined", sourceFingerprint: fingerprint))
+    }
+    /// Current settings plus the pre-fix (ID-bound) form, so results completed before this change remain reusable in place.
+    private static func acceptedRefinedSettings(preferences: MeetingAudioPreferences, tracks: [MeetingAudioTrack],
+                                                hashes: [String], current: String) throws -> [String] {
+        let legacy = try refinedSettings(preferences: preferences, fingerprint: legacySourceFingerprint(tracks, hashes: hashes))
+        return legacy == current ? [current] : [current, legacy]
     }
     private static func progressText(_ stage: String, done: Double, total: Double) -> String {
         return total > 0 ? String(format: "%@ · %.0f / %.0f초 · %.0f%% · 취소 가능", stage, min(done, total), total, min(100, done / total * 100))

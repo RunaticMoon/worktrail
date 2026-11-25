@@ -76,6 +76,13 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     private(set) var isPlaying = false
     private(set) var playbackPosition: Double = 0
     private(set) var playbackDuration: Double = 0
+    /// Session-time bounds of the segment being played. Seeking and ±5 s stay inside this range.
+    var playbackRange: ClosedRange<Double>? {
+        guard player != nil, let track = playbackTrack else { return nil }
+        let lower = MeetingAudioTimeline.sessionTime(fileTime: playbackStart, startOffset: track.startOffset, interruptions: track.interruptions)
+        let upper = MeetingAudioTimeline.sessionTime(fileTime: playbackEnd ?? playbackStart, startOffset: track.startOffset, interruptions: track.interruptions)
+        return lower ... max(lower, upper)
+    }
     private(set) var playbackMessage: String?
     var playbackRate: Float = 1 { didSet { player?.rate = playbackRate } }
     private var recoveryTask: Task<Void, Never>?
@@ -443,8 +450,8 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 guard let meeting = try MeetingService(repo: store.repo).meeting(id: snapshot.meetingID, includeDeleted: true),
                       meeting.deletedAt == nil else { continue }
                 do {
-                    let persisted = try archive.acknowledgeRecovery(recordingID: snapshot.recordingID)
-                    try reconcile(persisted)
+                    let result = try archive.acknowledgeRecoveryTolerant(recordingID: snapshot.recordingID)
+                    try reconcile(result.snapshot, skipping: result.failedTracks)
                 } catch {
                     AppDiagnostics.shared.recordFailure(error, category: .recording)
                     captureMessage = "일부 원본의 DB 연결을 복구하지 못했습니다. 원본 파일은 유지됩니다."
@@ -457,6 +464,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                         let url = archive.root.appendingPathComponent(track.relativePath)
                         if !FileManager.default.fileExists(atPath: url.path) {
                             _ = try store.updateTrack(id: track.id, expectedRevision: track.revision, fileState: .missing)
+                        } else if track.fileState == .missing,
+                                  MeetingImportedAudioArchive(archive: archive, ids: ids).restoredFileMatches(track) {
+                            // A restored DB-owned imported file returns to the same track (never a deleted one).
+                            _ = try store.updateTrack(id: track.id, expectedRevision: track.revision, fileState: .available)
                         }
                     }
                 }
@@ -471,11 +482,22 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         contentRevision += 1
         await models.refreshAvailability()
     }
-    private func reconcile(_ snapshot: MeetingAudioArchiveSnapshot) throws {
+    /// `skipping` holds tracks whose file failed verification; they stay needsRecovery/missing and are retried on the next launch.
+    private func reconcile(_ snapshot: MeetingAudioArchiveSnapshot, skipping failedTracks: Set<MeetingAudioTrackID> = []) throws {
         let recording = try store.createRecording(meetingID: snapshot.meetingID, id: snapshot.recordingID, startedAt: snapshot.startedAt)
         guard recording.state != .discarded else { return }
         for item in snapshot.tracks {
             let existing = try store.tracks(recordingID: recording.id).first { $0.relativePath == item.relativePath }
+            if failedTracks.contains(item.id) {
+                // Never leave an unverifiable track unrecorded (it would look like a complete recording):
+                // register it as needsRecovery; a missing file is downgraded to missing right after recovery.
+                if existing == nil {
+                    _ = try store.addTrack(recordingID: recording.id, kind: item.id == .microphone ? .microphone : .systemAudio,
+                        relativePath: item.relativePath, sampleRate: item.sampleRate, channels: Int(item.channelCount),
+                        startOffset: item.startOffset, fileState: .needsRecovery)
+                }
+                continue
+            }
             let track = try existing ?? store.addTrack(recordingID: recording.id,
                 kind: item.id == .microphone ? .microphone : .systemAudio, relativePath: item.relativePath,
                 sampleRate: item.sampleRate, channels: Int(item.channelCount), startOffset: item.startOffset)
@@ -530,8 +552,10 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     }
     func seekPlayback(to sessionTime: Double) {
         guard let player, let track = playbackTrack else { return }
-        player.currentTime = min(player.duration, max(0, MeetingAudioTimeline.fileTime(sessionTime: sessionTime,
-            startOffset: track.startOffset, interruptions: track.interruptions)))
+        let requested = MeetingAudioTimeline.fileTime(sessionTime: sessionTime, startOffset: track.startOffset, interruptions: track.interruptions)
+        // Segment playback: keep the position inside the segment so the 100 ms updater never snaps it back.
+        let upper = min(player.duration, playbackEnd ?? player.duration)
+        player.currentTime = min(upper, max(playbackStart, requested))
         playbackPosition = MeetingAudioTimeline.sessionTime(fileTime: player.currentTime, startOffset: track.startOffset, interruptions: track.interruptions)
     }
     func skipPlayback(_ seconds: Double) { seekPlayback(to: playbackPosition + seconds) }
@@ -591,21 +615,32 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         let recording = try store.createRecording(meetingID: meetingID)
         let writer = try MeetingAudioArchiveWriter(archive: archive, recordingID: recording.id, meetingID: meetingID,
             clock: clock, onPCM: { _ in }, onLevel: { _, _ in }, onFailure: { _ in })
+        let snapshot: MeetingAudioArchiveSnapshot
         do {
             try await MeetingPCMReader.readChunks(url: url, seconds: 1) { chunk in
                 let packet = try MeetingCapturedPCM.copy(track: .microphone, buffer: chunk.buffer, relativeStartSeconds: chunk.relativeStartSeconds)
                 try await writer.appendForImport(packet)
             }
-            let snapshot = await writer.finish(); pendingSnapshot = snapshot
-            guard persistStoppedRecording() else { throw WorkLogError.storage("가져온 원본의 저장 마무리가 필요합니다.") }
-            contentRevision += 1
-            if preferences.automaticFinalization { retryFinalization(recording.id) }
+            snapshot = await writer.finish()
         } catch {
+            // A real read failure or cancellation: keep what was written, but never report success.
             AppDiagnostics.shared.recordFailure(error, category: .recording)
-            let snapshot = await writer.finish(reason: "파일 가져오기 중단")
-            pendingSnapshot = snapshot
+            let partial = await writer.finish(reason: "파일 가져오기 중단")
+            pendingSnapshot = partial
             _ = persistStoppedRecording(); contentRevision += 1; throw error
         }
+        // The file was fully read and archived. Only the DB save outcome decides success: one transient
+        // failure followed by a successful retry is a successful import (no duplicate on re-import).
+        pendingSnapshot = snapshot
+        var saved = persistStoppedRecording()
+        if !saved {
+            saved = persistStoppedRecording()
+            // The transient first failure is resolved: drop its pending-save banner.
+            if saved { captureMessage = nil; captureIssue = false }
+        }
+        contentRevision += 1
+        guard saved else { throw WorkLogError.storage("가져온 원본의 저장 마무리가 필요합니다. 같은 파일을 다시 가져오지 말고 ‘저장 재시도’를 누르세요.") }
+        if preferences.automaticFinalization { retryFinalization(recording.id) }
     }
 }
 
