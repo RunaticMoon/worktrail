@@ -95,20 +95,23 @@ private final class HotkeyRecordingState: NSObject, ObservableObject {
         // The callback may close the settings window or otherwise cancel recording.
         guard isRecording else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, self.isRecording else { return event }
+            // Return only a Sendable Bool across the isolation boundary; the NSEvent itself is
+            // handed back outside assumeIsolated.
+            let consumed = MainActor.assumeIsolated {
+                guard let self, self.isRecording else { return false }
                 self.receive(event)
-                return nil
+                return true
             }
+            return consumed ? nil : event
         }
         // Buttons and empty areas do not always change AppKit's first responder.
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
-                guard let self, self.isRecording, let button = self.button else { return event }
+                guard let self, self.isRecording, let button = self.button else { return }
                 let point = button.convert(event.locationInWindow, from: nil)
                 if event.window !== button.window || !button.bounds.contains(point) { self.finish() }
-                return event
             }
+            return event
         }
         guard keyMonitor != nil, mouseMonitor != nil else { finish(); return }
         announce("단축키를 누르세요. 수정자와 키를 함께 누르세요. Esc로 취소합니다.")
