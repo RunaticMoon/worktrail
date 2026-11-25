@@ -183,6 +183,7 @@ import WorkLogCore
             // the imported evidence must exist before D-1/period reports are generated (#62).
             await waitForLaunchCollection(atMost: .seconds(20))
             do { try await scheduledReports?.runCatchUp() }
+            catch is CancellationError { /* restore/shutdown cancelled it; the next session re-plans */ }
             catch {
                 AppDiagnostics.shared.recordFailure(error, category: .ai)
                 notice = "예약 리포트 처리가 완료되지 않았습니다. 기록과 검색은 사용할 수 있습니다."
