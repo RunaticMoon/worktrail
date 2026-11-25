@@ -174,6 +174,45 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         print("PASS: import with one transient DB save failure succeeds without a duplicate recording")
     }
 
+    /// #83: one missing track of a native recording must not stop its sibling from reconciling in the DB.
+    @MainActor static func checkPartialRecordingRecovery(at root: URL) async throws {
+        let environment = try fixtureEnvironment(at: root)
+        let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 부분 복구 회의")
+        let first = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        try await waitUntil("initial recovery", { !first.isRecovering })
+        let recordingID = "fixture-partial-recording"
+        let writer = try MeetingAudioArchiveWriter(archive: first.archive, recordingID: recordingID, meetingID: meeting.id,
+            clock: FixedClock(Date(timeIntervalSince1970: 1_700_000_000)), onPCM: { _ in }, onLevel: { _, _ in }, onFailure: { _ in })
+        func packet(_ track: MeetingAudioTrackID, at time: Double) throws -> MeetingCapturedPCM {
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!
+            buffer.frameLength = 4_800
+            for index in 0..<4_800 { buffer.floatChannelData![0][index] = 0.25 }
+            return try .copy(track: track, buffer: buffer, relativeStartSeconds: time)
+        }
+        try await writer.appendForImport(packet(.microphone, at: 0.2))
+        try await writer.appendForImport(packet(.system, at: 0.1))
+        _ = await writer.finish()
+        let systemURL = try first.archive.audioURL(recordingID: recordingID, track: .system)
+        let held = root.appendingPathComponent("held-system.caf")
+        try FileManager.default.moveItem(at: systemURL, to: held)
+        let relaunched = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        try await waitUntil("partial recovery", { !relaunched.isRecovering })
+        let tracks = try relaunched.store.tracks(recordingID: recordingID)
+        let mic = tracks.first { $0.relativePath.hasSuffix("microphone.caf") }
+        let system = tracks.first { $0.relativePath.hasSuffix("system.caf") }
+        try check(tracks.count == 2 && mic?.fileState == .available && abs((mic?.duration ?? 0) - 0.1) < 0.001 && mic?.startOffset == 0.2,
+                  "Healthy track must be available with real duration/offset")
+        try check(system?.fileState == .missing, "Missing track must be recorded as missing, not silently dropped")
+        try FileManager.default.moveItem(at: held, to: systemURL)
+        let retried = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        try await waitUntil("partial retry", { !retried.isRecovering })
+        let after = try retried.store.tracks(recordingID: recordingID)
+        try check(after.count == 2 && after.allSatisfy { $0.fileState == .available }, "Restored track must recover on the next launch without duplicates")
+        _ = await relaunched.shutdown(); _ = await retried.shutdown(); _ = await first.shutdown()
+        print("PASS: partially missing native recording keeps the healthy track available and retries the other after restore")
+    }
+
     @MainActor static func checkJournalSaveRetry(at root: URL) async throws {
         let environment = try fixtureEnvironment(at: root)
         let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 저널 저장 실패 회의")
@@ -595,6 +634,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
+        try await checkPartialRecordingRecovery(at: root.appendingPathComponent("partial-recovery"))
         try await checkImportTransientSaveFailure(at: root.appendingPathComponent("import-transient-save"))
         try await checkMeetingErrorSessions(at: root.appendingPathComponent("error-sessions"))
         try await checkMeetingFinalizationFailures(at: root.appendingPathComponent("finalization-errors"))

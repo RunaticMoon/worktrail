@@ -486,8 +486,18 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
     private func reconcile(_ snapshot: MeetingAudioArchiveSnapshot, skipping failedTracks: Set<MeetingAudioTrackID> = []) throws {
         let recording = try store.createRecording(meetingID: snapshot.meetingID, id: snapshot.recordingID, startedAt: snapshot.startedAt)
         guard recording.state != .discarded else { return }
-        for item in snapshot.tracks where !failedTracks.contains(item.id) {
+        for item in snapshot.tracks {
             let existing = try store.tracks(recordingID: recording.id).first { $0.relativePath == item.relativePath }
+            if failedTracks.contains(item.id) {
+                // Never leave an unverifiable track unrecorded (it would look like a complete recording):
+                // register it as needsRecovery; a missing file is downgraded to missing right after recovery.
+                if existing == nil {
+                    _ = try store.addTrack(recordingID: recording.id, kind: item.id == .microphone ? .microphone : .systemAudio,
+                        relativePath: item.relativePath, sampleRate: item.sampleRate, channels: Int(item.channelCount),
+                        startOffset: item.startOffset, fileState: .needsRecovery)
+                }
+                continue
+            }
             let track = try existing ?? store.addTrack(recordingID: recording.id,
                 kind: item.id == .microphone ? .microphone : .systemAudio, relativePath: item.relativePath,
                 sampleRate: item.sampleRate, channels: Int(item.channelCount), startOffset: item.startOffset)
@@ -623,7 +633,11 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         // failure followed by a successful retry is a successful import (no duplicate on re-import).
         pendingSnapshot = snapshot
         var saved = persistStoppedRecording()
-        if !saved { saved = persistStoppedRecording() }
+        if !saved {
+            saved = persistStoppedRecording()
+            // The transient first failure is resolved: drop its pending-save banner.
+            if saved { captureMessage = nil; captureIssue = false }
+        }
         contentRevision += 1
         guard saved else { throw WorkLogError.storage("가져온 원본의 저장 마무리가 필요합니다. 같은 파일을 다시 가져오지 말고 ‘저장 재시도’를 누르세요.") }
         if preferences.automaticFinalization { retryFinalization(recording.id) }
