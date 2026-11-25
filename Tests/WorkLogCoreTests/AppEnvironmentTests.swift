@@ -148,6 +148,32 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertEqual(second.seededTemplates, 0)
     }
 
+    func testOnLaunchHealthyHasNoLaunchIssues() throws {
+        let env = try AppEnvironment.open(makeOptions(paths: try makePaths(), aiProvider: MockAIProvider()))
+        XCTAssertEqual(env.onLaunch().launchIssues, [])
+    }
+
+    func testOnLaunchCollectsNonFatalRecoveryFailures() throws {
+        let env = try AppEnvironment.open(makeOptions(paths: try makePaths(), aiProvider: MockAIProvider()))
+        XCTAssertEqual(env.onLaunch().launchIssues, [])
+        _ = try env.tasks.captureMemo(body: "복구 실패 수집 확인")
+        // 복구 단계가 읽는 테이블을 치워 각 단계를 실패시킨다. 앱 시작은 report를 돌려줘야 한다.
+        for table in ["report_template", "ai_job", "task", "search_doc"] {
+            try env.repo.db.execute("ALTER TABLE \(table) RENAME TO \(table)_gone")
+        }
+
+        let report = env.onLaunch()
+        XCTAssertEqual(report.seededTemplates, 0)
+        XCTAssertEqual(report.recoveredAIJobs, 0)
+        XCTAssertEqual(report.launchIssues, [
+            "기본 템플릿을 준비하지 못했습니다.",
+            "중단된 AI 작업을 복구하지 못했습니다.",
+            "업무 상태 캐시를 다시 계산하지 못했습니다.",
+            "검색 색인을 복구하지 못했습니다.",
+        ])
+        XCTAssertFalse(report.launchIssues.joined().contains("SQL"), "내부 오류 문구는 담지 않는다")
+    }
+
     func testOnLaunchAppliesBackupRetention() throws {
         let paths = try makePaths()
         let clock = fixedClock()

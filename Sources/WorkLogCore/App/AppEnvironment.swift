@@ -40,14 +40,18 @@ public struct LaunchReport: Sendable {
     public var backupError: String?
     /// 보관 기간(settings.backupRetentionDays)이 지나 삭제한 백업 id. 백업이 실패한 실행에서는 지우지 않는다.
     public var removedBackups: [String]
+    /// 시작 회복 중 실패했지만 앱 시작을 막지 않은 항목의 짧은 한국어 설명(내부 오류 문구·경로는 담지 않는다).
+    public var launchIssues: [String]
 
     public init(seededTemplates: Int = 0, recoveredAIJobs: Int = 0,
-                backupCreated: Bool = false, backupError: String? = nil, removedBackups: [String] = []) {
+                backupCreated: Bool = false, backupError: String? = nil, removedBackups: [String] = [],
+                launchIssues: [String] = []) {
         self.seededTemplates = seededTemplates
         self.recoveredAIJobs = recoveredAIJobs
         self.backupCreated = backupCreated
         self.backupError = backupError
         self.removedBackups = removedBackups
+        self.launchIssues = launchIssues
     }
 }
 
@@ -207,13 +211,22 @@ public final class AppEnvironment {
     public func onLaunch() -> LaunchReport {
         var report = LaunchReport()
 
-        report.seededTemplates = (try? templates.seedDefaults()) ?? 0
-        report.recoveredAIJobs = aiRunner.map { (try? $0.recoverInterrupted()) ?? 0 } ?? 0
-        try? tasks.rebuildCachedStatuses()
+        func attempt<T>(_ issue: String, _ work: () throws -> T) -> T? {
+            do { return try work() } catch {
+                report.launchIssues.append(issue)
+                return nil
+            }
+        }
+
+        report.seededTemplates = attempt("기본 템플릿을 준비하지 못했습니다.") { try templates.seedDefaults() } ?? 0
+        if let aiRunner {
+            report.recoveredAIJobs = attempt("중단된 AI 작업을 복구하지 못했습니다.") { try aiRunner.recoverInterrupted() } ?? 0
+        }
+        _ = attempt("업무 상태 캐시를 다시 계산하지 못했습니다.") { try tasks.rebuildCachedStatuses() }
         // 이전 버전에서 제목만 색인된 업무 등 오래된 색인 문서만 복구한다.
         // 색인이 최신이면 쓰기가 없으므로 일일 백업 판정(work.sqlite 해시)을 흔들지 않는다.
         // 실패해도 앱 시작을 막지 않는다(다음 시작에서 다시 시도).
-        _ = try? search.repairStaleTaskDocs()
+        _ = attempt("검색 색인을 복구하지 못했습니다.") { try search.repairStaleTaskDocs() }
 
         do {
             let info = try backup.createDailyBackupIfChanged(calendar: calendar)
