@@ -5,6 +5,7 @@ import WorkLogCore
 struct ActivityIntegrationSettingsView: View {
     @Bindable var model: ActivityIntegrationsModel
     var onImported: () -> Void
+    @State private var tokenToRemove: ActivitySource?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -50,8 +51,15 @@ struct ActivityIntegrationSettingsView: View {
                         .lineLimit(2...5).autocorrectionDisabled()
                         .accessibilityIdentifier("activity-jira-jql")
                 }
-                Button("이 연결의 저장된 토큰 삭제", role: .destructive) { model.removeToken(for: source) }
+                Button("이 연결의 저장된 토큰 삭제…", role: .destructive) { tokenToRemove = source }
                     .disabled(connection.wrappedValue.baseURL.isEmpty)
+                    .confirmationDialog("\(source.title) 저장된 토큰을 삭제할까요?", isPresented: Binding(
+                        get: { tokenToRemove == source }, set: { if !$0 && tokenToRemove == source { tokenToRemove = nil } })) {
+                        Button("토큰 삭제", role: .destructive) { model.removeToken(for: source); tokenToRemove = nil }
+                        Button("취소", role: .cancel) { tokenToRemove = nil }
+                    } message: {
+                        Text("이 연결의 토큰을 Keychain에서 삭제합니다. 활동 수집을 다시 하려면 토큰을 새로 입력해 저장해야 합니다.")
+                    }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

@@ -22,6 +22,7 @@ struct SettingsScreen: View {
     @State private var destination: SettingsDestination = .general
     @State private var promptEditor: PromptEditorSelection?
     @State private var apiKey = ""
+    @State private var confirmsDeleteAPIKey = false
 
     init(chatGPTLogin: ChatGPTLoginCoordinator? = nil, model: SettingsModel, prompts: PromptSettingsModel, onSave: @escaping () -> Void,
          onBeginHotkeyRecording: @escaping () -> Void, onEndHotkeyRecording: @escaping () -> Void,
@@ -379,7 +380,13 @@ struct SettingsScreen: View {
                     Button("API 키 저장") {
                         Task { if await model.saveAPIKey(apiKey) { apiKey = "" } }
                     }.disabled(apiKey.isEmpty)
-                    Button("저장된 키 삭제") { Task { apiKey = ""; await model.deleteAPIKey() } }
+                    Button("저장된 키 삭제…", role: .destructive) { confirmsDeleteAPIKey = true }
+                        .confirmationDialog("저장된 API 키를 삭제할까요?", isPresented: $confirmsDeleteAPIKey) {
+                            Button("키 삭제", role: .destructive) { Task { apiKey = ""; await model.deleteAPIKey() } }
+                            Button("취소", role: .cancel) {}
+                        } message: {
+                            Text("현재 API 주소에 저장된 키를 macOS Keychain에서 삭제합니다. 다시 사용하려면 키를 새로 입력해 저장해야 합니다.")
+                        }
                 }
                 if let message = model.apiKeyMessage { hint(message) }
                 hint("키는 입력한 API 주소별로 macOS Keychain에 저장됩니다. 주소를 바꾸면 해당 주소의 키를 따로 저장하세요. 기본 URL 아래 /chat/completions를 사용합니다.")
