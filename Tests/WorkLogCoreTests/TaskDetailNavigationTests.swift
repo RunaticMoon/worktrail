@@ -363,4 +363,25 @@ final class TaskDetailNavigationTests: XCTestCase {
         XCTAssertEqual(model.detail?.task.id, task.id)
         XCTAssertNil(model.errorMessage)
     }
+
+    /// #90: 저장된 사유는 표시만 되고 다음 상태 이력에 다시 붙지 않는다.
+    @MainActor func testSavedStatusNoteIsNotReusedForNextTransition() async throws {
+        let env = try environment()
+        let task = try env.tasks.createTask(title: "업무", projectNames: ["프로젝트"], trackingMode: .perProject)
+        let model = TaskDetailModel(environment: env)
+        XCTAssertTrue(model.load(taskId: task.id))
+        let projectId = try XCTUnwrap(model.detail?.projects.first?.project.id)
+        model.changeStatus(.started)
+        model.statusNote = "외부 회신 대기"
+        model.changeStatus(.paused)
+        model.changeStatus(.resumed)
+        model.changeProjectStatus(projectId: projectId, kind: .started)
+        var events = try env.repo.events(taskId: task.id)
+        XCTAssertEqual(events.filter { $0.note == "외부 회신 대기" }.map(\.kind), [.paused])
+        // 새 사유를 입력하면 그 사유가 저장된다.
+        model.statusNote = "재개 사유"
+        model.changeProjectStatus(projectId: projectId, kind: .completed)
+        events = try env.repo.events(taskId: task.id)
+        XCTAssertEqual(events.filter { $0.note == "재개 사유" }.count, 1)
+    }
 }

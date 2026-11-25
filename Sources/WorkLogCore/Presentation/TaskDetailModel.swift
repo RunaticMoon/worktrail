@@ -82,15 +82,21 @@ import Observation
             dueReminderDaysBefore: days) }
     }
 
+    /// 이미 저장된 사유(savedStatusNote)는 표시만 하고 다음 이력에는 붙이지 않는다.
+    /// 새로 입력하거나 수정한 사유만 저장 요청에 전달한다.
+    private var pendingStatusNote: String? {
+        statusNote.isEmpty || statusNote == savedStatusNote ? nil : statusNote
+    }
+
     public func changeStatus(_ kind: DomainEventKind) {
-        if update({ try environment.tasks.changeTaskStatus(taskId: $0, kind: kind, workDate: workDate, note: statusNote.isEmpty ? nil : statusNote) }) {
+        if update({ try environment.tasks.changeTaskStatus(taskId: $0, kind: kind, workDate: workDate, note: pendingStatusNote) }) {
             savedStatusNote = statusNote
         }
     }
     public func complete(confirmRemaining: Bool = false) {
         guard asOf == nil, let taskId else { return }
         do {
-            let result = try environment.tasks.completeTask(taskId: taskId, workDate: workDate, confirmRemaining: confirmRemaining, note: statusNote.isEmpty ? nil : statusNote)
+            let result = try environment.tasks.completeTask(taskId: taskId, workDate: workDate, confirmRemaining: confirmRemaining, note: pendingStatusNote)
             if result.completed {
                 savedStatusNote = statusNote
                 load(taskId: taskId); onChanged?()
@@ -105,7 +111,7 @@ import Observation
         update { _ = try environment.tasks.addChecklistItem(taskId: $0, text: checklistText); checklistText = "" }
     }
     public func changeProjectStatus(projectId: String, kind: DomainEventKind) {
-        if update({ try environment.tasks.changeProjectStatus(taskId: $0, projectId: projectId, kind: kind, workDate: workDate, note: statusNote.isEmpty ? nil : statusNote) }) {
+        if update({ try environment.tasks.changeProjectStatus(taskId: $0, projectId: projectId, kind: kind, workDate: workDate, note: pendingStatusNote) }) {
             savedStatusNote = statusNote
         }
     }
