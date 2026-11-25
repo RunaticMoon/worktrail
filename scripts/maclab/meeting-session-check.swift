@@ -144,6 +144,36 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         print("PASS: DB reconciliation failure blocks shutdown/new capture until retry succeeds, preserving original PCM bytes")
     }
 
+    /// #89: the file is fully read and archived; one transient DB save failure followed by a successful retry
+    /// must be a successful import with exactly one recording.
+    @MainActor static func checkImportTransientSaveFailure(at root: URL) async throws {
+        let environment = try fixtureEnvironment(at: root)
+        let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 가져오기 저장 일시 실패 회의")
+        let session = MeetingRecordingSession(environment: environment, capture: FakeMeetingCapture())
+        session.preferences.automaticFinalization = false
+        try await waitUntil("startup recovery", { !session.isRecovering })
+        let source = root.appendingPathComponent("fixture-import.wav")
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000)!
+        buffer.frameLength = 8_000
+        for index in 0..<8_000 { buffer.floatChannelData![0][index] = 0.1 }
+        do {
+            let file = try AVAudioFile(forWriting: source, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: buffer)
+        }
+        // Fail only the first recording-state update: that attempt leaves the track at revision 2, the retry bumps it to 3.
+        try environment.repo.db.run("""
+            CREATE TRIGGER fixture_fail_once BEFORE UPDATE ON meeting_recording
+            WHEN (SELECT MAX(revision) FROM meeting_audio_track) = 2
+            BEGIN SELECT RAISE(ABORT, 'fixture transient failure'); END
+            """)
+        try await session.importAudio(source, meetingID: meeting.id)
+        try check(!session.isSavePending, "Transient save failure followed by a successful retry must clear the pending save")
+        let recordings = try session.store.recordings(meetingID: meeting.id)
+        try check(recordings.count == 1 && recordings[0].state == .completed, "Import must leave exactly one completed recording")
+        print("PASS: import with one transient DB save failure succeeds without a duplicate recording")
+    }
+
     @MainActor static func checkJournalSaveRetry(at root: URL) async throws {
         let environment = try fixtureEnvironment(at: root)
         let meeting = try MeetingService(repo: environment.repo).create(title: "가짜 저널 저장 실패 회의")
@@ -406,9 +436,27 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
             transcriber: FakeFileTranscriber(importedOrder), speakerEngine: FakeFileDiarizer(importedOrder, fails: true), progress: { _ in })
         let importedRun = try session.store.runs(meetingID: importedMeeting.id).first!
         let importedSegment = try session.store.segments(runID: importedRun.id).first!
+        let playbackModel = MeetingsModel(environment: environment, audio: session)
+        playbackModel.select(importedMeeting.id)
         session.play(importedSegment)
         try check(session.playingSegmentID == importedSegment.id && session.playbackMessage == nil,
             "Imported relative-path PCM must load through actual playback, not native microphone.caf convention")
+        // #87: seeking and +/-5 s stay inside the segment range and never snap back.
+        let segmentRange = session.playbackRange!
+        session.seekPlayback(to: segmentRange.upperBound + 60)
+        try check(session.playbackPosition <= segmentRange.upperBound + 0.001, "Seeking past the segment must clamp to its end")
+        session.skipPlayback(-5)
+        try check(session.playbackPosition >= segmentRange.lowerBound - 0.001, "Skipping back must not leave the segment")
+        session.seekPlayback(to: segmentRange.lowerBound - 60)
+        try check(session.playbackPosition >= segmentRange.lowerBound - 0.001, "Seeking before the segment must clamp to its start")
+        // #86: deleting the selected meeting while playing must stop playback immediately.
+        try check(session.playingSegmentID != nil, "Fixture playback must be active before deletion")
+        playbackModel.deleteSelected()
+        try check(playbackModel.selected == nil && session.playingSegmentID == nil && session.playbackRange == nil,
+                  "Deleting the playing meeting must stop playback and release the player")
+        if let trashed = try meetings.meeting(id: importedMeeting.id, includeDeleted: true) {
+            _ = try meetings.restore(id: trashed.id, expectedRevision: trashed.revision)
+        }
         session.stopPlayback()
         let outside = root.appendingPathComponent("outside-fixture.caf")
         try sourceBytes.write(to: outside)
@@ -488,6 +536,7 @@ private actor FakeFileDiarizer: MeetingFileDiarizing {
         _ = await session.shutdown()
         try await checkDatabaseSaveRetry(at: root.appendingPathComponent("db-save-failure"))
         try await checkJournalSaveRetry(at: root.appendingPathComponent("journal-save-failure"))
+        try await checkImportTransientSaveFailure(at: root.appendingPathComponent("import-transient-save"))
         try await checkMeetingErrorSessions(at: root.appendingPathComponent("error-sessions"))
         try await checkMeetingFinalizationFailures(at: root.appendingPathComponent("finalization-errors"))
         print("15 existing native session suites plus issue #50 failure regression suites passed using the actual meeting model, synthetic PCM and fake inference/temporary accounts; no real capture, inference, download or network.")

@@ -149,8 +149,9 @@ struct MeetingTaskReview: Identifiable {
     private func load(_ meeting: Meeting) {
         if let previous = selected, previous.id != meeting.id {
             navigationStates[previous.id] = .init(runID: viewedRunID, filter: segmentFilter, selectedSegmentID: selectedSegmentID)
-            audio.stopPlayback()
         }
+        // Also covers a selection that was cleared by delete: stale playback must never carry into another meeting.
+        if selected?.id != meeting.id { audio.stopPlayback() }
         let navigation = navigationStates[meeting.id]
         segmentFilter = navigation?.filter ?? MeetingSegmentFilter()
         selectedSegmentID = navigation?.selectedSegmentID
@@ -268,7 +269,7 @@ struct MeetingTaskReview: Identifiable {
     }
     func deleteSelected() {
         guard canDeleteSelected, save(), let selected, let service else { return }
-        do { try service.delete(id: selected.id, expectedRevision: selected.revision); self.selected = nil; refreshAudio(); reload() }
+        do { try service.delete(id: selected.id, expectedRevision: selected.revision); audio.stopPlayback(); self.selected = nil; refreshAudio(); reload() }
         catch { show(error) }
     }
     func restoreSelected() {
