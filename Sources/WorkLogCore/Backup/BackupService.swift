@@ -100,6 +100,7 @@ public final class BackupService: @unchecked Sendable {
 
     /// 오늘(지역 날짜) 성공한 daily/manual 백업이 없고, 최신 백업 대비 DB/AI 설정 스냅샷 해시가
     /// 달라졌을 때만 백업한다. 변경이 없으면 임시본을 삭제하고 nil을 돌려준다.
+    /// 단, 최신 백업이 검증되지 않으면(손상·누락) 오늘 백업 여부·변경 여부와 관계없이 교체본을 만든다.
     public func createDailyBackupIfChanged(calendar: WorkCalendar) throws -> BackupInfo? {
         do {
             let backups = try listBackups()
@@ -108,16 +109,18 @@ public final class BackupService: @unchecked Sendable {
                 (info.manifest.reason == .daily || info.manifest.reason == .manual)
                     && calendar.workDate(of: info.manifest.createdAt) == today
             }
-            guard !alreadyToday else { return nil }
-
             let latest = backups.first
+            // 최신 사본이 실제로 검증 가능할 때만 건너뛴다. 오늘 백업이 이미 있어도 최신 사본이
+            // 손상·누락됐다면 다음 날까지 복원 불가 상태로 두지 않고 live 데이터로 교체본을 만든다.
+            let latestIsRestorable = latest.map { (try? Self.verifyBackup($0)) != nil } ?? false
+            if alreadyToday, latestIsRestorable { return nil }
+
             let root = try ensureBackupRoot()
             let staged = try Self.stageBackup(root: root, reason: .daily, clock: clock, ids: ids,
                                               writeBarrier: writeBarrier,
                                               sources: stagedSources(),
                                               appDirectoryName: identity.directoryName)
             // 최신 사본이 실제로 검증 가능할 때만 "변경 없음"으로 건너뛴다. 손상·누락이면 새 사본을 만든다.
-            let latestIsRestorable = latest.map { (try? Self.verifyBackup($0)) != nil } ?? false
             guard Self.snapshotChanged(staged: staged, latest: latest) || !latestIsRestorable else {
                 try? FileManager.default.removeItem(at: staged.tmpDir)
                 return nil
