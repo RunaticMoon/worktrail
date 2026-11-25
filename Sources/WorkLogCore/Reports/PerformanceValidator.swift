@@ -181,7 +181,7 @@ public enum PerformanceValidator {
                    task.completionDatesInRange.isEmpty {
                     var probe = item.text.replacingOccurrences(of: "미완료", with: "")
                     probe = probe.replacingOccurrences(of: "적용 완료", with: "")
-                    if probe.contains("완료") {
+                    if probe.contains("완료") || Self.claimsCompletionInEnglish(item.text) {
                         findings.append(.init(severity: .error, code: "status_misrepresented",
                                               message: "취소·보류 업무를 완료로 표현했습니다: \(taskId)",
                                               itemId: itemId))
@@ -208,7 +208,18 @@ public enum PerformanceValidator {
 
     // MARK: - 정규식 유틸
 
-    private static let numberPattern = "[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|ms)"
+    /// 영어 출력의 단위도 검사한다. 영문 단위는 더 긴 단어의 앞부분과 겹치지 않게 뒤에 영문자가 없을 때만 맞춘다.
+    private static let numberPattern = "(?i)[0-9]+(\\.[0-9]+)?\\s*(%|퍼센트|배|시간|분|초|건|원|명|ms|percent|hours?|hrs?|minutes?|mins?|seconds?|secs?|times|cases?|people|won|krw)(?![a-z])"
+
+    /// 영어 문장에서 완료를 주장하는지. "not completed", "incomplete" 같은 부정은 제외한다.
+    static func claimsCompletionInEnglish(_ text: String) -> Bool {
+        var probe = text.lowercased()
+        for negation in ["not yet completed", "not yet complete", "not yet done", "not yet finished",
+                         "not completed", "not complete", "not done", "not finished"] {
+            probe = probe.replacingOccurrences(of: negation, with: "")
+        }
+        return !uniqueMatches("\\b(completed?|completion|done|finished)\\b", in: probe).isEmpty
+    }
     private static let urlPattern = "https?://[^\\s]+"
 
     private static func uniqueMatches(_ pattern: String, in text: String) -> [String] {

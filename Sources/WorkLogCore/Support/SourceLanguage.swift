@@ -14,15 +14,19 @@ public enum SourceLanguage: String, Sendable, Hashable {
     /// 영어 메모에 한글 단어가 섞이는 일은 드물다. 그래서 한글 단어 하나에 더 큰 무게를 준다.
     static let koreanWordWeight = 3
 
+    /// scheme://… 또는 www.… 형태의 URL. 공백·괄호·꺾쇠에서 끝난다(Markdown 링크의 닫는 괄호 포함).
+    private static let urlRegex = try! NSRegularExpression(
+        pattern: "(?i)(?:[a-z][a-z0-9+.-]*://|www\\.)[^\\s()<>\\[\\]]+")
+
     /// 여러 원문을 합쳐 한글이 들어간 단어와 영문만으로 된 단어 수를 비교한다.
     /// 숫자·기호·URL 조각처럼 글자가 없는 토큰은 세지 않는다.
     public static func detect(_ texts: [String]) -> SourceLanguage {
         var korean = 0, english = 0
         for text in texts {
-            // URL은 영어 문장이 아니므로 통째로 뺀다.
-            let words = text.split(whereSeparator: \.isWhitespace)
-                .filter { !$0.contains("://") && !$0.lowercased().hasPrefix("www.") }
-            for token in words.flatMap({ $0.split(whereSeparator: { $0.isPunctuation || $0.isSymbol }) }) {
+            // URL 자체는 영어 문장이 아니므로 그 범위만 지운다. Markdown 링크의 표시 문구는 남긴다.
+            let stripped = urlRegex.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+            for token in stripped.split(whereSeparator: { $0.isWhitespace || $0.isPunctuation || $0.isSymbol }) {
                 var hasHangul = false, hasLatin = false
                 for scalar in token.unicodeScalars {
                     switch scalar.value {

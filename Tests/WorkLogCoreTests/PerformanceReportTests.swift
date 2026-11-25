@@ -388,6 +388,34 @@ final class PerformanceReportTests: XCTestCase {
         XCTAssertFalse(codes(PerformanceValidator.validate(okDraft, facts: input)).contains("status_misrepresented"))
     }
 
+    func testValidateStatusMisrepresentedInEnglish() {
+        let held = task("t1", "Held task", statusAtCutoff: .onHold)
+        let input = facts(tasks: [held])
+        func stateCodes(_ text: String) -> [String] {
+            let item = PerformanceItem(itemId: "item-1", taskIds: ["t1"], projectIds: [], kind: .state,
+                                       text: text, evidenceIds: [])
+            let draft = PerformanceDraft(periodType: .weekly, title: "x",
+                                         sections: [PerformanceSection(heading: "H", projectIds: [], items: [item])])
+            return codes(PerformanceValidator.validate(draft, facts: input))
+        }
+        XCTAssertTrue(stateCodes("Held task: work completed").contains("status_misrepresented"))
+        XCTAssertTrue(stateCodes("Migration is done").contains("status_misrepresented"))
+        XCTAssertFalse(stateCodes("On hold; not completed yet").contains("status_misrepresented"))
+        XCTAssertFalse(stateCodes("Moved to on hold, work incomplete").contains("status_misrepresented"))
+    }
+
+    func testUnverifiedEnglishNumbers() {
+        let a1 = source("activity:a1", .activity, workDate: date("2026-09-29"), text: "Tuned the cache")
+        let input = facts(sources: [a1])
+        let item = PerformanceItem(itemId: "item-1", taskIds: [], projectIds: [], kind: .activity,
+                                   text: "Saved 3 hours per week and 40 percent fewer errors",
+                                   evidenceIds: ["activity:a1"])
+        let draft = PerformanceDraft(periodType: .weekly, title: "x",
+                                     sections: [PerformanceSection(heading: "H", projectIds: [], items: [item])])
+        let numbers = PerformanceValidator.validate(draft, facts: input).filter { $0.code == "unverified_number" }
+        XCTAssertEqual(numbers.count, 2)
+    }
+
     // MARK: - 9. render
 
     func testRenderMarkdown() {

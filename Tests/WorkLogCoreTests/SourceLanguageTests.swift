@@ -16,6 +16,10 @@ final class SourceLanguageTests: XCTestCase {
         // 한국어 업무 메모에 영문 용어가 많이 섞여도 한국어로 본다.
         XCTAssertEqual(SourceLanguage.detect("API timeout 이슈 fix, retry logic 추가"), .korean)
         XCTAssertEqual(SourceLanguage.detect("https://example.com/a-b/c 확인"), .korean)
+        // URL만 지우고 Markdown 링크의 표시 문구는 남긴다.
+        XCTAssertEqual(SourceLanguage.detect("API [배포](https://example.com/deploy/pipeline)"), .korean)
+        XCTAssertEqual(SourceLanguage.detect("[Deployment notes](https://example.com/배포)"), .english)
+        XCTAssertEqual(SourceLanguage.detect("https://example.com/설명을 참고"), .korean)
     }
 
     func testAppendingDirectivePutsLanguageLast() {
