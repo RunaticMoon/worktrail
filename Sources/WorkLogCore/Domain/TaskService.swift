@@ -235,7 +235,8 @@ public final class TaskService: @unchecked Sendable {
         let now = repo.clock.now()
 
         let events = try repo.events(taskId: taskId)
-        let replay = StateReplay.replay(events, through: nil, knownAt: nil)
+        // 선택한 실제 업무일 기준으로 판단한다. 이후 날짜의 체크리스트 완료가 확인을 건너뛰게 하지 않는다.
+        let replay = StateReplay.replay(events, through: date, knownAt: nil)
 
         let remainingChecklist = try repo.checklistItems(taskId: taskId)
             .filter { replay.checklistStatus($0.id) != .completed }
