@@ -157,6 +157,13 @@ import WorkLogCore
                 AppDiagnostics.shared.record(.operationFailed, category: .backup, level: .error)
                 notice = "시작 백업을 만들지 못했습니다. 기록은 계속 사용할 수 있습니다."
             }
+            if !launch.launchIssues.isEmpty {
+                AppDiagnostics.shared.record(.operationFailed, category: .application, level: .warning,
+                                             fields: [.itemCount: .integer(launch.launchIssues.count)])
+                // Backup failure keeps its own message; issues are appended once rather than replacing it.
+                let issues = launch.launchIssues.joined(separator: "\n") + "\n기록은 계속 사용할 수 있습니다."
+                notice = [notice, issues].compactMap { $0 }.joined(separator: "\n")
+            }
             if !usesFixture { launchCheckPending = true }
             // Only a launch collection that will actually run holds report catch-up back.
             if !usesFixture, activityIntegrations?.launchCredentialAccounts.isEmpty == false {
@@ -175,7 +182,7 @@ import WorkLogCore
             let failures = coordinator.start(capture: settings.captureHotkey, search: settings.searchHotkey)
             if !failures.isEmpty {
                 AppDiagnostics.shared.record(.operationFailed, category: .settings, level: .warning, fields: [.itemCount: .integer(failures.count)])
-                notice = failures.joined(separator: "\n")
+                notice = [notice, failures.joined(separator: "\n")].compactMap { $0 }.joined(separator: "\n")
             }
             // Scheduled AI reports read the API key without a dialog; give the launch approval a
             // bounded head start so an unanswered dialog cannot hold back reports indefinitely.
@@ -755,21 +762,21 @@ import WorkLogCore
         // environment, captureSession, graph, prompts, day, taskList, projects, search,
         // taskDetail, memoDetail, reportModel, performanceReports, reportLibrary, plan, quiz.
         var watch = CloseLifetimeWatch()
-        weak var previousEnvironment = environment
-        weak var previousCapture = captureSession
-        weak var previousGraph = graph
-        weak var previousPrompts = prompts
-        weak var previousDay = day
-        weak var previousTaskList = taskList
-        weak var previousProjects = projects
-        weak var previousSearch = search
-        weak var previousTask = taskDetail
-        weak var previousMemo = memoDetail
-        weak var previousReports = reportModel
-        weak var previousPerformanceReports = performanceReports
-        weak var previousReportLibrary = reportLibrary
-        weak var previousPlan = plan
-        weak var previousQuiz = quiz
+        weak let previousEnvironment = environment
+        weak let previousCapture = captureSession
+        weak let previousGraph = graph
+        weak let previousPrompts = prompts
+        weak let previousDay = day
+        weak let previousTaskList = taskList
+        weak let previousProjects = projects
+        weak let previousSearch = search
+        weak let previousTask = taskDetail
+        weak let previousMemo = memoDetail
+        weak let previousReports = reportModel
+        weak let previousPerformanceReports = performanceReports
+        weak let previousReportLibrary = reportLibrary
+        weak let previousPlan = plan
+        weak let previousQuiz = quiz
         watch.track("environment") { previousEnvironment != nil }
         watch.track("captureSession") { previousCapture != nil }
         watch.track("graph") { previousGraph != nil }
@@ -840,9 +847,13 @@ import WorkLogCore
             includeVault: includeVault, clock: options.clock)
         AppDiagnostics.shared.record(restored ? .operationSucceeded : .operationFailed, category: .backup, level: restored ? .info : .error)
         isRestoring = false; didStart = false; startupError = nil
+        notice = nil // only notices raised by the reopened stores' start() may be merged below
         await start()
         route = .backups
-        if restored { notice = "백업 복원을 완료하고 저장소를 다시 열었습니다." }
+        if restored {
+            // Keep any launch warning that start() just raised for the reopened stores.
+            notice = ["백업 복원을 완료하고 저장소를 다시 열었습니다.", notice].compactMap { $0 }.joined(separator: "\n")
+        }
         else {
             notice = model.message
             if let current = backups {
