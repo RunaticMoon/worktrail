@@ -601,6 +601,26 @@ final class CodexAppServerProviderTests: XCTestCase {
         XCTAssertFalse(server.methods.contains("turn/start"))
     }
 
+    func testCancelDuringSetupWinsOverThreadStartFailure() async throws {
+        let server = FakeCodexServer()
+        scriptSuccessfulTurn(server: server, followups: [])
+        server.script.mutate { $0.held.insert("thread/start") }
+        let provider = makeProvider(server: server)
+
+        let task = Task { await capturedError(provider, makeInput(jobId: "job-fail")) }
+        try await waitUntil { server.methods.contains("thread/start") }
+        await provider.cancel(jobId: "job-fail")
+        let request = try XCTUnwrap(server.messages(withMethod: "thread/start").first)
+        let id = try XCTUnwrap(request["id"])
+        server.inject(try JSONValue.object([
+            "id": id,
+            "error": .object(["code": .number(-1), "message": .string("boom")]),
+        ]).encodedString())
+
+        let error = await task.value
+        XCTAssertEqual(error?.errorClass, .cancelled)
+    }
+
     // MARK: - 오류 분류 단위
 
     func testErrorClassifierKeywords() {
