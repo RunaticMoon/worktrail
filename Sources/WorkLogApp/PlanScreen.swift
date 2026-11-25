@@ -147,11 +147,14 @@ struct PlanScreen: View {
     @ViewBuilder private func itemActions(_ item: WeekPlanItem) -> some View {
         Button("문구 저장") { model.saveLabel(item.id) }
             .disabled((model.labels[item.id] ?? "") == (item.label ?? "") || model.isLoading)
+            .accessibilityLabel("\(model.title(for: item)) 계획 문구 저장")
             .worklogHelp("이 계획 항목의 문구 저장")
         if item.state == .confirmed {
-            Button("확정 해제") { model.unconfirm(item.id) }.worklogHelp("후보로 되돌리기 · 업무 상태는 유지")
+            Button("확정 해제") { model.unconfirm(item.id) }
+                .accessibilityLabel("\(model.title(for: item)) 확정 해제").worklogHelp("후보로 되돌리기 · 업무 상태는 유지")
         }
-        Button("계획에서 제외") { model.exclude(item.id) }.worklogHelp("계획에서만 제외 · 업무는 유지")
+        Button("계획에서 제외") { model.exclude(item.id) }
+            .accessibilityLabel("\(model.title(for: item)) 계획에서 제외").worklogHelp("계획에서만 제외 · 업무는 유지")
     }
     private func scopeTitle(_ item: WeekPlanItem) -> String {
         switch item.scopeType {

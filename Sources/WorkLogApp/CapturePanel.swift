@@ -1269,6 +1269,7 @@ extension View {
                             linkedTokenBadge("@\(model.projects.first { $0.id == id }?.name ?? "프로젝트")")
                             Spacer(minLength: 4)
                             Button("연결 해제") { model.removeProject(id) }.controlSize(.small)
+                                .accessibilityLabel("프로젝트 \(model.projects.first { $0.id == id }?.name ?? "") 연결 해제")
                         }
                     }
                     if !isActivity {
@@ -1277,6 +1278,7 @@ extension View {
                                 linkedTokenBadge("#\(model.tags.first { $0.id == id }?.name ?? "태그")")
                                 Spacer(minLength: 4)
                                 Button("연결 해제") { model.removeTag(id) }.controlSize(.small)
+                                    .accessibilityLabel("태그 \(model.tags.first { $0.id == id }?.name ?? "") 연결 해제")
                             }
                         }
                     }
