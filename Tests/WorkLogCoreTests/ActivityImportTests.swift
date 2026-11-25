@@ -165,7 +165,7 @@ final class ActivityImportTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = ImportTestTransport(), credentials = ImportTestCredentials()
         var repository: WorkRepository? = try WorkRepository.inMemory(ids: SequentialIDGenerator())
-        weak var previous = repository
+        weak let previous = repository
         let model = ActivityIntegrationsModel(dataRoot: root, repo: repository!, credentials: credentials,
             client: ActivityAPIClient(transport: transport))
         model.draft.github = connection(); model.githubToken = "fake-token"; model.save()
