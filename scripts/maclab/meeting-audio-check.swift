@@ -111,6 +111,41 @@ private final class FakePermission: @unchecked Sendable {
         try check(try Data(contentsOf: brokenManifest) == Data("corrupt fixture".utf8), "corrupt archive must stay unchanged")
         print("PASS: crash recovery uses actual CAF length, preserves original and exports exact bytes")
 
+        // One unreadable/missing track must not block its verified sibling inside the same recording.
+        let partial = try writer(archive, id: "partial-tracks")
+        try await partial.appendForImport(packet(0.3))
+        try await partial.appendForImport(packet(0.1, track: .system, channels: 2))
+        _ = await partial.finish()
+        let partialMic = try archive.audioURL(recordingID: "partial-tracks", track: .microphone)
+        let partialSystem = try archive.audioURL(recordingID: "partial-tracks", track: .system)
+        let systemBackup = testRoot.deletingLastPathComponent().appendingPathComponent("system-backup.caf")
+        try FileManager.default.moveItem(at: partialSystem, to: systemBackup)
+        let missingResult = try archive.recoverTolerant(recordingID: "partial-tracks")
+        try check(missingResult.failedTracks == [.system], "missing system CAF must be reported as the only failed track")
+        let healthy = missingResult.snapshot.tracks.first { $0.id == .microphone }!
+        try check(healthy.frameCount == 4_800 && healthy.startOffset == 0.3, "healthy track keeps real frameCount and offset")
+        let partialReport = try archive.recoverAvailable()
+        try check(partialReport.failedTracks["partial-tracks"] == [.system] && partialReport.unavailableCount == 2
+                  && partialReport.snapshots.contains { $0.recordingID == "partial-tracks" },
+                  "recoverAvailable must keep the healthy track of a partially failed recording")
+        _ = try archive.acknowledgeRecoveryTolerant(recordingID: "partial-tracks")
+        try check(try JSONDecoder().decode(MeetingAudioArchiveSnapshot.self, from: Data(contentsOf: testRoot.appendingPathComponent("partial-tracks/manifest.json"))).tracks.count == 2, "failed track manifest entry is preserved")
+        try mustThrow({ _ = try archive.recover(recordingID: "partial-tracks") }, "strict recover still rejects a missing track")
+        try FileManager.default.moveItem(at: systemBackup, to: partialSystem)
+        let restored = try archive.recoverTolerant(recordingID: "partial-tracks")
+        try check(restored.failedTracks.isEmpty && restored.snapshot.tracks.allSatisfy { $0.frameCount == 4_800 },
+                  "restored track must recover on retry")
+        let corruptBytes = Data("not a caf".utf8)
+        try corruptBytes.write(to: partialSystem)
+        let corruptResult = try archive.recoverTolerant(recordingID: "partial-tracks")
+        try check(corruptResult.failedTracks == [.system] && (try Data(contentsOf: partialSystem)) == corruptBytes
+                  && (try Data(contentsOf: partialMic)).count > 0, "corrupt track fails alone and its file is preserved")
+        try FileManager.default.removeItem(at: partialSystem)
+        try FileManager.default.removeItem(at: partialMic)
+        try FileManager.default.removeItem(at: testRoot.appendingPathComponent("partial-tracks/manifest.json"))
+        try FileManager.default.removeItem(at: testRoot.appendingPathComponent("partial-tracks"))
+        print("PASS: per-track recovery isolates a missing/corrupt track and retries after restore")
+
         try mustThrow({ _ = try writer(archive, id: "two-tracks") }, "duplicate must not overwrite")
         try mustThrow({ _ = try writer(archive, id: "../outside") }, "path traversal must fail")
         let foreign = testRoot.appendingPathComponent("two-tracks/unrelated.wav")

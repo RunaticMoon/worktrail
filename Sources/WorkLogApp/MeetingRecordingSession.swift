@@ -443,8 +443,8 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
                 guard let meeting = try MeetingService(repo: store.repo).meeting(id: snapshot.meetingID, includeDeleted: true),
                       meeting.deletedAt == nil else { continue }
                 do {
-                    let persisted = try archive.acknowledgeRecovery(recordingID: snapshot.recordingID)
-                    try reconcile(persisted)
+                    let result = try archive.acknowledgeRecoveryTolerant(recordingID: snapshot.recordingID)
+                    try reconcile(result.snapshot, skipping: result.failedTracks)
                 } catch {
                     AppDiagnostics.shared.recordFailure(error, category: .recording)
                     captureMessage = "일부 원본의 DB 연결을 복구하지 못했습니다. 원본 파일은 유지됩니다."
@@ -471,10 +471,11 @@ extension MeetingAudioCapture: MeetingAudioCapturing {}
         contentRevision += 1
         await models.refreshAvailability()
     }
-    private func reconcile(_ snapshot: MeetingAudioArchiveSnapshot) throws {
+    /// `skipping` holds tracks whose file failed verification; they stay needsRecovery/missing and are retried on the next launch.
+    private func reconcile(_ snapshot: MeetingAudioArchiveSnapshot, skipping failedTracks: Set<MeetingAudioTrackID> = []) throws {
         let recording = try store.createRecording(meetingID: snapshot.meetingID, id: snapshot.recordingID, startedAt: snapshot.startedAt)
         guard recording.state != .discarded else { return }
-        for item in snapshot.tracks {
+        for item in snapshot.tracks where !failedTracks.contains(item.id) {
             let existing = try store.tracks(recordingID: recording.id).first { $0.relativePath == item.relativePath }
             let track = try existing ?? store.addTrack(recordingID: recording.id,
                 kind: item.id == .microphone ? .microphone : .systemAudio, relativePath: item.relativePath,
