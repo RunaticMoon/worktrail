@@ -11,6 +11,8 @@ final class FakeCodexServer: LineTransport, @unchecked Sendable {
         var errors: [String: (code: Int, message: String)] = [:]
         /// 응답 뒤에 이어서 보낼 알림/서버 요청(스크립트 메시지).
         var followups: [String: [JSONValue]] = [:]
+        /// 응답을 보내지 않고 붙잡아 둘 메서드(테스트가 직접 응답한다).
+        var held: Set<String> = []
     }
 
     let script = Locked<Script>(Script())
@@ -62,7 +64,9 @@ final class FakeCodexServer: LineTransport, @unchecked Sendable {
 
         let snapshot = script.value
         var outgoing: [JSONValue] = []
-        if let id = message["id"] {
+        if let id = message["id"], snapshot.held.contains(method) {
+            // Left unanswered on purpose.
+        } else if let id = message["id"] {
             if let error = snapshot.errors[method] {
                 outgoing.append(.object([
                     "id": id,
@@ -573,6 +577,48 @@ final class CodexAppServerProviderTests: XCTestCase {
         let interrupt = try XCTUnwrap(server.messages(withMethod: "turn/interrupt").first)
         XCTAssertEqual(interrupt["params"]?["threadId"]?.stringValue, "thread-1")
         XCTAssertEqual(interrupt["params"]?["turnId"]?.stringValue, "turn-1")
+    }
+
+    /// A cancel that lands while thread/start is pending (no run context yet) must not be lost.
+    func testCancelDuringSetupBeforeThreadStartStopsRunWithoutTurn() async throws {
+        let server = FakeCodexServer()
+        scriptSuccessfulTurn(server: server, followups: [])
+        server.script.mutate { $0.held.insert("thread/start") }
+        let provider = makeProvider(server: server)
+
+        let task = Task { await capturedError(provider, makeInput(jobId: "job-early")) }
+        try await waitUntil { server.methods.contains("thread/start") }
+        await provider.cancel(jobId: "job-early")
+        let request = try XCTUnwrap(server.messages(withMethod: "thread/start").first)
+        let id = try XCTUnwrap(request["id"])
+        server.inject(try JSONValue.object([
+            "id": id,
+            "result": .object(["thread": .object(["id": .string("thread-1")])]),
+        ]).encodedString())
+
+        let error = await task.value
+        XCTAssertEqual(error?.errorClass, .cancelled)
+        XCTAssertFalse(server.methods.contains("turn/start"))
+    }
+
+    func testCancelDuringSetupWinsOverThreadStartFailure() async throws {
+        let server = FakeCodexServer()
+        scriptSuccessfulTurn(server: server, followups: [])
+        server.script.mutate { $0.held.insert("thread/start") }
+        let provider = makeProvider(server: server)
+
+        let task = Task { await capturedError(provider, makeInput(jobId: "job-fail")) }
+        try await waitUntil { server.methods.contains("thread/start") }
+        await provider.cancel(jobId: "job-fail")
+        let request = try XCTUnwrap(server.messages(withMethod: "thread/start").first)
+        let id = try XCTUnwrap(request["id"])
+        server.inject(try JSONValue.object([
+            "id": id,
+            "error": .object(["code": .number(-1), "message": .string("boom")]),
+        ]).encodedString())
+
+        let error = await task.value
+        XCTAssertEqual(error?.errorClass, .cancelled)
     }
 
     // MARK: - 오류 분류 단위
