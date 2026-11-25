@@ -224,6 +224,24 @@ final class TaskServiceTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(detail.checklist.first { $0.item.id == items[2].id }).done)
     }
 
+    /// #91: 선택한 업무일 이후의 체크리스트 완료가 그날의 완료 확인을 건너뛰게 하면 안 된다.
+    func testCompleteOnPastDateIgnoresLaterChecklistCompletion() throws {
+        let (service, repo, _) = try makeService()
+        let task = try service.createTask(title: "T", workDate: monday, checklist: ["a"])
+        let item = try XCTUnwrap(try service.detail(taskId: task.id).checklist.first).item
+        try service.setChecklistItem(itemId: item.id, done: true, workDate: tuesday)
+        let before = try repo.events(taskId: task.id).count
+
+        let refused = try service.completeTask(taskId: task.id, workDate: monday, confirmRemaining: false)
+        XCTAssertFalse(refused.completed)
+        XCTAssertEqual(refused.remainingChecklist.map { $0.id }, [item.id])
+        XCTAssertEqual(try repo.events(taskId: task.id).count, before)
+
+        let confirmed = try service.completeTask(taskId: task.id, workDate: monday, confirmRemaining: true)
+        XCTAssertTrue(confirmed.completed)
+        XCTAssertEqual(try repo.events(taskId: task.id).count, before + 1)
+    }
+
     // MARK: - TASK-T09 — 체크리스트 완료가 프로젝트 상태 불변
 
     func testChecklistCompletionDoesNotChangeProjectStatus() throws {
