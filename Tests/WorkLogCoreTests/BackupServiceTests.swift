@@ -924,6 +924,26 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNoThrow(try service.verify(created))
     }
 
+    func testCorruptSameDayBackupIsReplacedInsteadOfSkipped() throws {
+        let root = try makeRoot(), paths = makePaths(root: root)
+        let clock = fixedClock()
+        let stores = try openStores(paths, keyStore: InMemoryVaultKeyStore(), clock: clock, ids: SequentialIDGenerator())
+        defer { stores.close() }
+        let service = makeService(paths, stores, clock: clock)
+        let today = try service.createBackup(reason: .daily)
+        clock.advance(by: 60)
+        // 오늘 백업이 정상이면 같은 날 다시 만들지 않는다.
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        // 오늘 백업이 손상되면 다음 날까지 기다리지 않고 교체본을 만든다.
+        try Data("corrupt".utf8).write(to: today.directory.appendingPathComponent(BackupService.workFileName))
+        let replacement = try XCTUnwrap(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+        XCTAssertNoThrow(try service.verify(replacement))
+        XCTAssertEqual(try service.listBackups().first?.id, replacement.id)
+        clock.advance(by: 60)
+        // 교체 후에는 다시 건너뛴다.
+        XCTAssertNil(try service.createDailyBackupIfChanged(calendar: WorkCalendar()))
+    }
+
     func testRetentionKeepsOlderBackupsWhenLatestIsCorrupt() throws {
         let (_, stores, service, a, b) = try twoBackupsThenAge()
         defer { stores.close() }
